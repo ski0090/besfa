@@ -1,0 +1,12 @@
+[package]
+name = "besfa_bevy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+besfa_core = { workspace = true }
+bevy = { workspace = true, optional = true }
+
+[features]
+default = []
+runtime = ["dep:bevy"]
