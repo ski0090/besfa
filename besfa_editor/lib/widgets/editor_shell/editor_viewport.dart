@@ -6,12 +6,14 @@ class EditorViewport extends StatelessWidget {
     required this.platformVersion,
     required this.abiVersion,
     required this.runtimeStatus,
+    required this.runtimeMessage,
     super.key,
   });
 
   final Future<String?> platformVersion;
   final int abiVersion;
   final RuntimePreviewStatus runtimeStatus;
+  final String? runtimeMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -36,13 +38,19 @@ class EditorViewport extends StatelessWidget {
           ),
           Positioned(
             left: 16,
+            right: 16,
             bottom: 16,
             child: FutureBuilder<String?>(
               future: platformVersion,
               builder: (context, snapshot) {
                 final platform = snapshot.data ?? 'platform pending';
+                final runtimeText = runtimeMessage == null
+                    ? runtimeStatus.label
+                    : '${runtimeStatus.label}: $runtimeMessage';
                 return Text(
-                  '$platform | Rust ABI $abiVersion | ${runtimeStatus.label}',
+                  '$platform | Rust ABI $abiVersion | $runtimeText',
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                   style: Theme.of(context).textTheme.bodySmall,
                 );
               },

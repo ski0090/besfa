@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 class EditorTopBar extends StatelessWidget {
   const EditorTopBar({
     required this.runtimeStatus,
+    required this.runtimeMessage,
     required this.isRuntimeBusy,
     required this.onRunPreview,
     required this.onStopPreview,
@@ -12,6 +13,7 @@ class EditorTopBar extends StatelessWidget {
   });
 
   final RuntimePreviewStatus runtimeStatus;
+  final String? runtimeMessage;
   final bool isRuntimeBusy;
   final VoidCallback onRunPreview;
   final VoidCallback onStopPreview;
@@ -46,6 +48,20 @@ class EditorTopBar extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
+          if (runtimeMessage case final message?) ...[
+            const SizedBox(width: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 320),
+              child: Text(
+                message,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
           const SizedBox(width: 12),
           IconButton(
             tooltip: 'Open project',
@@ -54,12 +70,18 @@ class EditorTopBar extends StatelessWidget {
           ),
           IconButton(
             tooltip: 'Run preview',
-            onPressed: isRuntimeBusy ? null : onRunPreview,
+            onPressed:
+                isRuntimeBusy || runtimeStatus == RuntimePreviewStatus.running
+                ? null
+                : onRunPreview,
             icon: const Icon(Icons.play_arrow),
           ),
           IconButton(
             tooltip: 'Stop preview',
-            onPressed: isRuntimeBusy ? null : onStopPreview,
+            onPressed:
+                isRuntimeBusy || runtimeStatus != RuntimePreviewStatus.running
+                ? null
+                : onStopPreview,
             icon: const Icon(Icons.stop),
           ),
           IconButton(

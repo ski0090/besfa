@@ -40,6 +40,7 @@ class _EditorPageState extends State<EditorPage> {
               children: [
                 EditorTopBar(
                   runtimeStatus: runtimePreview.status,
+                  runtimeMessage: runtimePreview.message,
                   isRuntimeBusy: runtimePreview.isBusy,
                   onRunPreview: runtimePreview.runPreview,
                   onStopPreview: runtimePreview.stopPreview,
@@ -55,6 +56,7 @@ class _EditorPageState extends State<EditorPage> {
                           platformVersion: runtimePreview.platformVersion,
                           abiVersion: runtimePreview.abiVersion,
                           runtimeStatus: runtimePreview.status,
+                          runtimeMessage: runtimePreview.message,
                         ),
                       ),
                       const VerticalDivider(width: 1),

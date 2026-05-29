@@ -34,4 +34,11 @@ void main() {
     expect(besfaFlutterPlugin.abiVersion, 1);
     expect(besfaFlutterPlugin.add(2, 3), 5);
   });
+
+  test('reads runtime status from Rust FFI', () {
+    final besfaFlutterPlugin = BesfaFlutterPlugin();
+
+    expect(besfaFlutterPlugin.runtimeState, BesfaRuntimeState.stopped);
+    expect(besfaFlutterPlugin.runtimeLastError, BesfaRuntimeErrorCode.none);
+  });
 }
