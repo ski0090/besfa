@@ -9,6 +9,19 @@ class MockBesfaFlutterPluginPlatform
     implements BesfaFlutterPluginPlatform {
   @override
   Future<String?> getPlatformVersion() => Future.value('42');
+
+  @override
+  Future<int?> createPreviewTexture({
+    required int width,
+    required int height,
+  }) async {
+    return 7;
+  }
+
+  @override
+  Future<bool> disposePreviewTexture(int textureId) async {
+    return true;
+  }
 }
 
 void main() {
@@ -26,6 +39,15 @@ void main() {
     BesfaFlutterPluginPlatform.instance = fakePlatform;
 
     expect(await besfaFlutterPlugin.getPlatformVersion(), '42');
+  });
+
+  test('creates and disposes preview textures', () async {
+    final besfaFlutterPlugin = BesfaFlutterPlugin();
+    final fakePlatform = MockBesfaFlutterPluginPlatform();
+    BesfaFlutterPluginPlatform.instance = fakePlatform;
+
+    expect(await besfaFlutterPlugin.createPreviewTexture(), 7);
+    expect(await besfaFlutterPlugin.disposePreviewTexture(7), isTrue);
   });
 
   test('calls Rust FFI smoke functions', () {

@@ -117,6 +117,19 @@ class BesfaFlutterPlugin {
     return BesfaFlutterPluginPlatform.instance.getPlatformVersion();
   }
 
+  /// Creates a native D3D preview texture and returns its Flutter texture id.
+  Future<int?> createPreviewTexture({int width = 640, int height = 360}) {
+    return BesfaFlutterPluginPlatform.instance.createPreviewTexture(
+      width: width,
+      height: height,
+    );
+  }
+
+  /// Disposes a previously created native preview texture.
+  Future<bool> disposePreviewTexture(int textureId) {
+    return BesfaFlutterPluginPlatform.instance.disposePreviewTexture(textureId);
+  }
+
   /// ABI version reported by the native Rust bridge.
   int get abiVersion => native.besfaFlutterPluginAbiVersion();
 

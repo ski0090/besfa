@@ -9,6 +9,7 @@ class EditorViewport extends StatelessWidget {
     required this.runtimeStatus,
     required this.runtimeMessage,
     required this.frameStats,
+    required this.previewTextureId,
     super.key,
   });
 
@@ -17,6 +18,9 @@ class EditorViewport extends StatelessWidget {
   final RuntimePreviewStatus runtimeStatus;
   final String? runtimeMessage;
   final RuntimeFrameStats? frameStats;
+
+  /// Flutter texture id for the native preview surface, when available.
+  final int? previewTextureId;
 
   @override
   Widget build(BuildContext context) {
@@ -33,10 +37,13 @@ class EditorViewport extends StatelessWidget {
                 color: const Color(0xFF202124),
                 borderRadius: BorderRadius.circular(6),
               ),
-              child: const Text(
-                'Preview surface',
-                style: TextStyle(color: Colors.white70),
-              ),
+              clipBehavior: Clip.antiAlias,
+              child: previewTextureId == null
+                  ? const Text(
+                      'Preview surface',
+                      style: TextStyle(color: Colors.white70),
+                    )
+                  : Texture(textureId: previewTextureId!),
             ),
           ),
           Positioned(

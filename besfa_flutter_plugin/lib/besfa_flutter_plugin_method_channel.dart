@@ -16,4 +16,24 @@ class MethodChannelBesfaFlutterPlugin extends BesfaFlutterPluginPlatform {
     );
     return version;
   }
+
+  @override
+  Future<int?> createPreviewTexture({
+    required int width,
+    required int height,
+  }) async {
+    return methodChannel.invokeMethod<int>('createPreviewTexture', {
+      'width': width,
+      'height': height,
+    });
+  }
+
+  @override
+  Future<bool> disposePreviewTexture(int textureId) async {
+    return await methodChannel.invokeMethod<bool>(
+          'disposePreviewTexture',
+          textureId,
+        ) ??
+        false;
+  }
 }

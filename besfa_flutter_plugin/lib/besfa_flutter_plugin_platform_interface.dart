@@ -29,4 +29,18 @@ abstract class BesfaFlutterPluginPlatform extends PlatformInterface {
   Future<String?> getPlatformVersion() {
     throw UnimplementedError('platformVersion() has not been implemented.');
   }
+
+  /// Creates a native preview texture and returns its Flutter texture id.
+  Future<int?> createPreviewTexture({required int width, required int height}) {
+    throw UnimplementedError(
+      'createPreviewTexture() has not been implemented.',
+    );
+  }
+
+  /// Disposes a native preview texture by Flutter texture id.
+  Future<bool> disposePreviewTexture(int textureId) {
+    throw UnimplementedError(
+      'disposePreviewTexture() has not been implemented.',
+    );
+  }
 }

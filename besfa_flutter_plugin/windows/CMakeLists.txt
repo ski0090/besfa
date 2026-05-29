@@ -20,6 +20,8 @@ set(PLUGIN_NAME "besfa_flutter_plugin_plugin")
 list(APPEND PLUGIN_SOURCES
   "besfa_flutter_plugin.cpp"
   "besfa_flutter_plugin.h"
+  "preview_texture.cpp"
+  "preview_texture.h"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment
@@ -47,6 +49,7 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
+target_link_libraries(${PLUGIN_NAME} PRIVATE d3d12 dxgi)
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
@@ -87,6 +90,7 @@ add_executable(${TEST_RUNNER}
 apply_standard_settings(${TEST_RUNNER})
 target_include_directories(${TEST_RUNNER} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(${TEST_RUNNER} PRIVATE flutter_wrapper_plugin)
+target_link_libraries(${TEST_RUNNER} PRIVATE d3d12 dxgi)
 target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
 # flutter_wrapper_plugin has link dependencies on the Flutter DLL.
 add_custom_command(TARGET ${TEST_RUNNER} POST_BUILD

@@ -17,6 +17,7 @@ class RuntimePreviewController extends ChangeNotifier {
     abiVersion = _plugin.abiVersion;
     _syncInitialStatus();
     _ipcEventsSubscription = _ipcClient.events.listen(_handleRuntimeIpcEvent);
+    unawaited(createPreviewTexture());
     _statusTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       refreshRuntimeStatus();
     });
@@ -48,6 +49,26 @@ class RuntimePreviewController extends ChangeNotifier {
 
   /// Recent runtime log entries.
   List<RuntimeLogEntry> logs = const [];
+
+  /// Flutter texture id for the native D3D preview texture smoke surface.
+  int? previewTextureId;
+
+  /// Creates the native preview texture used by the editor viewport.
+  Future<void> createPreviewTexture() async {
+    if (previewTextureId != null) {
+      return;
+    }
+
+    try {
+      final textureId = await _plugin.createPreviewTexture();
+      if (!_disposed && textureId != null && textureId > 0) {
+        previewTextureId = textureId;
+        notifyListeners();
+      }
+    } on Object {
+      // Texture bridge is still a spike; keep the editor usable if it fails.
+    }
+  }
 
   /// Starts the preview runtime and waits for IPC readiness.
   Future<void> runPreview() async {
@@ -188,6 +209,10 @@ class RuntimePreviewController extends ChangeNotifier {
     _disposed = true;
     _statusTimer?.cancel();
     unawaited(_ipcEventsSubscription?.cancel());
+    final textureId = previewTextureId;
+    if (textureId != null) {
+      unawaited(_plugin.disposePreviewTexture(textureId));
+    }
     unawaited(_ipcClient.disconnect());
     super.dispose();
   }

@@ -12,6 +12,7 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
   BesfaRuntimeErrorCode error = BesfaRuntimeErrorCode.none;
   BesfaRuntimeCommandResult startResult = BesfaRuntimeCommandResult.ok;
   BesfaRuntimeCommandResult stopResult = BesfaRuntimeCommandResult.ok;
+  int? createdTextureId;
 
   @override
   Future<String?> getPlatformVersion() => Future.value('fake platform');
@@ -50,6 +51,21 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
 
   @override
   BesfaRuntimeErrorCode get runtimeLastError => error;
+
+  @override
+  Future<int?> createPreviewTexture({int width = 640, int height = 360}) async {
+    createdTextureId = 11;
+    return createdTextureId;
+  }
+
+  @override
+  Future<bool> disposePreviewTexture(int textureId) async {
+    if (createdTextureId == textureId) {
+      createdTextureId = null;
+      return true;
+    }
+    return false;
+  }
 }
 
 class FakeRuntimeIpcClient extends RuntimeIpcClient {

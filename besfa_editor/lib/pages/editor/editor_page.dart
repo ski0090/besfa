@@ -64,6 +64,7 @@ class _EditorPageState extends State<EditorPage> {
                           runtimeStatus: runtimePreview.status,
                           runtimeMessage: runtimePreview.message,
                           frameStats: runtimePreview.frameStats,
+                          previewTextureId: runtimePreview.previewTextureId,
                         ),
                       ),
                       const VerticalDivider(width: 1),
