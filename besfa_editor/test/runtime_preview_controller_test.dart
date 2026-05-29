@@ -25,6 +25,14 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
   }
 
   @override
+  BesfaRuntimeCommandResult startRuntimeWithIpc({
+    required int port,
+    required int token,
+  }) {
+    return startRuntime();
+  }
+
+  @override
   BesfaRuntimeCommandResult stopRuntime() {
     if (stopResult == BesfaRuntimeCommandResult.ok) {
       state = BesfaRuntimeState.stopped;
@@ -55,14 +63,14 @@ void main() {
     expect(controller.message, 'Preview window closed.');
   });
 
-  test('reports start failures from the native runtime bridge', () {
+  test('reports start failures from the native runtime bridge', () async {
     final plugin = FakeBesfaFlutterPlugin()
       ..startResult = BesfaRuntimeCommandResult.failed
       ..error = BesfaRuntimeErrorCode.executableNotFound;
     final controller = RuntimePreviewController(plugin: plugin);
     addTearDown(controller.dispose);
 
-    controller.runPreview();
+    await controller.runPreview();
 
     expect(controller.status, RuntimePreviewStatus.failed);
     expect(controller.message, 'Runtime executable was not found.');

@@ -324,6 +324,7 @@ name = "besfa_bevy"
 version = "0.1.0"
 dependencies = [
  "besfa_core",
+ "besfa_ipc",
  "bevy",
 ]
 
@@ -336,6 +337,14 @@ name = "besfa_flutter_plugin_ffi"
 version = "0.1.0"
 dependencies = [
  "besfa_core",
+]
+
+[[package]]
+name = "besfa_ipc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

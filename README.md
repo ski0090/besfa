@@ -17,6 +17,8 @@ Note: Bevy 0.18 uses `wgpu`, which does not expose a native D3D11 backend. The s
 
 Development preview launch can be overridden with `BESFA_RUNTIME_PATH` and `BESFA_RUNTIME_WORKING_DIR` when the runtime binary is not beside the editor executable or under the workspace `target` directory.
 
+Runtime IPC starts as TCP on `127.0.0.1` with newline-delimited JSON. The editor launches the runtime with `--ipc-port` and `--ipc-token`, sends a `hello` message, and treats the preview as ready after receiving `runtime_ready`.
+
 ## License
 
 Apache-2.0

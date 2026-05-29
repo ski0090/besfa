@@ -18,6 +18,9 @@ external int besfaFlutterPluginAdd(int left, int right);
 @Native<Int32 Function()>(symbol: 'besfa_runtime_start')
 external int besfaRuntimeStart();
 
+@Native<Int32 Function(Int32, Uint64)>(symbol: 'besfa_runtime_start_with_ipc')
+external int besfaRuntimeStartWithIpc(int port, int token);
+
 @Native<Int32 Function()>(symbol: 'besfa_runtime_stop')
 external int besfaRuntimeStop();
 

@@ -20,9 +20,16 @@ const RUNTIME_ERROR_EXECUTABLE_NOT_FOUND: i32 = 2;
 const RUNTIME_ERROR_SPAWN_FAILED: i32 = 3;
 const RUNTIME_ERROR_STATUS_FAILED: i32 = 4;
 const RUNTIME_ERROR_STOP_FAILED: i32 = 5;
+const RUNTIME_ERROR_INVALID_ARGUMENT: i32 = 6;
 
 static RUNTIME_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 static RUNTIME_LAST_ERROR: Mutex<i32> = Mutex::new(RUNTIME_ERROR_NONE);
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeIpcLaunch {
+    port: u16,
+    token: u64,
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn besfa_flutter_plugin_abi_version() -> u32 {
@@ -36,6 +43,25 @@ pub extern "C" fn besfa_flutter_plugin_add(left: i32, right: i32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn besfa_runtime_start() -> i32 {
+    start_runtime(None)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn besfa_runtime_start_with_ipc(port: i32, token: u64) -> i32 {
+    let Ok(port) = u16::try_from(port) else {
+        set_last_error(RUNTIME_ERROR_INVALID_ARGUMENT);
+        return RUNTIME_COMMAND_FAILED;
+    };
+
+    if port == 0 || token == 0 {
+        set_last_error(RUNTIME_ERROR_INVALID_ARGUMENT);
+        return RUNTIME_COMMAND_FAILED;
+    }
+
+    start_runtime(Some(RuntimeIpcLaunch { port, token }))
+}
+
+fn start_runtime(ipc: Option<RuntimeIpcLaunch>) -> i32 {
     let mut runtime_process = match RUNTIME_PROCESS.lock() {
         Ok(runtime_process) => runtime_process,
         Err(_) => {
@@ -66,13 +92,22 @@ pub extern "C" fn besfa_runtime_start() -> i32 {
     };
     let working_dir = runtime_working_dir(&runtime_path);
 
-    match Command::new(runtime_path)
+    let mut command = Command::new(runtime_path);
+    command
         .current_dir(working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+        .stderr(Stdio::null());
+
+    if let Some(ipc) = ipc {
+        command
+            .arg("--ipc-port")
+            .arg(ipc.port.to_string())
+            .arg("--ipc-token")
+            .arg(ipc.token.to_string());
+    }
+
+    match command.spawn() {
         Ok(child) => {
             *runtime_process = Some(child);
             set_last_error(RUNTIME_ERROR_NONE);

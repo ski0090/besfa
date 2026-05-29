@@ -6,8 +6,9 @@ license.workspace = true
 
 [dependencies]
 besfa_core = { workspace = true }
+besfa_ipc = { workspace = true, optional = true }
 bevy = { workspace = true, optional = true }
 
 [features]
 default = []
-runtime = ["dep:bevy", "bevy/3d"]
+runtime = ["dep:bevy", "dep:besfa_ipc", "bevy/3d"]

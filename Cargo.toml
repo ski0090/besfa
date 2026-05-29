@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/besfa_core",
+    "crates/besfa_ipc",
     "crates/besfa_bevy",
     "crates/besfa_runtime",
     "besfa_flutter_plugin/rust",
@@ -14,5 +15,8 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 besfa_core = { path = "crates/besfa_core" }
+besfa_ipc = { path = "crates/besfa_ipc" }
 besfa_bevy = { path = "crates/besfa_bevy" }
 bevy = { version = "0.18.0", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"

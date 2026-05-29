@@ -1,12 +1,16 @@
 import 'dart:async';
 
+import 'package:besfa_editor/features/runtime_ipc/application/runtime_ipc_client.dart';
 import 'package:besfa_editor/features/runtime_preview/domain/runtime_preview_status.dart';
 import 'package:besfa_flutter_plugin/besfa_flutter_plugin.dart';
 import 'package:flutter/foundation.dart';
 
 class RuntimePreviewController extends ChangeNotifier {
-  RuntimePreviewController({BesfaFlutterPlugin? plugin})
-    : _plugin = plugin ?? BesfaFlutterPlugin() {
+  RuntimePreviewController({
+    BesfaFlutterPlugin? plugin,
+    RuntimeIpcClient? ipcClient,
+  }) : _plugin = plugin ?? BesfaFlutterPlugin(),
+       _ipcClient = ipcClient ?? RuntimeIpcClient() {
     platformVersion = _plugin.getPlatformVersion();
     abiVersion = _plugin.abiVersion;
     _syncInitialStatus();
@@ -16,7 +20,9 @@ class RuntimePreviewController extends ChangeNotifier {
   }
 
   final BesfaFlutterPlugin _plugin;
+  final RuntimeIpcClient _ipcClient;
   Timer? _statusTimer;
+  bool _disposed = false;
 
   late final Future<String?> platformVersion;
   late final int abiVersion;
@@ -25,26 +31,48 @@ class RuntimePreviewController extends ChangeNotifier {
   bool isBusy = false;
   String? message;
 
-  void runPreview() {
+  Future<void> runPreview() async {
     if (isBusy) {
       return;
     }
 
     _apply(isBusy: true);
-    final result = _plugin.startRuntime();
-    _apply(
-      status: _statusForStartResult(result),
-      message: _messageForStartResult(result),
-      isBusy: false,
-    );
+    try {
+      final handshake = await _ipcClient.reserveHandshake();
+      final result = _plugin.startRuntimeWithIpc(
+        port: handshake.port,
+        token: handshake.token,
+      );
+
+      if (result != BesfaRuntimeCommandResult.ok) {
+        _apply(
+          status: _statusForStartResult(result),
+          message: _messageForStartResult(result),
+          isBusy: false,
+        );
+        return;
+      }
+
+      await _ipcClient.connectAndWaitReady(handshake);
+      _apply(status: RuntimePreviewStatus.running, isBusy: false);
+    } on Object {
+      _plugin.stopRuntime();
+      await _ipcClient.disconnect();
+      _apply(
+        status: RuntimePreviewStatus.failed,
+        message: 'Runtime IPC did not become ready.',
+        isBusy: false,
+      );
+    }
   }
 
-  void stopPreview() {
+  Future<void> stopPreview() async {
     if (isBusy) {
       return;
     }
 
     _apply(isBusy: true);
+    await _ipcClient.disconnect();
     final result = _plugin.stopRuntime();
     _apply(
       status: _statusForStopResult(result),
@@ -53,19 +81,41 @@ class RuntimePreviewController extends ChangeNotifier {
     );
   }
 
-  void reloadRuntime() {
+  Future<void> reloadRuntime() async {
     if (isBusy) {
       return;
     }
 
     _apply(isBusy: true);
+    await _ipcClient.disconnect();
     _plugin.stopRuntime();
-    final result = _plugin.startRuntime();
-    _apply(
-      status: _statusForStartResult(result),
-      message: _messageForStartResult(result),
-      isBusy: false,
-    );
+    try {
+      final handshake = await _ipcClient.reserveHandshake();
+      final result = _plugin.startRuntimeWithIpc(
+        port: handshake.port,
+        token: handshake.token,
+      );
+
+      if (result != BesfaRuntimeCommandResult.ok) {
+        _apply(
+          status: _statusForStartResult(result),
+          message: _messageForStartResult(result),
+          isBusy: false,
+        );
+        return;
+      }
+
+      await _ipcClient.connectAndWaitReady(handshake);
+      _apply(status: RuntimePreviewStatus.running, isBusy: false);
+    } on Object {
+      _plugin.stopRuntime();
+      await _ipcClient.disconnect();
+      _apply(
+        status: RuntimePreviewStatus.failed,
+        message: 'Runtime IPC did not become ready.',
+        isBusy: false,
+      );
+    }
   }
 
   void refreshRuntimeStatus() {
@@ -79,11 +129,13 @@ class RuntimePreviewController extends ChangeNotifier {
         return;
       case BesfaRuntimeState.stopped:
       case BesfaRuntimeState.exited:
+        unawaited(_ipcClient.disconnect());
         _apply(
           status: RuntimePreviewStatus.stopped,
           message: 'Preview window closed.',
         );
       case BesfaRuntimeState.failed:
+        unawaited(_ipcClient.disconnect());
         _apply(
           status: RuntimePreviewStatus.failed,
           message: _errorMessage('Could not read runtime status.'),
@@ -93,7 +145,9 @@ class RuntimePreviewController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _statusTimer?.cancel();
+    unawaited(_ipcClient.disconnect());
     super.dispose();
   }
 
@@ -115,6 +169,10 @@ class RuntimePreviewController extends ChangeNotifier {
   }
 
   void _apply({RuntimePreviewStatus? status, bool? isBusy, String? message}) {
+    if (_disposed) {
+      return;
+    }
+
     if (status != null) {
       this.status = status;
     }

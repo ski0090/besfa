@@ -1,5 +1,13 @@
 use besfa_core::EngineInfo;
 
+#[cfg(feature = "runtime")]
+mod runtime_ipc;
+
+#[cfg(feature = "runtime")]
+pub use besfa_ipc::RuntimeIpcConfig;
+#[cfg(feature = "runtime")]
+pub use runtime_ipc::BesfaRuntimeIpcPlugin;
+
 pub fn integration_name() -> String {
     let info = EngineInfo::current();
     format!("{} Bevy integration", info.name)
@@ -7,11 +15,23 @@ pub fn integration_name() -> String {
 
 #[cfg(feature = "runtime")]
 pub fn run_preview_runtime() {
-    preview::run();
+    run_preview_runtime_with_options(PreviewRuntimeOptions::default());
+}
+
+#[cfg(feature = "runtime")]
+pub fn run_preview_runtime_with_options(options: PreviewRuntimeOptions) {
+    preview::run(options);
+}
+
+#[cfg(feature = "runtime")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PreviewRuntimeOptions {
+    pub ipc: Option<RuntimeIpcConfig>,
 }
 
 #[cfg(feature = "runtime")]
 mod preview {
+    use super::{BesfaRuntimeIpcPlugin, PreviewRuntimeOptions};
     use bevy::{
         prelude::*,
         render::{
@@ -25,9 +45,9 @@ mod preview {
     #[derive(Component)]
     struct PreviewCube;
 
-    pub fn run() {
-        App::new()
-            .insert_resource(ClearColor(Color::srgb(0.06, 0.07, 0.08)))
+    pub fn run(options: PreviewRuntimeOptions) {
+        let mut app = App::new();
+        app.insert_resource(ClearColor(Color::srgb(0.06, 0.07, 0.08)))
             .add_plugins(
                 DefaultPlugins
                     .set(WindowPlugin {
@@ -48,8 +68,13 @@ mod preview {
                     }),
             )
             .add_systems(Startup, setup_scene)
-            .add_systems(Update, (draw_grid, rotate_preview_cube))
-            .run();
+            .add_systems(Update, (draw_grid, rotate_preview_cube));
+
+        if let Some(ipc_config) = options.ipc {
+            app.add_plugins(BesfaRuntimeIpcPlugin::new(ipc_config));
+        }
+
+        app.run();
     }
 
     fn setup_scene(

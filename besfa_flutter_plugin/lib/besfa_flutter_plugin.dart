@@ -40,6 +40,7 @@ enum BesfaRuntimeErrorCode {
   spawnFailed,
   statusFailed,
   stopFailed,
+  invalidArgument,
   unknown;
 
   static BesfaRuntimeErrorCode fromNativeCode(int code) {
@@ -50,6 +51,7 @@ enum BesfaRuntimeErrorCode {
       3 => BesfaRuntimeErrorCode.spawnFailed,
       4 => BesfaRuntimeErrorCode.statusFailed,
       5 => BesfaRuntimeErrorCode.stopFailed,
+      6 => BesfaRuntimeErrorCode.invalidArgument,
       _ => BesfaRuntimeErrorCode.unknown,
     };
   }
@@ -65,6 +67,8 @@ enum BesfaRuntimeErrorCode {
       BesfaRuntimeErrorCode.statusFailed =>
         'Runtime process status could not be read.',
       BesfaRuntimeErrorCode.stopFailed => 'Runtime process could not stop.',
+      BesfaRuntimeErrorCode.invalidArgument =>
+        'Runtime launch arguments were invalid.',
       BesfaRuntimeErrorCode.unknown => 'Unknown runtime error.',
     };
   }
@@ -83,6 +87,15 @@ class BesfaFlutterPlugin {
 
   BesfaRuntimeCommandResult startRuntime() {
     return BesfaRuntimeCommandResult.fromNativeCode(native.besfaRuntimeStart());
+  }
+
+  BesfaRuntimeCommandResult startRuntimeWithIpc({
+    required int port,
+    required int token,
+  }) {
+    return BesfaRuntimeCommandResult.fromNativeCode(
+      native.besfaRuntimeStartWithIpc(port, token),
+    );
   }
 
   BesfaRuntimeCommandResult stopRuntime() {
