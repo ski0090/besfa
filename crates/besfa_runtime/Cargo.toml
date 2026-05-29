@@ -2,6 +2,7 @@
 name = "besfa_runtime"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 besfa_bevy = { workspace = true }

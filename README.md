@@ -12,3 +12,7 @@ The early architecture is intentionally split:
 - `crates/besfa_runtime`: preview/runtime entry point.
 
 First milestone: keep the editor UI, native bridge, and Bevy runtime loosely coupled so the preview path can evolve from a separate runtime window to Windows texture/D3D interop later.
+
+## License
+
+Apache-2.0
