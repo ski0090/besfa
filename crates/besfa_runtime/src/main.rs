@@ -1,3 +1,3 @@
 fn main() {
-    println!("{}", besfa_bevy::integration_name());
+    besfa_bevy::run_preview_runtime();
 }

@@ -10,4 +10,4 @@ bevy = { workspace = true, optional = true }
 
 [features]
 default = []
-runtime = ["dep:bevy"]
+runtime = ["dep:bevy", "bevy/3d"]

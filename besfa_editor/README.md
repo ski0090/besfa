@@ -1,17 +1,11 @@
 # besfa_editor
 
-A new Flutter project.
+Flutter desktop editor for Besfa.
 
-## Getting Started
+The editor follows a lightweight Feature-Sliced Design layout:
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- `app`: application bootstrap and app-wide configuration.
+- `pages`: route-level screens that compose slices and widgets.
+- `features`: user-facing behaviors, state, and actions.
+- `widgets`: composed UI blocks for editor regions.
+- `shared`: reusable UI and utilities with no feature ownership.

@@ -5,4 +5,4 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
-besfa_bevy = { workspace = true }
+besfa_bevy = { workspace = true, features = ["runtime"] }
