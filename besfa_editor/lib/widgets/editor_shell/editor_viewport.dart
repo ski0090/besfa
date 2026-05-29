@@ -1,3 +1,4 @@
+import 'package:besfa_editor/features/runtime_ipc/domain/runtime_ipc_models.dart';
 import 'package:besfa_editor/features/runtime_preview/domain/runtime_preview_status.dart';
 import 'package:flutter/material.dart';
 
@@ -7,6 +8,7 @@ class EditorViewport extends StatelessWidget {
     required this.abiVersion,
     required this.runtimeStatus,
     required this.runtimeMessage,
+    required this.frameStats,
     super.key,
   });
 
@@ -14,6 +16,7 @@ class EditorViewport extends StatelessWidget {
   final int abiVersion;
   final RuntimePreviewStatus runtimeStatus;
   final String? runtimeMessage;
+  final RuntimeFrameStats? frameStats;
 
   @override
   Widget build(BuildContext context) {
@@ -47,8 +50,11 @@ class EditorViewport extends StatelessWidget {
                 final runtimeText = runtimeMessage == null
                     ? runtimeStatus.label
                     : '${runtimeStatus.label}: $runtimeMessage';
+                final statsText = frameStats == null
+                    ? ''
+                    : ' | ${frameStats!.fps.toStringAsFixed(0)} FPS';
                 return Text(
-                  '$platform | Rust ABI $abiVersion | $runtimeText',
+                  '$platform | Rust ABI $abiVersion | $runtimeText$statsText',
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
                   style: Theme.of(context).textTheme.bodySmall,

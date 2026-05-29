@@ -1,3 +1,7 @@
+import 'dart:async';
+
+import 'package:besfa_editor/features/runtime_ipc/application/runtime_ipc_client.dart';
+import 'package:besfa_editor/features/runtime_ipc/domain/runtime_ipc_models.dart';
 import 'package:besfa_editor/features/runtime_preview/application/runtime_preview_controller.dart';
 import 'package:besfa_editor/features/runtime_preview/domain/runtime_preview_status.dart';
 import 'package:besfa_flutter_plugin/besfa_flutter_plugin.dart';
@@ -48,6 +52,42 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
   BesfaRuntimeErrorCode get runtimeLastError => error;
 }
 
+class FakeRuntimeIpcClient extends RuntimeIpcClient {
+  final StreamController<RuntimeIpcEvent> _events =
+      StreamController<RuntimeIpcEvent>.broadcast();
+
+  @override
+  Stream<RuntimeIpcEvent> get events => _events.stream;
+
+  void emit(RuntimeIpcEvent event) {
+    _events.add(event);
+  }
+
+  Future<void> close() async {
+    await _events.close();
+  }
+
+  @override
+  Future<RuntimeIpcHandshake> reserveHandshake() async {
+    return const RuntimeIpcHandshake(port: 49152, token: 42);
+  }
+
+  @override
+  Future<void> connectAndWaitReady(
+    RuntimeIpcHandshake handshake, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {}
+
+  @override
+  Future<void> disconnect() async {}
+
+  @override
+  Future<void> reloadScene() async {}
+
+  @override
+  Future<void> selectEntity(String entityId) async {}
+}
+
 void main() {
   test('detects when a running preview exits outside the editor', () {
     final plugin = FakeBesfaFlutterPlugin()..state = BesfaRuntimeState.running;
@@ -74,5 +114,35 @@ void main() {
 
     expect(controller.status, RuntimePreviewStatus.failed);
     expect(controller.message, 'Runtime executable was not found.');
+  });
+
+  test('updates scene snapshot from runtime IPC events', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    await controller.runPreview();
+    ipcClient.emit(
+      RuntimeIpcEvent(
+        kind: RuntimeIpcEventKind.sceneSnapshot,
+        payload: {
+          'root': {
+            'id': 'world',
+            'name': 'World',
+            'kind': 'world',
+            'children': <Object?>[],
+          },
+        },
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.status, RuntimePreviewStatus.running);
+    expect(controller.sceneSnapshot?.root.name, 'World');
   });
 }

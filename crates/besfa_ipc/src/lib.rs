@@ -1,94 +1,28 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+mod codec;
+mod command;
+mod config;
+mod error;
+mod message;
+mod payload;
 
-pub const PROTOCOL_VERSION: u32 = 1;
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ClientMessage {
-    Hello {
-        protocol_version: u32,
-        token: u64,
-    },
-    Command {
-        id: u64,
-        method: String,
-        #[serde(default)]
-        params: Value,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum RuntimeMessage {
-    Event {
-        event: RuntimeEvent,
-        #[serde(default)]
-        payload: Value,
-    },
-    Response {
-        id: u64,
-        ok: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        result: Option<Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<IpcError>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeEvent {
-    RuntimeReady,
-    Log,
-    SceneSnapshot,
-    FrameStats,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct IpcError {
-    pub code: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeIpcConfig {
-    pub port: u16,
-    pub token: u64,
-}
-
-impl RuntimeIpcConfig {
-    pub const fn new(port: u16, token: u64) -> Self {
-        Self { port, token }
-    }
-}
-
-pub fn encode_line<T: Serialize>(message: &T) -> serde_json::Result<String> {
-    let mut line = serde_json::to_string(message)?;
-    line.push('\n');
-    Ok(line)
-}
-
-pub fn decode_client_message(line: &str) -> serde_json::Result<ClientMessage> {
-    serde_json::from_str(line.trim_end())
-}
-
-pub fn decode_runtime_message(line: &str) -> serde_json::Result<RuntimeMessage> {
-    serde_json::from_str(line.trim_end())
-}
-
-pub fn runtime_ready_message() -> RuntimeMessage {
-    RuntimeMessage::Event {
-        event: RuntimeEvent::RuntimeReady,
-        payload: serde_json::json!({
-            "protocol_version": PROTOCOL_VERSION,
-        }),
-    }
-}
+pub use codec::{
+    PROTOCOL_VERSION, command_message, decode_client_message, decode_runtime_message,
+    empty_ok_response, encode_line, error_response, frame_stats_message, log_message, ok_response,
+    runtime_ready_message, scene_snapshot_message,
+};
+pub use command::{
+    METHOD_OPEN_PROJECT, METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, OpenProjectParams,
+    RuntimeCommand, SelectEntityParams,
+};
+pub use config::RuntimeIpcConfig;
+pub use error::IpcError;
+pub use message::{ClientMessage, RuntimeEvent, RuntimeMessage};
+pub use payload::{FrameStatsPayload, LogPayload, SceneEntityPayload, SceneSnapshotPayload};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn encodes_runtime_ready_as_json_line() {
@@ -111,5 +45,52 @@ mod tests {
                 token: 42
             }
         );
+    }
+
+    #[test]
+    fn encodes_select_entity_command() {
+        let line = encode_line(&command_message(
+            7,
+            RuntimeCommand::SelectEntity(SelectEntityParams {
+                entity_id: "camera".to_string(),
+            }),
+        ))
+        .unwrap();
+
+        assert!(line.contains("\"method\":\"select_entity\""));
+        assert!(line.contains("\"entity_id\":\"camera\""));
+    }
+
+    #[test]
+    fn decodes_runtime_command() {
+        let command = RuntimeCommand::from_method_params(
+            METHOD_OPEN_PROJECT,
+            json!({ "path": "C:/codes/besfa" }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            RuntimeCommand::OpenProject(OpenProjectParams {
+                path: "C:/codes/besfa".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn encodes_scene_snapshot_event() {
+        let line = encode_line(&scene_snapshot_message(SceneSnapshotPayload {
+            selected_entity_id: Some("camera".to_string()),
+            root: SceneEntityPayload {
+                id: "world".to_string(),
+                name: "World".to_string(),
+                kind: "world".to_string(),
+                children: vec![],
+            },
+        }))
+        .unwrap();
+
+        assert!(line.contains("\"event\":\"scene_snapshot\""));
+        assert!(line.contains("\"selected_entity_id\":\"camera\""));
     }
 }

@@ -49,7 +49,13 @@ class _EditorPageState extends State<EditorPage> {
                 Expanded(
                   child: Row(
                     children: [
-                      const SizedBox(width: 240, child: SceneTreePanel()),
+                      SizedBox(
+                        width: 240,
+                        child: SceneTreePanel(
+                          snapshot: runtimePreview.sceneSnapshot,
+                          onSelectEntity: runtimePreview.selectEntity,
+                        ),
+                      ),
                       const VerticalDivider(width: 1),
                       Expanded(
                         child: EditorViewport(
@@ -57,6 +63,7 @@ class _EditorPageState extends State<EditorPage> {
                           abiVersion: runtimePreview.abiVersion,
                           runtimeStatus: runtimePreview.status,
                           runtimeMessage: runtimePreview.message,
+                          frameStats: runtimePreview.frameStats,
                         ),
                       ),
                       const VerticalDivider(width: 1),

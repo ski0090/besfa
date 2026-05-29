@@ -3,7 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:besfa_editor/features/runtime_ipc/domain/runtime_ipc_models.dart';
+
 const int runtimeIpcProtocolVersion = 1;
+const String runtimeIpcOpenProjectMethod = 'open_project';
+const String runtimeIpcReloadSceneMethod = 'reload_scene';
+const String runtimeIpcSelectEntityMethod = 'select_entity';
 
 class RuntimeIpcHandshake {
   const RuntimeIpcHandshake({required this.port, required this.token});
@@ -14,8 +19,14 @@ class RuntimeIpcHandshake {
 
 class RuntimeIpcClient {
   final Random _random = Random.secure();
+  final StreamController<RuntimeIpcEvent> _events =
+      StreamController<RuntimeIpcEvent>.broadcast();
+  final Map<int, Completer<RuntimeIpcCommandResponse>> _pendingResponses = {};
+  int _nextCommandId = 1;
   Socket? _socket;
   StreamSubscription<String>? _subscription;
+
+  Stream<RuntimeIpcEvent> get events => _events.stream;
 
   Future<RuntimeIpcHandshake> reserveHandshake() async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
@@ -41,7 +52,7 @@ class RuntimeIpcClient {
         );
         _socket = socket;
         _sendHello(socket, handshake);
-        await _waitForReady(socket, deadline);
+        await _listenAndWaitForReady(socket, deadline);
         return;
       } on Object {
         await disconnect();
@@ -56,6 +67,9 @@ class RuntimeIpcClient {
   Future<void> disconnect() async {
     await _subscription?.cancel();
     _subscription = null;
+    _completePendingResponses(
+      StateError('Runtime IPC disconnected before response.'),
+    );
 
     final socket = _socket;
     _socket = null;
@@ -68,13 +82,63 @@ class RuntimeIpcClient {
     return 1 + _random.nextInt(0x7ffffffe);
   }
 
+  Future<RuntimeIpcCommandResponse> sendCommand(
+    String method, {
+    Map<String, Object?> params = const {},
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final socket = _socket;
+    if (socket == null) {
+      throw StateError('Runtime IPC is not connected.');
+    }
+
+    final id = _nextCommandId++;
+    final completer = Completer<RuntimeIpcCommandResponse>();
+    _pendingResponses[id] = completer;
+
+    socket.write(
+      '${jsonEncode({'type': 'command', 'id': id, 'method': method, 'params': params})}\n',
+    );
+
+    try {
+      final response = await completer.future.timeout(timeout);
+      if (!response.ok) {
+        throw RuntimeIpcCommandException(
+          response.error ??
+              const RuntimeIpcError(
+                code: 'unknown',
+                message: 'Runtime command failed.',
+              ),
+        );
+      }
+      return response;
+    } finally {
+      _pendingResponses.remove(id);
+    }
+  }
+
+  Future<void> openProject(String path) async {
+    await sendCommand(runtimeIpcOpenProjectMethod, params: {'path': path});
+  }
+
+  Future<void> reloadScene() async {
+    await sendCommand(runtimeIpcReloadSceneMethod);
+  }
+
+  Future<void> selectEntity(String entityId) async {
+    await sendCommand(
+      runtimeIpcSelectEntityMethod,
+      params: {'entity_id': entityId},
+    );
+  }
+
   void _sendHello(Socket socket, RuntimeIpcHandshake handshake) {
     socket.write(
       '${jsonEncode({'type': 'hello', 'protocol_version': runtimeIpcProtocolVersion, 'token': handshake.token})}\n',
     );
   }
 
-  Future<void> _waitForReady(Socket socket, DateTime deadline) async {
+  Future<void> _listenAndWaitForReady(Socket socket, DateTime deadline) async {
     final completer = Completer<void>();
     _subscription = socket
         .cast<List<int>>()
@@ -82,7 +146,9 @@ class RuntimeIpcClient {
         .transform(const LineSplitter())
         .listen(
           (line) {
-            if (_isRuntimeReady(line) && !completer.isCompleted) {
+            final event = _handleLine(line);
+            if (event?.kind == RuntimeIpcEventKind.runtimeReady &&
+                !completer.isCompleted) {
               completer.complete();
             }
           },
@@ -92,6 +158,9 @@ class RuntimeIpcClient {
             }
           },
           onDone: () {
+            _completePendingResponses(
+              StateError('Runtime IPC closed before response.'),
+            );
             if (!completer.isCompleted) {
               completer.completeError(
                 StateError('Runtime IPC closed before ready.'),
@@ -108,10 +177,48 @@ class RuntimeIpcClient {
     await completer.future.timeout(remaining);
   }
 
-  bool _isRuntimeReady(String line) {
-    final decoded = jsonDecode(line);
-    return decoded is Map<String, Object?> &&
-        decoded['type'] == 'event' &&
-        decoded['event'] == 'runtime_ready';
+  RuntimeIpcEvent? _handleLine(String line) {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(line);
+    } on FormatException {
+      return null;
+    }
+
+    final decodedMap = _asJsonMap(decoded);
+    if (decodedMap.isEmpty) {
+      return null;
+    }
+
+    switch (decodedMap['type']) {
+      case 'event':
+        final event = RuntimeIpcEvent.fromJson(decodedMap);
+        _events.add(event);
+        return event;
+      case 'response':
+        final response = RuntimeIpcCommandResponse.fromJson(decodedMap);
+        _pendingResponses.remove(response.id)?.complete(response);
+      default:
+        return null;
+    }
+
+    return null;
   }
+
+  void _completePendingResponses(Object error) {
+    for (final completer in _pendingResponses.values) {
+      if (!completer.isCompleted) {
+        completer.completeError(error);
+      }
+    }
+    _pendingResponses.clear();
+  }
+}
+
+Map<String, Object?> _asJsonMap(Object? value) {
+  if (value is Map) {
+    return value.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  return const {};
 }

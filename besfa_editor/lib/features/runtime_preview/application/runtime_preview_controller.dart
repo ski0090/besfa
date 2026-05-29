@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:besfa_editor/features/runtime_ipc/application/runtime_ipc_client.dart';
+import 'package:besfa_editor/features/runtime_ipc/domain/runtime_ipc_models.dart';
 import 'package:besfa_editor/features/runtime_preview/domain/runtime_preview_status.dart';
 import 'package:besfa_flutter_plugin/besfa_flutter_plugin.dart';
 import 'package:flutter/foundation.dart';
@@ -14,6 +15,7 @@ class RuntimePreviewController extends ChangeNotifier {
     platformVersion = _plugin.getPlatformVersion();
     abiVersion = _plugin.abiVersion;
     _syncInitialStatus();
+    _ipcEventsSubscription = _ipcClient.events.listen(_handleRuntimeIpcEvent);
     _statusTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       refreshRuntimeStatus();
     });
@@ -21,6 +23,7 @@ class RuntimePreviewController extends ChangeNotifier {
 
   final BesfaFlutterPlugin _plugin;
   final RuntimeIpcClient _ipcClient;
+  StreamSubscription<RuntimeIpcEvent>? _ipcEventsSubscription;
   Timer? _statusTimer;
   bool _disposed = false;
 
@@ -30,6 +33,9 @@ class RuntimePreviewController extends ChangeNotifier {
   RuntimePreviewStatus status = RuntimePreviewStatus.stopped;
   bool isBusy = false;
   String? message;
+  RuntimeSceneSnapshot? sceneSnapshot;
+  RuntimeFrameStats? frameStats;
+  List<RuntimeLogEntry> logs = const [];
 
   Future<void> runPreview() async {
     if (isBusy) {
@@ -74,6 +80,7 @@ class RuntimePreviewController extends ChangeNotifier {
     _apply(isBusy: true);
     await _ipcClient.disconnect();
     final result = _plugin.stopRuntime();
+    _clearRuntimeData();
     _apply(
       status: _statusForStopResult(result),
       message: _messageForStopResult(result),
@@ -83,6 +90,21 @@ class RuntimePreviewController extends ChangeNotifier {
 
   Future<void> reloadRuntime() async {
     if (isBusy) {
+      return;
+    }
+
+    if (status == RuntimePreviewStatus.running) {
+      _apply(isBusy: true);
+      try {
+        await _ipcClient.reloadScene();
+        _apply(isBusy: false);
+      } on Object {
+        _apply(
+          status: RuntimePreviewStatus.failed,
+          message: 'Runtime scene could not reload.',
+          isBusy: false,
+        );
+      }
       return;
     }
 
@@ -130,12 +152,14 @@ class RuntimePreviewController extends ChangeNotifier {
       case BesfaRuntimeState.stopped:
       case BesfaRuntimeState.exited:
         unawaited(_ipcClient.disconnect());
+        _clearRuntimeData();
         _apply(
           status: RuntimePreviewStatus.stopped,
           message: 'Preview window closed.',
         );
       case BesfaRuntimeState.failed:
         unawaited(_ipcClient.disconnect());
+        _clearRuntimeData();
         _apply(
           status: RuntimePreviewStatus.failed,
           message: _errorMessage('Could not read runtime status.'),
@@ -147,8 +171,21 @@ class RuntimePreviewController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _statusTimer?.cancel();
+    unawaited(_ipcEventsSubscription?.cancel());
     unawaited(_ipcClient.disconnect());
     super.dispose();
+  }
+
+  Future<void> selectEntity(String entityId) async {
+    if (status != RuntimePreviewStatus.running || entityId.isEmpty) {
+      return;
+    }
+
+    try {
+      await _ipcClient.selectEntity(entityId);
+    } on Object {
+      _apply(message: 'Runtime entity could not be selected.');
+    }
   }
 
   void _syncInitialStatus() {
@@ -181,6 +218,36 @@ class RuntimePreviewController extends ChangeNotifier {
     }
     this.message = message;
     notifyListeners();
+  }
+
+  void _handleRuntimeIpcEvent(RuntimeIpcEvent event) {
+    if (_disposed) {
+      return;
+    }
+
+    switch (event.kind) {
+      case RuntimeIpcEventKind.runtimeReady:
+        return;
+      case RuntimeIpcEventKind.sceneSnapshot:
+        sceneSnapshot = RuntimeSceneSnapshot.fromPayload(event.payload);
+        notifyListeners();
+      case RuntimeIpcEventKind.frameStats:
+        frameStats = RuntimeFrameStats.fromPayload(event.payload);
+        notifyListeners();
+      case RuntimeIpcEventKind.log:
+        final log = RuntimeLogEntry.fromPayload(event.payload);
+        logs = [...logs.take(19), log];
+        message = log.message;
+        notifyListeners();
+      case RuntimeIpcEventKind.unknown:
+        return;
+    }
+  }
+
+  void _clearRuntimeData() {
+    sceneSnapshot = null;
+    frameStats = null;
+    logs = const [];
   }
 
   RuntimePreviewStatus _statusForStartResult(BesfaRuntimeCommandResult result) {
