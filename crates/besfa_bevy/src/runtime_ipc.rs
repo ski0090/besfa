@@ -12,11 +12,13 @@ use resources::{
 use systems::{emit_frame_stats, emit_requested_scene_snapshot, process_runtime_ipc_commands};
 use transport::start_runtime_ipc_server;
 
+/// Bevy plugin that exposes runtime IPC commands and events over TCP.
 pub struct BesfaRuntimeIpcPlugin {
     config: RuntimeIpcConfig,
 }
 
 impl BesfaRuntimeIpcPlugin {
+    /// Creates the runtime IPC plugin for a specific launch configuration.
     pub const fn new(config: RuntimeIpcConfig) -> Self {
         Self { config }
     }

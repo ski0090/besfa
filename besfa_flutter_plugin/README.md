@@ -1,15 +1,32 @@
 # besfa_flutter_plugin
 
-A new Flutter plugin project.
+Flutter-facing native bridge for Besfa.
 
-## Getting Started
+The Dart API in `lib/besfa_flutter_plugin.dart` wraps Rust FFI functions from
+`besfa_flutter_plugin/rust`. The editor uses this package to read native ABI
+metadata and launch, stop, and inspect the standalone preview runtime process.
 
-This project is a starting point for a Flutter
-[plug-in package](https://flutter.dev/to/develop-plugins),
-a specialized package that includes platform-specific implementation code for
-Android and/or iOS.
+## Responsibilities
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- Expose the native ABI version to Dart.
+- Keep a small FFI smoke path for bridge health checks.
+- Launch `besfa_runtime` as a child process.
+- Launch `besfa_runtime` with IPC arguments for editor/runtime communication.
+- Report runtime process state and the last runtime bridge error.
 
+## Runtime Discovery
+
+Runtime launch looks for `besfa_runtime.exe` beside the editor executable and
+under the workspace `target/debug` or `target/release` directories.
+
+Development overrides:
+
+- `BESFA_RUNTIME_PATH`: absolute path to the runtime executable.
+- `BESFA_RUNTIME_WORKING_DIR`: working directory for the child process.
+
+## Development
+
+```powershell
+flutter analyze
+flutter test
+```

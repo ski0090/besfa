@@ -10,13 +10,18 @@ const String runtimeIpcOpenProjectMethod = 'open_project';
 const String runtimeIpcReloadSceneMethod = 'reload_scene';
 const String runtimeIpcSelectEntityMethod = 'select_entity';
 
+/// Port and token reserved by the editor before launching the runtime.
 class RuntimeIpcHandshake {
   const RuntimeIpcHandshake({required this.port, required this.token});
 
+  /// Localhost port the runtime should bind.
   final int port;
+
+  /// Random token the runtime must validate during hello.
   final int token;
 }
 
+/// TCP client for the Besfa editor-to-runtime IPC protocol.
 class RuntimeIpcClient {
   final Random _random = Random.secure();
   final StreamController<RuntimeIpcEvent> _events =
@@ -26,8 +31,10 @@ class RuntimeIpcClient {
   Socket? _socket;
   StreamSubscription<String>? _subscription;
 
+  /// Stream of runtime events pushed after the handshake completes.
   Stream<RuntimeIpcEvent> get events => _events.stream;
 
+  /// Reserves a free localhost port and creates a handshake token.
   Future<RuntimeIpcHandshake> reserveHandshake() async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
@@ -36,6 +43,7 @@ class RuntimeIpcClient {
     return RuntimeIpcHandshake(port: port, token: _nextToken());
   }
 
+  /// Connects to the launched runtime and waits for `runtime_ready`.
   Future<void> connectAndWaitReady(
     RuntimeIpcHandshake handshake, {
     Duration timeout = const Duration(seconds: 5),
@@ -64,6 +72,7 @@ class RuntimeIpcClient {
     }
   }
 
+  /// Closes the socket and fails any pending command responses.
   Future<void> disconnect() async {
     await _subscription?.cancel();
     _subscription = null;
@@ -82,6 +91,7 @@ class RuntimeIpcClient {
     return 1 + _random.nextInt(0x7ffffffe);
   }
 
+  /// Sends a raw runtime command and waits for its response.
   Future<RuntimeIpcCommandResponse> sendCommand(
     String method, {
     Map<String, Object?> params = const {},
@@ -117,14 +127,17 @@ class RuntimeIpcClient {
     }
   }
 
+  /// Sends `open_project` to the runtime.
   Future<void> openProject(String path) async {
     await sendCommand(runtimeIpcOpenProjectMethod, params: {'path': path});
   }
 
+  /// Sends `reload_scene` to the runtime.
   Future<void> reloadScene() async {
     await sendCommand(runtimeIpcReloadSceneMethod);
   }
 
+  /// Sends `select_entity` to the runtime.
   Future<void> selectEntity(String entityId) async {
     await sendCommand(
       runtimeIpcSelectEntityMethod,

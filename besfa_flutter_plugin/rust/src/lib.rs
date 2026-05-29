@@ -31,21 +31,25 @@ struct RuntimeIpcLaunch {
     token: u64,
 }
 
+/// Returns the ABI version exposed by the native bridge.
 #[unsafe(no_mangle)]
 pub extern "C" fn besfa_flutter_plugin_abi_version() -> u32 {
     besfa_core::ABI_VERSION
 }
 
+/// Native smoke-test function used by Dart FFI tests.
 #[unsafe(no_mangle)]
 pub extern "C" fn besfa_flutter_plugin_add(left: i32, right: i32) -> i32 {
     left + right
 }
 
+/// Starts the preview runtime without IPC.
 #[unsafe(no_mangle)]
 pub extern "C" fn besfa_runtime_start() -> i32 {
     start_runtime(None)
 }
 
+/// Starts the preview runtime with localhost IPC launch arguments.
 #[unsafe(no_mangle)]
 pub extern "C" fn besfa_runtime_start_with_ipc(port: i32, token: u64) -> i32 {
     let Ok(port) = u16::try_from(port) else {
@@ -120,6 +124,7 @@ fn start_runtime(ipc: Option<RuntimeIpcLaunch>) -> i32 {
     }
 }
 
+/// Stops the tracked preview runtime process.
 #[unsafe(no_mangle)]
 pub extern "C" fn besfa_runtime_stop() -> i32 {
     let mut runtime_process = match RUNTIME_PROCESS.lock() {
@@ -159,6 +164,7 @@ pub extern "C" fn besfa_runtime_stop() -> i32 {
     }
 }
 
+/// Returns the tracked preview runtime process status.
 #[unsafe(no_mangle)]
 pub extern "C" fn besfa_runtime_status() -> i32 {
     let mut runtime_process = match RUNTIME_PROCESS.lock() {
@@ -187,6 +193,7 @@ pub extern "C" fn besfa_runtime_status() -> i32 {
     }
 }
 
+/// Returns the last native runtime bridge error code.
 #[unsafe(no_mangle)]
 pub extern "C" fn besfa_runtime_last_error_code() -> i32 {
     match RUNTIME_LAST_ERROR.lock() {

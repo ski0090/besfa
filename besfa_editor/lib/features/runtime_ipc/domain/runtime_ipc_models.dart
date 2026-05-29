@@ -1,14 +1,25 @@
+/// Runtime event names understood by the editor.
 enum RuntimeIpcEventKind {
+  /// Runtime accepted the editor handshake.
   runtimeReady('runtime_ready'),
+
+  /// Runtime log event.
   log('log'),
+
+  /// Runtime scene hierarchy snapshot.
   sceneSnapshot('scene_snapshot'),
+
+  /// Runtime frame timing telemetry.
   frameStats('frame_stats'),
+
+  /// Unknown or unsupported event name.
   unknown('');
 
   const RuntimeIpcEventKind(this.wireName);
 
   final String wireName;
 
+  /// Converts a wire event name into an editor event kind.
   static RuntimeIpcEventKind fromWireName(Object? value) {
     if (value is! String) {
       return RuntimeIpcEventKind.unknown;
@@ -24,9 +35,11 @@ enum RuntimeIpcEventKind {
   }
 }
 
+/// Runtime event received over IPC.
 class RuntimeIpcEvent {
   const RuntimeIpcEvent({required this.kind, required this.payload});
 
+  /// Parses a runtime event JSON object.
   factory RuntimeIpcEvent.fromJson(Map<String, Object?> json) {
     return RuntimeIpcEvent(
       kind: RuntimeIpcEventKind.fromWireName(json['event']),
@@ -34,10 +47,14 @@ class RuntimeIpcEvent {
     );
   }
 
+  /// Event name.
   final RuntimeIpcEventKind kind;
+
+  /// Event-specific payload.
   final Map<String, Object?> payload;
 }
 
+/// Response to an editor command sent over runtime IPC.
 class RuntimeIpcCommandResponse {
   const RuntimeIpcCommandResponse({
     required this.id,
@@ -46,6 +63,7 @@ class RuntimeIpcCommandResponse {
     required this.error,
   });
 
+  /// Parses a command response JSON object.
   factory RuntimeIpcCommandResponse.fromJson(Map<String, Object?> json) {
     return RuntimeIpcCommandResponse(
       id: (json['id'] as num?)?.toInt() ?? 0,
@@ -55,15 +73,24 @@ class RuntimeIpcCommandResponse {
     );
   }
 
+  /// Request id from the command.
   final int id;
+
+  /// Whether the runtime accepted the command.
   final bool ok;
+
+  /// Optional success payload.
   final Map<String, Object?> result;
+
+  /// Optional error payload.
   final RuntimeIpcError? error;
 }
 
+/// Error returned by a failed runtime command response.
 class RuntimeIpcError {
   const RuntimeIpcError({required this.code, required this.message});
 
+  /// Parses an IPC error JSON object.
   factory RuntimeIpcError.fromJson(Map<String, Object?> json) {
     return RuntimeIpcError(
       code: json['code'] as String? ?? 'unknown',
@@ -71,25 +98,32 @@ class RuntimeIpcError {
     );
   }
 
+  /// Stable machine-readable error code.
   final String code;
+
+  /// Human-readable error message.
   final String message;
 }
 
+/// Exception raised when a runtime command response is not successful.
 class RuntimeIpcCommandException implements Exception {
   const RuntimeIpcCommandException(this.error);
 
+  /// Error returned by the runtime.
   final RuntimeIpcError error;
 
   @override
   String toString() => error.message;
 }
 
+/// Runtime scene snapshot used by editor hierarchy surfaces.
 class RuntimeSceneSnapshot {
   const RuntimeSceneSnapshot({
     required this.root,
     required this.selectedEntityId,
   });
 
+  /// Parses a snapshot event payload.
   factory RuntimeSceneSnapshot.fromPayload(Map<String, Object?> payload) {
     return RuntimeSceneSnapshot(
       root: RuntimeSceneEntity.fromJson(_asMap(payload['root'])),
@@ -97,10 +131,14 @@ class RuntimeSceneSnapshot {
     );
   }
 
+  /// Root node of the runtime hierarchy.
   final RuntimeSceneEntity root;
+
+  /// Currently selected entity id, if any.
   final String? selectedEntityId;
 }
 
+/// Entity node inside a runtime scene snapshot.
 class RuntimeSceneEntity {
   const RuntimeSceneEntity({
     required this.id,
@@ -109,6 +147,7 @@ class RuntimeSceneEntity {
     required this.children,
   });
 
+  /// Parses an entity node JSON object.
   factory RuntimeSceneEntity.fromJson(Map<String, Object?> json) {
     final children = switch (json['children']) {
       final List<Object?> items =>
@@ -128,15 +167,24 @@ class RuntimeSceneEntity {
     );
   }
 
+  /// Stable runtime entity id.
   final String id;
+
+  /// Display name.
   final String name;
+
+  /// Lightweight type hint for editor UI.
   final String kind;
+
+  /// Child entities.
   final List<RuntimeSceneEntity> children;
 }
 
+/// Runtime frame timing telemetry.
 class RuntimeFrameStats {
   const RuntimeFrameStats({required this.fps, required this.frameTimeMs});
 
+  /// Parses a frame stats event payload.
   factory RuntimeFrameStats.fromPayload(Map<String, Object?> payload) {
     return RuntimeFrameStats(
       fps: (payload['fps'] as num?)?.toDouble() ?? 0,
@@ -144,13 +192,18 @@ class RuntimeFrameStats {
     );
   }
 
+  /// Estimated frames per second.
   final double fps;
+
+  /// Average frame time in milliseconds.
   final double frameTimeMs;
 }
 
+/// Runtime log message shown by editor status surfaces.
 class RuntimeLogEntry {
   const RuntimeLogEntry({required this.level, required this.message});
 
+  /// Parses a log event payload.
   factory RuntimeLogEntry.fromPayload(Map<String, Object?> payload) {
     return RuntimeLogEntry(
       level: payload['level'] as String? ?? 'info',
@@ -158,7 +211,10 @@ class RuntimeLogEntry {
     );
   }
 
+  /// Log level string.
   final String level;
+
+  /// Human-readable log message.
   final String message;
 }
 

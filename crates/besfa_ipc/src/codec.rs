@@ -5,22 +5,27 @@ use crate::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
+/// Protocol version expected by both the editor and runtime.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Serializes a message as one newline-delimited JSON line.
 pub fn encode_line<T: Serialize>(message: &T) -> serde_json::Result<String> {
     let mut line = serde_json::to_string(message)?;
     line.push('\n');
     Ok(line)
 }
 
+/// Decodes a client-to-runtime message from one JSON line.
 pub fn decode_client_message(line: &str) -> serde_json::Result<ClientMessage> {
     serde_json::from_str(line.trim_end())
 }
 
+/// Decodes a runtime-to-client message from one JSON line.
 pub fn decode_runtime_message(line: &str) -> serde_json::Result<RuntimeMessage> {
     serde_json::from_str(line.trim_end())
 }
 
+/// Wraps a typed runtime command in a protocol `command` message.
 pub fn command_message(id: u64, command: RuntimeCommand) -> ClientMessage {
     ClientMessage::Command {
         id,
@@ -29,6 +34,7 @@ pub fn command_message(id: u64, command: RuntimeCommand) -> ClientMessage {
     }
 }
 
+/// Builds the event sent after a successful runtime handshake.
 pub fn runtime_ready_message() -> RuntimeMessage {
     RuntimeMessage::Event {
         event: RuntimeEvent::RuntimeReady,
@@ -38,6 +44,7 @@ pub fn runtime_ready_message() -> RuntimeMessage {
     }
 }
 
+/// Builds a runtime log event.
 pub fn log_message(level: impl Into<String>, message: impl Into<String>) -> RuntimeMessage {
     RuntimeMessage::Event {
         event: RuntimeEvent::Log,
@@ -48,6 +55,7 @@ pub fn log_message(level: impl Into<String>, message: impl Into<String>) -> Runt
     }
 }
 
+/// Builds a scene hierarchy snapshot event.
 pub fn scene_snapshot_message(payload: SceneSnapshotPayload) -> RuntimeMessage {
     RuntimeMessage::Event {
         event: RuntimeEvent::SceneSnapshot,
@@ -55,6 +63,7 @@ pub fn scene_snapshot_message(payload: SceneSnapshotPayload) -> RuntimeMessage {
     }
 }
 
+/// Builds a frame statistics event.
 pub fn frame_stats_message(payload: FrameStatsPayload) -> RuntimeMessage {
     RuntimeMessage::Event {
         event: RuntimeEvent::FrameStats,
@@ -62,6 +71,7 @@ pub fn frame_stats_message(payload: FrameStatsPayload) -> RuntimeMessage {
     }
 }
 
+/// Builds a successful command response with a JSON result payload.
 pub fn ok_response(id: u64, result: Value) -> RuntimeMessage {
     RuntimeMessage::Response {
         id,
@@ -71,10 +81,12 @@ pub fn ok_response(id: u64, result: Value) -> RuntimeMessage {
     }
 }
 
+/// Builds a successful command response with an empty JSON object result.
 pub fn empty_ok_response(id: u64) -> RuntimeMessage {
     ok_response(id, json!({}))
 }
 
+/// Builds a failed command response.
 pub fn error_response(id: u64, error: IpcError) -> RuntimeMessage {
     RuntimeMessage::Response {
         id,

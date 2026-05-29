@@ -6,6 +6,7 @@ import 'package:besfa_editor/features/runtime_preview/domain/runtime_preview_sta
 import 'package:besfa_flutter_plugin/besfa_flutter_plugin.dart';
 import 'package:flutter/foundation.dart';
 
+/// Coordinates preview runtime process control and runtime IPC state.
 class RuntimePreviewController extends ChangeNotifier {
   RuntimePreviewController({
     BesfaFlutterPlugin? plugin,
@@ -30,13 +31,25 @@ class RuntimePreviewController extends ChangeNotifier {
   late final Future<String?> platformVersion;
   late final int abiVersion;
 
+  /// Current preview runtime status shown by the editor.
   RuntimePreviewStatus status = RuntimePreviewStatus.stopped;
+
+  /// Whether a preview command is in progress.
   bool isBusy = false;
+
+  /// Last user-facing runtime message.
   String? message;
+
+  /// Latest scene hierarchy snapshot received from the runtime.
   RuntimeSceneSnapshot? sceneSnapshot;
+
+  /// Latest runtime frame timing telemetry.
   RuntimeFrameStats? frameStats;
+
+  /// Recent runtime log entries.
   List<RuntimeLogEntry> logs = const [];
 
+  /// Starts the preview runtime and waits for IPC readiness.
   Future<void> runPreview() async {
     if (isBusy) {
       return;
@@ -72,6 +85,7 @@ class RuntimePreviewController extends ChangeNotifier {
     }
   }
 
+  /// Stops the preview runtime process and clears runtime data.
   Future<void> stopPreview() async {
     if (isBusy) {
       return;
@@ -88,6 +102,7 @@ class RuntimePreviewController extends ChangeNotifier {
     );
   }
 
+  /// Reloads the running scene, or restarts the runtime if it is stopped.
   Future<void> reloadRuntime() async {
     if (isBusy) {
       return;
@@ -140,6 +155,7 @@ class RuntimePreviewController extends ChangeNotifier {
     }
   }
 
+  /// Polls the native bridge for process state changes.
   void refreshRuntimeStatus() {
     if (isBusy || status != RuntimePreviewStatus.running) {
       return;
@@ -176,6 +192,7 @@ class RuntimePreviewController extends ChangeNotifier {
     super.dispose();
   }
 
+  /// Sends a runtime entity selection command.
   Future<void> selectEntity(String entityId) async {
     if (status != RuntimePreviewStatus.running || entityId.isEmpty) {
       return;

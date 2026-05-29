@@ -9,6 +9,7 @@ use bevy::{
 };
 use std::f32::consts::{FRAC_PI_2, PI};
 
+/// Runs a standalone Bevy preview app.
 pub fn run(options: PreviewRuntimeOptions) {
     let mut app = App::new();
     app.add_plugins(
@@ -39,6 +40,7 @@ pub fn run(options: PreviewRuntimeOptions) {
     app.run();
 }
 
+/// Bevy plugin that installs the current placeholder preview scene.
 pub struct BesfaPreviewPlugin;
 
 impl Plugin for BesfaPreviewPlugin {

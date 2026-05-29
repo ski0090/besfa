@@ -12,24 +12,29 @@ pub use preview::BesfaPreviewPlugin;
 #[cfg(feature = "runtime")]
 pub use runtime_ipc::BesfaRuntimeIpcPlugin;
 
+/// Returns the display name for the Bevy integration layer.
 pub fn integration_name() -> String {
     let info = EngineInfo::current();
     format!("{} Bevy integration", info.name)
 }
 
 #[cfg(feature = "runtime")]
+/// Runs the standalone preview runtime with default options.
 pub fn run_preview_runtime() {
     run_preview_runtime_with_options(PreviewRuntimeOptions::default());
 }
 
 #[cfg(feature = "runtime")]
+/// Runs the standalone preview runtime with explicit options.
 pub fn run_preview_runtime_with_options(options: PreviewRuntimeOptions) {
     preview::run(options);
 }
 
 #[cfg(feature = "runtime")]
+/// Options used when launching the preview runtime Bevy app.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PreviewRuntimeOptions {
+    /// Optional IPC configuration used to accept editor connections.
     pub ipc: Option<RuntimeIpcConfig>,
 }
 
