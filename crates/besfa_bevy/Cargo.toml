@@ -9,6 +9,19 @@ besfa_core = { workspace = true }
 besfa_ipc = { workspace = true, optional = true }
 bevy = { workspace = true, optional = true }
 
+[target.'cfg(windows)'.dependencies]
+# Keep this on the same HAL major as Bevy's wgpu dependency because
+# RenderDevice::as_hal expects wgpu's internal HAL API.
+wgpu-hal = { version = "27.0.4", default-features = false, features = ["dx12"], optional = true }
+# Keep this aligned with wgpu-hal 27's windows-rs dependency. Using the latest
+# windows crate here creates distinct D3D12 COM wrapper types.
+windows = { version = "0.58.0", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+], optional = true }
+
 [features]
 default = []
-runtime = ["dep:bevy", "dep:besfa_ipc", "bevy/3d"]
+runtime = ["dep:bevy", "dep:besfa_ipc", "dep:wgpu-hal", "dep:windows", "bevy/3d"]

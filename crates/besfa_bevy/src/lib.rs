@@ -1,6 +1,8 @@
 use besfa_core::EngineInfo;
 
 #[cfg(feature = "runtime")]
+mod external_preview;
+#[cfg(feature = "runtime")]
 mod preview;
 #[cfg(feature = "runtime")]
 mod runtime_ipc;

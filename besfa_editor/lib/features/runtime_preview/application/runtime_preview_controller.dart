@@ -17,7 +17,6 @@ class RuntimePreviewController extends ChangeNotifier {
     abiVersion = _plugin.abiVersion;
     _syncInitialStatus();
     _ipcEventsSubscription = _ipcClient.events.listen(_handleRuntimeIpcEvent);
-    unawaited(createPreviewTexture());
     _statusTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       refreshRuntimeStatus();
     });
@@ -27,6 +26,8 @@ class RuntimePreviewController extends ChangeNotifier {
   final RuntimeIpcClient _ipcClient;
   StreamSubscription<RuntimeIpcEvent>? _ipcEventsSubscription;
   Timer? _statusTimer;
+  Timer? _previewTextureFrameTimer;
+  bool _isMarkingPreviewFrame = false;
   bool _disposed = false;
 
   late final Future<String?> platformVersion;
@@ -50,25 +51,9 @@ class RuntimePreviewController extends ChangeNotifier {
   /// Recent runtime log entries.
   List<RuntimeLogEntry> logs = const [];
 
-  /// Flutter texture id for the native D3D preview texture smoke surface.
+  /// Flutter texture id for the runtime-owned preview surface.
   int? previewTextureId;
-
-  /// Creates the native preview texture used by the editor viewport.
-  Future<void> createPreviewTexture() async {
-    if (previewTextureId != null) {
-      return;
-    }
-
-    try {
-      final textureId = await _plugin.createPreviewTexture();
-      if (!_disposed && textureId != null && textureId > 0) {
-        previewTextureId = textureId;
-        notifyListeners();
-      }
-    } on Object {
-      // Texture bridge is still a spike; keep the editor usable if it fails.
-    }
-  }
+  String? _previewSurfaceHandleName;
 
   /// Starts the preview runtime and waits for IPC readiness.
   Future<void> runPreview() async {
@@ -208,12 +193,14 @@ class RuntimePreviewController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _statusTimer?.cancel();
+    _previewTextureFrameTimer?.cancel();
     unawaited(_ipcEventsSubscription?.cancel());
     final textureId = previewTextureId;
     if (textureId != null) {
       unawaited(_plugin.disposePreviewTexture(textureId));
     }
     unawaited(_ipcClient.disconnect());
+    _plugin.stopRuntime();
     super.dispose();
   }
 
@@ -276,6 +263,12 @@ class RuntimePreviewController extends ChangeNotifier {
       case RuntimeIpcEventKind.frameStats:
         frameStats = RuntimeFrameStats.fromPayload(event.payload);
         notifyListeners();
+      case RuntimeIpcEventKind.previewSurfaceReady:
+        unawaited(
+          _attachPreviewSurface(
+            RuntimePreviewSurface.fromPayload(event.payload),
+          ),
+        );
       case RuntimeIpcEventKind.log:
         final log = RuntimeLogEntry.fromPayload(event.payload);
         logs = [...logs.take(19), log];
@@ -290,6 +283,80 @@ class RuntimePreviewController extends ChangeNotifier {
     sceneSnapshot = null;
     frameStats = null;
     logs = const [];
+    _previewTextureFrameTimer?.cancel();
+    _previewTextureFrameTimer = null;
+    _isMarkingPreviewFrame = false;
+    _previewSurfaceHandleName = null;
+    final textureId = previewTextureId;
+    previewTextureId = null;
+    if (textureId != null) {
+      unawaited(_plugin.disposePreviewTexture(textureId));
+    }
+  }
+
+  Future<void> _attachPreviewSurface(RuntimePreviewSurface surface) async {
+    if (surface.sharedHandleName.isEmpty ||
+        surface.width <= 0 ||
+        surface.height <= 0) {
+      return;
+    }
+
+    try {
+      if (_previewSurfaceHandleName == surface.sharedHandleName &&
+          previewTextureId != null) {
+        _ensurePreviewTextureFrameTimer();
+        return;
+      }
+
+      final oldTextureId = previewTextureId;
+      final textureId = await _plugin.attachPreviewSurface(
+        BesfaPreviewSurfaceDescriptor(
+          sharedHandleName: surface.sharedHandleName,
+          width: surface.width,
+          height: surface.height,
+          format: surface.format,
+        ),
+      );
+      if (_disposed || textureId == null || textureId <= 0) {
+        return;
+      }
+
+      previewTextureId = textureId;
+      _previewSurfaceHandleName = surface.sharedHandleName;
+      _ensurePreviewTextureFrameTimer();
+      notifyListeners();
+      if (oldTextureId != null && oldTextureId != textureId) {
+        unawaited(_plugin.disposePreviewTexture(oldTextureId));
+      }
+    } on Object {
+      _apply(message: 'Runtime preview surface could not attach.');
+    }
+  }
+
+  void _ensurePreviewTextureFrameTimer() {
+    if (_previewTextureFrameTimer != null) {
+      return;
+    }
+
+    _previewTextureFrameTimer = Timer.periodic(
+      const Duration(milliseconds: 16),
+      (_) {
+        final textureId = previewTextureId;
+        if (_disposed ||
+            textureId == null ||
+            status != RuntimePreviewStatus.running ||
+            _isMarkingPreviewFrame) {
+          return;
+        }
+
+        _isMarkingPreviewFrame = true;
+        unawaited(
+          _plugin.markPreviewTextureFrameAvailable(textureId).whenComplete(() {
+            _isMarkingPreviewFrame = false;
+          }),
+        );
+      },
+    );
   }
 
   RuntimePreviewStatus _statusForStartResult(BesfaRuntimeCommandResult result) {

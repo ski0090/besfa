@@ -1,6 +1,7 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'besfa_flutter_plugin_method_channel.dart';
+import 'src/preview_surface_descriptor.dart';
 
 /// Platform interface for Besfa Flutter plugin implementations.
 abstract class BesfaFlutterPluginPlatform extends PlatformInterface {
@@ -34,6 +35,20 @@ abstract class BesfaFlutterPluginPlatform extends PlatformInterface {
   Future<int?> createPreviewTexture({required int width, required int height}) {
     throw UnimplementedError(
       'createPreviewTexture() has not been implemented.',
+    );
+  }
+
+  /// Attaches a shared preview surface and returns its Flutter texture id.
+  Future<int?> attachPreviewSurface(BesfaPreviewSurfaceDescriptor descriptor) {
+    throw UnimplementedError(
+      'attachPreviewSurface() has not been implemented.',
+    );
+  }
+
+  /// Signals that Flutter should sample a fresh frame for a preview texture.
+  Future<bool> markPreviewTextureFrameAvailable(int textureId) {
+    throw UnimplementedError(
+      'markPreviewTextureFrameAvailable() has not been implemented.',
     );
   }
 

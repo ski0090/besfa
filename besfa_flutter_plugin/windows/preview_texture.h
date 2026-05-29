@@ -7,12 +7,15 @@
 #include <wrl/client.h>
 
 #include <memory>
+#include <string>
 
 namespace besfa_flutter_plugin {
 
 class PreviewTexture {
 public:
   static std::shared_ptr<PreviewTexture> Create(size_t width, size_t height);
+  static std::shared_ptr<PreviewTexture> Attach(size_t width, size_t height,
+                                                std::wstring shared_handle_name);
 
   PreviewTexture(const PreviewTexture &) = delete;
   PreviewTexture &operator=(const PreviewTexture &) = delete;
@@ -24,6 +27,7 @@ private:
   PreviewTexture(size_t width, size_t height);
 
   bool Initialize();
+  bool InitializeAttached();
   bool ClearTestPattern();
   bool WaitForGpu();
   const FlutterDesktopGpuSurfaceDescriptor *ObtainDescriptor(size_t width,
@@ -33,6 +37,7 @@ private:
 
   size_t width_;
   size_t height_;
+  std::wstring shared_handle_name_;
   Microsoft::WRL::ComPtr<ID3D12Device> device_;
   Microsoft::WRL::ComPtr<ID3D12CommandQueue> command_queue_;
   Microsoft::WRL::ComPtr<ID3D12CommandAllocator> command_allocator_;

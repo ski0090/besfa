@@ -10,7 +10,7 @@ use std::sync::{
 pub(super) struct RuntimeIpcServerConfig(pub(super) RuntimeIpcConfig);
 
 #[derive(Resource)]
-pub(super) struct RuntimeIpcServer {
+pub(crate) struct RuntimeIpcServer {
     registry: RuntimeIpcClientRegistry,
     command_tx: Sender<RuntimeIpcCommandRequest>,
     command_rx: Mutex<Receiver<RuntimeIpcCommandRequest>>,
@@ -48,7 +48,7 @@ impl RuntimeIpcServer {
         self.snapshot_requests.load(Ordering::Relaxed)
     }
 
-    pub(super) fn broadcast(&self, message: RuntimeMessage) {
+    pub(crate) fn broadcast(&self, message: RuntimeMessage) {
         self.registry.broadcast(message);
     }
 

@@ -46,6 +46,13 @@ Events are pushed by the runtime:
 - `scene_snapshot`: hierarchy snapshot for editor panels.
 - `log`: runtime message suitable for editor status/log surfaces.
 - `frame_stats`: frame rate and frame time telemetry.
+- `preview_surface_ready`: runtime-owned shared preview surface descriptor.
+
+`preview_surface_ready` currently carries Windows DirectX metadata:
+
+```json
+{"shared_handle_name":"Local\\BesfaPreviewSurface-1234","width":640,"height":360,"format":"bgra8_unorm"}
+```
 
 ## Ownership
 

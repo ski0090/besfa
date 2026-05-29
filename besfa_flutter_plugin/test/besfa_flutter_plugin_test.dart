@@ -19,6 +19,18 @@ class MockBesfaFlutterPluginPlatform
   }
 
   @override
+  Future<int?> attachPreviewSurface(
+    BesfaPreviewSurfaceDescriptor descriptor,
+  ) async {
+    return 9;
+  }
+
+  @override
+  Future<bool> markPreviewTextureFrameAvailable(int textureId) async {
+    return textureId == 9;
+  }
+
+  @override
   Future<bool> disposePreviewTexture(int textureId) async {
     return true;
   }
@@ -48,6 +60,35 @@ void main() {
 
     expect(await besfaFlutterPlugin.createPreviewTexture(), 7);
     expect(await besfaFlutterPlugin.disposePreviewTexture(7), isTrue);
+  });
+
+  test('attaches preview surfaces', () async {
+    final besfaFlutterPlugin = BesfaFlutterPlugin();
+    final fakePlatform = MockBesfaFlutterPluginPlatform();
+    BesfaFlutterPluginPlatform.instance = fakePlatform;
+
+    expect(
+      await besfaFlutterPlugin.attachPreviewSurface(
+        const BesfaPreviewSurfaceDescriptor(
+          sharedHandleName: 'Local\\BesfaPreviewSurface-42',
+          width: 640,
+          height: 360,
+          format: 'bgra8_unorm',
+        ),
+      ),
+      9,
+    );
+  });
+
+  test('marks preview texture frames available', () async {
+    final besfaFlutterPlugin = BesfaFlutterPlugin();
+    final fakePlatform = MockBesfaFlutterPluginPlatform();
+    BesfaFlutterPluginPlatform.instance = fakePlatform;
+
+    expect(
+      await besfaFlutterPlugin.markPreviewTextureFrameAvailable(9),
+      isTrue,
+    );
   });
 
   test('calls Rust FFI smoke functions', () {

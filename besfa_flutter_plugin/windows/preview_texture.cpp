@@ -1,6 +1,7 @@
 #include "preview_texture.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace besfa_flutter_plugin {
 namespace {
@@ -19,6 +20,18 @@ std::shared_ptr<PreviewTexture> PreviewTexture::Create(size_t width,
   auto texture = std::shared_ptr<PreviewTexture>(
       new PreviewTexture(ClampTextureSize(width), ClampTextureSize(height)));
   if (!texture->Initialize()) {
+    return nullptr;
+  }
+
+  return texture;
+}
+
+std::shared_ptr<PreviewTexture> PreviewTexture::Attach(
+    size_t width, size_t height, std::wstring shared_handle_name) {
+  auto texture = std::shared_ptr<PreviewTexture>(
+      new PreviewTexture(ClampTextureSize(width), ClampTextureSize(height)));
+  texture->shared_handle_name_ = std::move(shared_handle_name);
+  if (!texture->InitializeAttached()) {
     return nullptr;
   }
 
@@ -127,6 +140,39 @@ bool PreviewTexture::Initialize() {
 
   result = device_->CreateSharedHandle(texture_.Get(), nullptr, GENERIC_ALL,
                                        nullptr, &shared_handle_);
+  if (FAILED(result)) {
+    return false;
+  }
+
+  descriptor_.struct_size = sizeof(FlutterDesktopGpuSurfaceDescriptor);
+  descriptor_.width = width_;
+  descriptor_.height = height_;
+  descriptor_.visible_width = width_;
+  descriptor_.visible_height = height_;
+  descriptor_.format = kFlutterDesktopPixelFormatBGRA8888;
+  descriptor_.release_callback = ReleaseSurfaceHandle;
+
+  texture_variant_ = std::make_unique<flutter::TextureVariant>(
+      flutter::GpuSurfaceTexture(kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle,
+                                 [this](size_t width, size_t height) {
+                                   return ObtainDescriptor(width, height);
+                                 }));
+  return true;
+}
+
+bool PreviewTexture::InitializeAttached() {
+  if (shared_handle_name_.empty()) {
+    return false;
+  }
+
+  HRESULT result = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0,
+                                     IID_PPV_ARGS(&device_));
+  if (FAILED(result)) {
+    return false;
+  }
+
+  result = device_->OpenSharedHandleByName(shared_handle_name_.c_str(),
+                                           GENERIC_ALL, &shared_handle_);
   if (FAILED(result)) {
     return false;
   }

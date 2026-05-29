@@ -28,7 +28,7 @@ Documentation rules for contributors and agents live in `DOCUMENT.md`.
 
 ## Preview Runtime
 
-Note: Bevy 0.18 uses `wgpu`, which does not expose a native D3D11 backend. The standalone preview window is pinned to DX12 on Windows to avoid Vulkan-specific noise, while the later Flutter texture path still needs a D3D11 renderer/interop bridge because the Flutter Windows embedder consumes D3D11 textures.
+Note: Bevy 0.18 uses `wgpu`, which does not expose a native D3D11 backend. The preview runtime is pinned to DX12 on Windows and renders into a shared texture that the Flutter editor attaches as a Windows texture surface.
 
 Development preview launch can be overridden with `BESFA_RUNTIME_PATH` and `BESFA_RUNTIME_WORKING_DIR` when the runtime binary is not beside the editor executable or under the workspace `target` directory.
 

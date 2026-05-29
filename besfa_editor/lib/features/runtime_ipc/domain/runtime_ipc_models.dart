@@ -12,6 +12,9 @@ enum RuntimeIpcEventKind {
   /// Runtime frame timing telemetry.
   frameStats('frame_stats'),
 
+  /// Runtime preview surface descriptor.
+  previewSurfaceReady('preview_surface_ready'),
+
   /// Unknown or unsupported event name.
   unknown('');
 
@@ -216,6 +219,38 @@ class RuntimeLogEntry {
 
   /// Human-readable log message.
   final String message;
+}
+
+/// Runtime-owned preview surface shared with the editor.
+class RuntimePreviewSurface {
+  const RuntimePreviewSurface({
+    required this.sharedHandleName,
+    required this.width,
+    required this.height,
+    required this.format,
+  });
+
+  /// Parses a preview surface event payload.
+  factory RuntimePreviewSurface.fromPayload(Map<String, Object?> payload) {
+    return RuntimePreviewSurface(
+      sharedHandleName: payload['shared_handle_name'] as String? ?? '',
+      width: (payload['width'] as num?)?.toInt() ?? 0,
+      height: (payload['height'] as num?)?.toInt() ?? 0,
+      format: payload['format'] as String? ?? '',
+    );
+  }
+
+  /// Native shared handle name opened by the editor plugin.
+  final String sharedHandleName;
+
+  /// Surface width in physical pixels.
+  final int width;
+
+  /// Surface height in physical pixels.
+  final int height;
+
+  /// Texture format name.
+  final String format;
 }
 
 RuntimeIpcError? _parseError(Object? value) {

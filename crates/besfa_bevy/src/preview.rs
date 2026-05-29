@@ -1,11 +1,16 @@
-use crate::{BesfaRuntimeIpcPlugin, PreviewRuntimeOptions};
+use crate::{
+    BesfaRuntimeIpcPlugin, PreviewRuntimeOptions,
+    external_preview::{BesfaExternalPreviewPlugin, create_preview_surface_image},
+};
 use bevy::{
+    asset::Assets,
+    camera::RenderTarget,
     prelude::*,
     render::{
         RenderPlugin,
         settings::{Backends, RenderCreation, WgpuSettings},
     },
-    window::PresentMode,
+    window::{PresentMode, WindowPosition},
 };
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -19,6 +24,10 @@ pub fn run(options: PreviewRuntimeOptions) {
                     title: "Besfa Preview".into(),
                     resolution: (960, 640).into(),
                     present_mode: PresentMode::AutoVsync,
+                    position: WindowPosition::At(IVec2::new(-32_000, -32_000)),
+                    visible: true,
+                    focused: false,
+                    skip_taskbar: true,
                     ..default()
                 }),
                 ..default()
@@ -31,7 +40,7 @@ pub fn run(options: PreviewRuntimeOptions) {
                 ..default()
             }),
     )
-    .add_plugins(BesfaPreviewPlugin);
+    .add_plugins((BesfaPreviewPlugin, BesfaExternalPreviewPlugin));
 
     if let Some(ipc_config) = options.ipc {
         app.add_plugins(BesfaRuntimeIpcPlugin::new(ipc_config));
@@ -82,7 +91,11 @@ fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
+    let (preview_surface_image, preview_surface_target) = create_preview_surface_image(&mut images);
+    commands.insert_resource(preview_surface_target);
+
     commands.spawn((
         Name::new("World"),
         PreviewSceneNode::new("world", "World", "world", None),
@@ -127,6 +140,7 @@ fn setup_scene(
 
     commands.spawn((
         Camera3d::default(),
+        RenderTarget::from(preview_surface_image),
         Transform::from_xyz(-4.5, 4.2, 7.5).looking_at(Vec3::new(0.0, 0.6, 0.0), Vec3::Y),
         Name::new("Camera3d"),
         PreviewSceneNode::new("camera_3d", "Camera3d", "camera", Some("world")),

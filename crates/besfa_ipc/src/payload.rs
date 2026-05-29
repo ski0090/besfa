@@ -41,3 +41,16 @@ pub struct LogPayload {
     /// Human-readable log message.
     pub message: String,
 }
+
+/// Descriptor for a runtime-owned shared preview surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewSurfacePayload {
+    /// Native shared handle name that the editor can open on Windows.
+    pub shared_handle_name: String,
+    /// Surface width in physical pixels.
+    pub width: u32,
+    /// Surface height in physical pixels.
+    pub height: u32,
+    /// Texture format name used by the runtime and editor.
+    pub format: String,
+}

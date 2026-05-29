@@ -1,5 +1,8 @@
 import 'besfa_flutter_plugin_platform_interface.dart';
 import 'src/native_api.dart' as native;
+import 'src/preview_surface_descriptor.dart';
+
+export 'src/preview_surface_descriptor.dart';
 
 /// Result of a native runtime start or stop command.
 enum BesfaRuntimeCommandResult {
@@ -122,6 +125,18 @@ class BesfaFlutterPlugin {
     return BesfaFlutterPluginPlatform.instance.createPreviewTexture(
       width: width,
       height: height,
+    );
+  }
+
+  /// Attaches a runtime-owned shared preview surface as a Flutter texture.
+  Future<int?> attachPreviewSurface(BesfaPreviewSurfaceDescriptor descriptor) {
+    return BesfaFlutterPluginPlatform.instance.attachPreviewSurface(descriptor);
+  }
+
+  /// Signals that Flutter should sample a fresh frame for a preview texture.
+  Future<bool> markPreviewTextureFrameAvailable(int textureId) {
+    return BesfaFlutterPluginPlatform.instance.markPreviewTextureFrameAvailable(
+      textureId,
     );
   }
 

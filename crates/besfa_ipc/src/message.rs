@@ -64,4 +64,6 @@ pub enum RuntimeEvent {
     SceneSnapshot,
     /// Runtime frame timing statistics.
     FrameStats,
+    /// Runtime D3D preview surface descriptor.
+    PreviewSurfaceReady,
 }

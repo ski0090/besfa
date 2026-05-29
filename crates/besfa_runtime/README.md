@@ -1,10 +1,11 @@
 # besfa_runtime
 
-Standalone preview runtime executable for Besfa.
+Embedded preview runtime executable for Besfa.
 
-The runtime starts the Bevy preview app from `besfa_bevy`. The editor normally
-launches this process through the Flutter plugin, but it can also be run
-directly during development.
+The runtime starts the Bevy preview app from `besfa_bevy` with its Bevy host
+window placed offscreen and hidden from the taskbar. The editor normally
+launches this process through the Flutter plugin and displays the shared GPU
+surface in its viewport.
 
 ## Commands
 
@@ -25,4 +26,5 @@ cargo run -p besfa_runtime -- --ipc-port 49152 --ipc-token 42424242
   the editor.
 
 Both IPC options must be present for IPC to start. Without them, the runtime
-opens only the standalone preview window.
+still runs the offscreen preview loop, but no editor can attach the shared
+surface.

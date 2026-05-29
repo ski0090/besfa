@@ -326,6 +326,8 @@ dependencies = [
  "besfa_core",
  "besfa_ipc",
  "bevy",
+ "wgpu-hal",
+ "windows 0.58.0",
 ]
 
 [[package]]

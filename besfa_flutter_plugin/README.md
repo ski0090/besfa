@@ -12,7 +12,8 @@ metadata and launch, stop, and inspect the standalone preview runtime process.
 - Keep a small FFI smoke path for bridge health checks.
 - Launch `besfa_runtime` as a child process.
 - Launch `besfa_runtime` with IPC arguments for editor/runtime communication.
-- Create and dispose Windows preview textures for the editor viewport.
+- Create, attach, refresh, and dispose Windows preview textures for the editor
+  viewport.
 - Report runtime process state and the last runtime bridge error.
 
 ## Runtime Discovery
@@ -28,14 +29,16 @@ Development overrides:
 ## Preview Texture
 
 On Windows, `createPreviewTexture` registers a native Flutter GPU surface
-texture backed by a D3D12 shared resource handle. The first implementation is a
-static smoke surface that validates Flutter `Texture` plumbing before Bevy frame
-copy and synchronization are added.
+texture backed by a D3D12 shared resource handle. This remains useful as a
+standalone smoke surface for validating Flutter `Texture` plumbing.
 
-The Windows bridge returns Flutter texture ids to Dart and keeps the native
-resource alive until `disposePreviewTexture` unregisters it. The surface uses
-`kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle` so the editor can stay aligned
-with the Windows embedder's DirectX path.
+For runtime preview, `attachPreviewSurface` opens the named shared handle
+published by `besfa_runtime` over IPC and registers it as
+`kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle`. The runtime owns the render
+target and Bevy renders directly into it; the editor owns the Flutter texture
+registration, asks Flutter to sample fresh frames with
+`markPreviewTextureFrameAvailable`, and unregisters it with
+`disposePreviewTexture`.
 
 ## Development
 

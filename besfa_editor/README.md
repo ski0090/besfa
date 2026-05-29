@@ -13,7 +13,8 @@ The editor follows a lightweight Feature-Sliced Design layout:
 ## Current Features
 
 - Launch, stop, and reload the standalone Bevy preview runtime.
-- Display the native Windows preview texture in the viewport when available.
+- Attach the runtime-owned Windows shared preview surface in the viewport when
+  available.
 - Connect to the runtime over localhost TCP IPC.
 - Render the runtime `scene_snapshot` in the Scene panel.
 - Forward scene tree selection to the runtime with `select_entity`.

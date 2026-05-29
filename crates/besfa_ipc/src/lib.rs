@@ -8,7 +8,7 @@ mod payload;
 pub use codec::{
     PROTOCOL_VERSION, command_message, decode_client_message, decode_runtime_message,
     empty_ok_response, encode_line, error_response, frame_stats_message, log_message, ok_response,
-    runtime_ready_message, scene_snapshot_message,
+    preview_surface_ready_message, runtime_ready_message, scene_snapshot_message,
 };
 pub use command::{
     METHOD_OPEN_PROJECT, METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, OpenProjectParams,
@@ -17,7 +17,9 @@ pub use command::{
 pub use config::RuntimeIpcConfig;
 pub use error::IpcError;
 pub use message::{ClientMessage, RuntimeEvent, RuntimeMessage};
-pub use payload::{FrameStatsPayload, LogPayload, SceneEntityPayload, SceneSnapshotPayload};
+pub use payload::{
+    FrameStatsPayload, LogPayload, PreviewSurfacePayload, SceneEntityPayload, SceneSnapshotPayload,
+};
 
 #[cfg(test)]
 mod tests {
@@ -92,5 +94,19 @@ mod tests {
 
         assert!(line.contains("\"event\":\"scene_snapshot\""));
         assert!(line.contains("\"selected_entity_id\":\"camera\""));
+    }
+
+    #[test]
+    fn encodes_preview_surface_ready_event() {
+        let line = encode_line(&preview_surface_ready_message(PreviewSurfacePayload {
+            shared_handle_name: "Local\\BesfaPreviewSurface-42".to_string(),
+            width: 640,
+            height: 360,
+            format: "bgra8_unorm".to_string(),
+        }))
+        .unwrap();
+
+        assert!(line.contains("\"event\":\"preview_surface_ready\""));
+        assert!(line.contains("\"shared_handle_name\""));
     }
 }

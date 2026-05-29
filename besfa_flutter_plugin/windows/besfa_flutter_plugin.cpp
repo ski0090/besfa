@@ -12,6 +12,7 @@
 
 #include <memory>
 #include <sstream>
+#include <string>
 #include <variant>
 
 namespace besfa_flutter_plugin {
@@ -46,6 +47,38 @@ int64_t GetTextureIdArgument(const flutter::EncodableValue *arguments) {
   }
 
   return 0;
+}
+
+std::string GetOptionalStringArgument(const flutter::EncodableMap &arguments,
+                                      const char *key) {
+  auto iterator = arguments.find(flutter::EncodableValue(key));
+  if (iterator == arguments.end()) {
+    return "";
+  }
+
+  if (const auto *value = std::get_if<std::string>(&iterator->second)) {
+    return *value;
+  }
+
+  return "";
+}
+
+std::wstring Utf8ToWide(const std::string &value) {
+  if (value.empty()) {
+    return L"";
+  }
+
+  const int length = MultiByteToWideChar(CP_UTF8, 0, value.c_str(),
+                                         static_cast<int>(value.size()),
+                                         nullptr, 0);
+  if (length <= 0) {
+    return L"";
+  }
+
+  std::wstring wide(length, L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, value.c_str(),
+                      static_cast<int>(value.size()), wide.data(), length);
+  return wide;
 }
 
 } // namespace
@@ -98,6 +131,11 @@ void BesfaFlutterPlugin::HandleMethodCall(
     result->Success(flutter::EncodableValue(version_stream.str()));
   } else if (method_call.method_name().compare("createPreviewTexture") == 0) {
     HandleCreatePreviewTexture(method_call, std::move(result));
+  } else if (method_call.method_name().compare("attachPreviewSurface") == 0) {
+    HandleAttachPreviewSurface(method_call, std::move(result));
+  } else if (method_call.method_name().compare(
+                 "markPreviewTextureFrameAvailable") == 0) {
+    HandleMarkPreviewTextureFrameAvailable(method_call, std::move(result));
   } else if (method_call.method_name().compare("disposePreviewTexture") == 0) {
     HandleDisposePreviewTexture(method_call, std::move(result));
   } else {
@@ -135,6 +173,60 @@ void BesfaFlutterPlugin::HandleCreatePreviewTexture(
   preview_textures_[texture_id] = texture;
   texture_registrar_->MarkTextureFrameAvailable(texture_id);
   result->Success(flutter::EncodableValue(texture_id));
+}
+
+void BesfaFlutterPlugin::HandleAttachPreviewSurface(
+    const flutter::MethodCall<flutter::EncodableValue> &method_call,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  if (!texture_registrar_) {
+    result->Error("texture_unavailable",
+                  "Flutter texture registrar is unavailable.");
+    return;
+  }
+
+  const auto *arguments =
+      std::get_if<flutter::EncodableMap>(method_call.arguments());
+  if (!arguments) {
+    result->Error("invalid_surface", "Preview surface descriptor is invalid.");
+    return;
+  }
+
+  const int width = GetOptionalIntArgument(*arguments, "width", 640);
+  const int height = GetOptionalIntArgument(*arguments, "height", 360);
+  const std::string shared_handle_name =
+      GetOptionalStringArgument(*arguments, "shared_handle_name");
+  auto texture = PreviewTexture::Attach(static_cast<size_t>(width),
+                                        static_cast<size_t>(height),
+                                        Utf8ToWide(shared_handle_name));
+  if (!texture) {
+    result->Error("texture_attach_failed",
+                  "D3D12 shared preview surface could not be attached.");
+    return;
+  }
+
+  const int64_t texture_id =
+      texture_registrar_->RegisterTexture(texture->texture_variant());
+  preview_textures_[texture_id] = texture;
+  texture_registrar_->MarkTextureFrameAvailable(texture_id);
+  result->Success(flutter::EncodableValue(texture_id));
+}
+
+void BesfaFlutterPlugin::HandleMarkPreviewTextureFrameAvailable(
+    const flutter::MethodCall<flutter::EncodableValue> &method_call,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  if (!texture_registrar_) {
+    result->Success(flutter::EncodableValue(false));
+    return;
+  }
+
+  const int64_t texture_id = GetTextureIdArgument(method_call.arguments());
+  if (preview_textures_.find(texture_id) == preview_textures_.end()) {
+    result->Success(flutter::EncodableValue(false));
+    return;
+  }
+
+  texture_registrar_->MarkTextureFrameAvailable(texture_id);
+  result->Success(flutter::EncodableValue(true));
 }
 
 void BesfaFlutterPlugin::HandleDisposePreviewTexture(

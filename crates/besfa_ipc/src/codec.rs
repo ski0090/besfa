@@ -1,6 +1,6 @@
 use crate::{
-    ClientMessage, FrameStatsPayload, IpcError, LogPayload, RuntimeCommand, RuntimeEvent,
-    RuntimeMessage, SceneSnapshotPayload,
+    ClientMessage, FrameStatsPayload, IpcError, LogPayload, PreviewSurfacePayload, RuntimeCommand,
+    RuntimeEvent, RuntimeMessage, SceneSnapshotPayload,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -67,6 +67,14 @@ pub fn scene_snapshot_message(payload: SceneSnapshotPayload) -> RuntimeMessage {
 pub fn frame_stats_message(payload: FrameStatsPayload) -> RuntimeMessage {
     RuntimeMessage::Event {
         event: RuntimeEvent::FrameStats,
+        payload: json!(payload),
+    }
+}
+
+/// Builds a preview surface descriptor event.
+pub fn preview_surface_ready_message(payload: PreviewSurfacePayload) -> RuntimeMessage {
+    RuntimeMessage::Event {
+        event: RuntimeEvent::PreviewSurfaceReady,
         payload: json!(payload),
     }
 }

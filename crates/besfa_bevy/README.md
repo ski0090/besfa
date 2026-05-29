@@ -2,7 +2,7 @@
 
 Bevy integration layer for Besfa.
 
-This crate owns the standalone preview Bevy app and the Bevy-side runtime IPC
+This crate owns the embedded preview Bevy app and the Bevy-side runtime IPC
 plugin. It deliberately sits between the engine/editor domain and the concrete
 `besfa_runtime` executable.
 
@@ -10,6 +10,8 @@ plugin. It deliberately sits between the engine/editor domain and the concrete
 
 - `preview.rs`: `BesfaPreviewPlugin`, preview scene setup, grid drawing, camera,
   light, and cube animation.
+- `external_preview.rs`: runtime-owned D3D12 shared render target for embedded
+  editor preview.
 - `runtime_ipc.rs`: `BesfaRuntimeIpcPlugin` composition.
 - `runtime_ipc/transport.rs`: localhost TCP handshake, command reads, event
   writes.
@@ -20,9 +22,16 @@ plugin. It deliberately sits between the engine/editor domain and the concrete
 
 ## Preview Backend
 
-The standalone preview window is pinned to DX12 through Bevy/wgpu on Windows.
-Flutter's Windows embedder consumes D3D11 textures, so embedded texture preview
-will require a later interop bridge instead of reusing this window directly.
+The preview runtime is pinned to DX12 through Bevy/wgpu on Windows and keeps its
+Bevy host window offscreen and out of the taskbar. The visible preview lives in
+the Flutter editor: the preview camera renders into a shared D3D12 texture that
+is wrapped as a Bevy image render target. The runtime publishes a
+`preview_surface_ready` IPC event with a named shared handle so the Flutter
+editor can attach the same GPU resource as a `Texture`.
+
+The direct render bridge uses `wgpu-hal` and `windows` versions that match
+Bevy's `wgpu` stack. Updating those crates independently can create duplicate
+D3D12 wrapper types and break raw HAL interop.
 
 ## Usage
 

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'besfa_flutter_plugin_platform_interface.dart';
+import 'src/preview_surface_descriptor.dart';
 
 /// An implementation of [BesfaFlutterPluginPlatform] that uses method channels.
 class MethodChannelBesfaFlutterPlugin extends BesfaFlutterPluginPlatform {
@@ -26,6 +27,25 @@ class MethodChannelBesfaFlutterPlugin extends BesfaFlutterPluginPlatform {
       'width': width,
       'height': height,
     });
+  }
+
+  @override
+  Future<int?> attachPreviewSurface(
+    BesfaPreviewSurfaceDescriptor descriptor,
+  ) async {
+    return methodChannel.invokeMethod<int>(
+      'attachPreviewSurface',
+      descriptor.toMap(),
+    );
+  }
+
+  @override
+  Future<bool> markPreviewTextureFrameAvailable(int textureId) async {
+    return await methodChannel.invokeMethod<bool>(
+          'markPreviewTextureFrameAvailable',
+          textureId,
+        ) ??
+        false;
   }
 
   @override

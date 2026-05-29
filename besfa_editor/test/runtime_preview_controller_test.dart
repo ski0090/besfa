@@ -13,6 +13,7 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
   BesfaRuntimeCommandResult startResult = BesfaRuntimeCommandResult.ok;
   BesfaRuntimeCommandResult stopResult = BesfaRuntimeCommandResult.ok;
   int? createdTextureId;
+  int stopCalls = 0;
 
   @override
   Future<String?> getPlatformVersion() => Future.value('fake platform');
@@ -39,6 +40,7 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
 
   @override
   BesfaRuntimeCommandResult stopRuntime() {
+    stopCalls += 1;
     if (stopResult == BesfaRuntimeCommandResult.ok) {
       state = BesfaRuntimeState.stopped;
       error = BesfaRuntimeErrorCode.none;
@@ -56,6 +58,19 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
   Future<int?> createPreviewTexture({int width = 640, int height = 360}) async {
     createdTextureId = 11;
     return createdTextureId;
+  }
+
+  @override
+  Future<int?> attachPreviewSurface(
+    BesfaPreviewSurfaceDescriptor descriptor,
+  ) async {
+    createdTextureId = 13;
+    return createdTextureId;
+  }
+
+  @override
+  Future<bool> markPreviewTextureFrameAvailable(int textureId) async {
+    return createdTextureId == textureId;
   }
 
   @override
@@ -119,6 +134,16 @@ void main() {
     expect(controller.message, 'Preview window closed.');
   });
 
+  test('stops runtime when controller is disposed', () {
+    final plugin = FakeBesfaFlutterPlugin()..state = BesfaRuntimeState.running;
+    final controller = RuntimePreviewController(plugin: plugin);
+
+    controller.dispose();
+
+    expect(plugin.stopCalls, 1);
+    expect(plugin.state, BesfaRuntimeState.stopped);
+  });
+
   test('reports start failures from the native runtime bridge', () async {
     final plugin = FakeBesfaFlutterPlugin()
       ..startResult = BesfaRuntimeCommandResult.failed
@@ -160,5 +185,31 @@ void main() {
 
     expect(controller.status, RuntimePreviewStatus.running);
     expect(controller.sceneSnapshot?.root.name, 'World');
+  });
+
+  test('attaches runtime preview surface events', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    ipcClient.emit(
+      const RuntimeIpcEvent(
+        kind: RuntimeIpcEventKind.previewSurfaceReady,
+        payload: {
+          'shared_handle_name': 'Local\\BesfaPreviewSurface-42',
+          'width': 640,
+          'height': 360,
+          'format': 'bgra8_unorm',
+        },
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.previewTextureId, 13);
   });
 }

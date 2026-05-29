@@ -6,11 +6,13 @@ mod transport;
 use besfa_ipc::RuntimeIpcConfig;
 use bevy::prelude::*;
 use resources::{
-    RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection, RuntimeIpcServer,
-    RuntimeIpcServerConfig, RuntimeIpcSnapshotCursor,
+    RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection, RuntimeIpcServerConfig,
+    RuntimeIpcSnapshotCursor,
 };
 use systems::{emit_frame_stats, emit_requested_scene_snapshot, process_runtime_ipc_commands};
 use transport::start_runtime_ipc_server;
+
+pub(crate) use resources::RuntimeIpcServer;
 
 /// Bevy plugin that exposes runtime IPC commands and events over TCP.
 pub struct BesfaRuntimeIpcPlugin {
