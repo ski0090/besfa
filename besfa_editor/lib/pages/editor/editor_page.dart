@@ -84,7 +84,13 @@ class _EditorPageState extends State<EditorPage> {
                         ),
                       ),
                       const VerticalDivider(width: 1),
-                      const SizedBox(width: 280, child: InspectorPanel()),
+                      SizedBox(
+                        width: 280,
+                        child: InspectorPanel(
+                          selectedEntity:
+                              runtimePreview.sceneSnapshot?.selectedEntity,
+                        ),
+                      ),
                     ],
                   ),
                 ),

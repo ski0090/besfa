@@ -73,6 +73,7 @@ void main() {
       RuntimeIpcEvent(
         kind: RuntimeIpcEventKind.sceneSnapshot,
         payload: {
+          'selected_entity_id': 'world',
           'root': {
             'id': 'world',
             'name': 'World',
@@ -86,6 +87,7 @@ void main() {
 
     expect(controller.status, RuntimePreviewStatus.running);
     expect(controller.sceneSnapshot?.root.name, 'World');
+    expect(controller.sceneSnapshot?.selectedEntity?.name, 'World');
   });
 
   test('creates cubes through runtime IPC', () async {

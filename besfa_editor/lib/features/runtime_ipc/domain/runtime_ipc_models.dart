@@ -139,6 +139,16 @@ class RuntimeSceneSnapshot {
 
   /// Currently selected entity id, if any.
   final String? selectedEntityId;
+
+  /// Currently selected entity node, if it exists in this snapshot.
+  RuntimeSceneEntity? get selectedEntity {
+    final selectedEntityId = this.selectedEntityId;
+    if (selectedEntityId == null) {
+      return null;
+    }
+
+    return root.findById(selectedEntityId);
+  }
 }
 
 /// Entity node inside a runtime scene snapshot.
@@ -181,6 +191,22 @@ class RuntimeSceneEntity {
 
   /// Child entities.
   final List<RuntimeSceneEntity> children;
+
+  /// Finds this entity or a descendant by stable runtime id.
+  RuntimeSceneEntity? findById(String entityId) {
+    if (id == entityId) {
+      return this;
+    }
+
+    for (final child in children) {
+      final found = child.findById(entityId);
+      if (found != null) {
+        return found;
+      }
+    }
+
+    return null;
+  }
 }
 
 /// Runtime frame timing telemetry.

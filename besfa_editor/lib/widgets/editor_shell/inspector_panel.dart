@@ -1,39 +1,34 @@
+import 'package:besfa_editor/features/runtime_ipc/domain/runtime_ipc_models.dart';
 import 'package:besfa_editor/shared/ui/panel_title.dart';
 import 'package:flutter/material.dart';
 
-class InspectorPanel extends StatefulWidget {
-  const InspectorPanel({super.key});
+/// Inspector panel for the currently selected runtime scene entity.
+class InspectorPanel extends StatelessWidget {
+  const InspectorPanel({required this.selectedEntity, super.key});
 
-  @override
-  State<InspectorPanel> createState() => _InspectorPanelState();
-}
-
-class _InspectorPanelState extends State<InspectorPanel> {
-  final TextEditingController _name = TextEditingController(text: 'Camera3d');
-
-  @override
-  void dispose() {
-    _name.dispose();
-    super.dispose();
-  }
+  /// Entity selected in the runtime scene snapshot, if any.
+  final RuntimeSceneEntity? selectedEntity;
 
   @override
   Widget build(BuildContext context) {
+    final selectedEntity = this.selectedEntity;
+
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
         const PanelTitle('Inspector'),
-        TextField(
-          controller: _name,
-          decoration: const InputDecoration(
-            labelText: 'Name',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        const _PropertyRow(label: 'Transform', value: '0, 4, 8'),
-        const _PropertyRow(label: 'Projection', value: 'Perspective'),
-        const _PropertyRow(label: 'Runtime', value: 'Bevy 0.18'),
+        if (selectedEntity == null)
+          Text(
+            'No selection',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          )
+        else ...[
+          _PropertyRow(label: 'Name', value: selectedEntity.name),
+          _PropertyRow(label: 'Kind', value: selectedEntity.kind),
+          _PropertyRow(label: 'Entity ID', value: selectedEntity.id),
+        ],
       ],
     );
   }
@@ -50,12 +45,13 @@ class _PropertyRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: 92,
             child: Text(label, style: Theme.of(context).textTheme.labelMedium),
           ),
-          Expanded(child: Text(value)),
+          Expanded(child: SelectableText(value)),
         ],
       ),
     );
