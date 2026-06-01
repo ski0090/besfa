@@ -118,6 +118,13 @@ impl PreviewSceneNode {
 #[derive(Component)]
 struct PreviewCube;
 
+/// Runtime-side pick bounds for a scene object.
+#[derive(Component)]
+pub(crate) struct PreviewPickTarget {
+    /// Local axis-aligned half extents used for initial viewport ray picking.
+    pub(crate) half_extents: Vec3,
+}
+
 fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -139,6 +146,9 @@ fn setup_scene(
             perceptual_roughness: 0.9,
             ..default()
         })),
+        PreviewPickTarget {
+            half_extents: Vec3::new(10.0, 0.02, 10.0),
+        },
         Name::new("Ground"),
         PreviewSceneNode::child("ground", "Ground", "mesh", "world"),
     ));
@@ -153,6 +163,9 @@ fn setup_scene(
         })),
         Transform::from_xyz(0.0, 0.7, 0.0).with_rotation(Quat::from_rotation_y(PI / 4.0)),
         PreviewCube,
+        PreviewPickTarget {
+            half_extents: Vec3::splat(0.7),
+        },
         Name::new("Preview Cube"),
         PreviewSceneNode::child("preview_cube", "Preview Cube", "mesh", "world"),
     ));

@@ -82,6 +82,14 @@ class _EditorPageState extends State<EditorPage> {
                           runtimeMessage: runtimePreview.message,
                           frameStats: runtimePreview.frameStats,
                           previewTextureId: runtimePreview.previewTextureId,
+                          onPickViewport: (viewportX, viewportY) {
+                            unawaited(
+                              runtimePreview.pickViewportEntity(
+                                viewportX: viewportX,
+                                viewportY: viewportY,
+                              ),
+                            );
+                          },
                         ),
                       ),
                       const VerticalDivider(width: 1),

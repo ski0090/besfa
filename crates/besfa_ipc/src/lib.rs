@@ -12,8 +12,9 @@ pub use codec::{
 };
 pub use command::{
     CreateEntityParams, CreateEntityResult, METHOD_CREATE_ENTITY, METHOD_OPEN_PROJECT,
-    METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, METHOD_SET_TRANSFORM, OpenProjectParams,
-    RuntimeCommand, SelectEntityParams, SetTransformParams,
+    METHOD_PICK_ENTITY, METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, METHOD_SET_TRANSFORM,
+    OpenProjectParams, PickEntityParams, PickEntityResult, RuntimeCommand, SelectEntityParams,
+    SetTransformParams,
 };
 pub use config::RuntimeIpcConfig;
 pub use error::IpcError;
@@ -66,9 +67,25 @@ mod tests {
     }
 
     #[test]
-    fn encodes_create_entity_command() {
+    fn encodes_pick_entity_command() {
         let line = encode_line(&command_message(
             8,
+            RuntimeCommand::PickEntity(PickEntityParams {
+                viewport_x: 0.5,
+                viewport_y: 0.25,
+            }),
+        ))
+        .unwrap();
+
+        assert!(line.contains("\"method\":\"pick_entity\""));
+        assert!(line.contains("\"viewport_x\":0.5"));
+        assert!(line.contains("\"viewport_y\":0.25"));
+    }
+
+    #[test]
+    fn encodes_create_entity_command() {
+        let line = encode_line(&command_message(
+            9,
             RuntimeCommand::CreateEntity(CreateEntityParams {
                 kind: "cube".to_string(),
                 name: Some("Cube".to_string()),
@@ -85,7 +102,7 @@ mod tests {
     #[test]
     fn encodes_set_transform_command() {
         let line = encode_line(&command_message(
-            9,
+            10,
             RuntimeCommand::SetTransform(SetTransformParams {
                 entity_id: "cube_1".to_string(),
                 translation: Vec3Payload {
@@ -114,6 +131,23 @@ mod tests {
             command,
             RuntimeCommand::OpenProject(OpenProjectParams {
                 path: "C:/codes/besfa".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn decodes_pick_entity_command() {
+        let command = RuntimeCommand::from_method_params(
+            METHOD_PICK_ENTITY,
+            json!({ "viewport_x": 0.25, "viewport_y": 0.75 }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            RuntimeCommand::PickEntity(PickEntityParams {
+                viewport_x: 0.25,
+                viewport_y: 0.75,
             })
         );
     }

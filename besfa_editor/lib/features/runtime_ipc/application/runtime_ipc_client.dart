@@ -9,6 +9,7 @@ const int runtimeIpcProtocolVersion = 1;
 const String runtimeIpcOpenProjectMethod = 'open_project';
 const String runtimeIpcReloadSceneMethod = 'reload_scene';
 const String runtimeIpcSelectEntityMethod = 'select_entity';
+const String runtimeIpcPickEntityMethod = 'pick_entity';
 const String runtimeIpcCreateEntityMethod = 'create_entity';
 const String runtimeIpcSetTransformMethod = 'set_transform';
 
@@ -145,6 +146,18 @@ class RuntimeIpcClient {
       runtimeIpcSelectEntityMethod,
       params: {'entity_id': entityId},
     );
+  }
+
+  /// Sends `pick_entity` using normalized preview viewport coordinates.
+  Future<String?> pickEntity({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    final response = await sendCommand(
+      runtimeIpcPickEntityMethod,
+      params: {'viewport_x': viewportX, 'viewport_y': viewportY},
+    );
+    return response.result['entity_id'] as String?;
   }
 
   /// Sends `create_entity` to the runtime and returns the new entity id.

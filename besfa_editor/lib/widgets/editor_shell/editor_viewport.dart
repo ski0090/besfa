@@ -11,6 +11,7 @@ class EditorViewport extends StatelessWidget {
     required this.runtimeMessage,
     required this.frameStats,
     required this.previewTextureId,
+    required this.onPickViewport,
     super.key,
   });
 
@@ -22,6 +23,9 @@ class EditorViewport extends StatelessWidget {
 
   /// Flutter texture id for the native preview surface, when available.
   final int? previewTextureId;
+
+  /// Called with normalized coordinates when the preview surface is clicked.
+  final void Function(double viewportX, double viewportY) onPickViewport;
 
   @override
   Widget build(BuildContext context) {
@@ -35,20 +39,46 @@ class EditorViewport extends StatelessWidget {
               child: Center(
                 child: AspectRatio(
                   aspectRatio: 16 / 9,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF101314),
-                      border: Border.all(color: const Color(0xFF303637)),
-                    ),
-                    child: previewTextureId == null
-                        ? Center(
-                            child: Text(
-                              _placeholderText(),
-                              style: Theme.of(context).textTheme.bodyMedium
-                                  ?.copyWith(color: Colors.white70),
-                            ),
-                          )
-                        : Texture(textureId: previewTextureId!),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTapDown: previewTextureId == null
+                            ? null
+                            : (details) {
+                                final size = constraints.biggest;
+                                if (size.width <= 0 || size.height <= 0) {
+                                  return;
+                                }
+
+                                onPickViewport(
+                                  (details.localPosition.dx / size.width)
+                                      .clamp(0, 1)
+                                      .toDouble(),
+                                  (details.localPosition.dy / size.height)
+                                      .clamp(0, 1)
+                                      .toDouble(),
+                                );
+                              },
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF101314),
+                            border: Border.all(color: const Color(0xFF303637)),
+                          ),
+                          child: previewTextureId == null
+                              ? Center(
+                                  child: Text(
+                                    _placeholderText(),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(color: Colors.white70),
+                                  ),
+                                )
+                              : Texture(textureId: previewTextureId!),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ),

@@ -20,6 +20,8 @@ The editor follows a lightweight Feature-Sliced Design layout:
 - Connect to the runtime over localhost TCP IPC.
 - Render the runtime `scene_snapshot` in the Scene panel.
 - Forward scene tree selection to the runtime with `select_entity`.
+- Forward Scene View clicks to the runtime with `pick_entity` so objects can be
+  selected directly from the viewport.
 - Show selected runtime entity metadata and editable position fields in the
   Inspector panel.
 - Display runtime status, log messages, and frame stats in the editor shell.
@@ -47,4 +49,5 @@ waits up to 20 seconds for `runtime_ready`, and keeps the viewport available
 for scene editing.
 Scene editing commands, such as adding a cube, are sent to the runtime over IPC
 and reflected back through `scene_snapshot`. Position edits use `set_transform`
-and are confirmed by the next runtime snapshot.
+and viewport clicks use `pick_entity`; both are confirmed by the next runtime
+snapshot.

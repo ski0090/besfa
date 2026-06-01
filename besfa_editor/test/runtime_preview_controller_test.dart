@@ -162,6 +162,23 @@ void main() {
     expect(ipcClient.createEntityCalls, 1);
   });
 
+  test('picks entities from normalized viewport coordinates', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    await controller.ensureRuntimeReady();
+    await controller.pickViewportEntity(viewportX: 0.4, viewportY: 0.6);
+
+    expect(ipcClient.lastPick?.viewportX, 0.4);
+    expect(ipcClient.lastPick?.viewportY, 0.6);
+  });
+
   test('attaches runtime preview surface events', () async {
     final plugin = FakeBesfaFlutterPlugin();
     final ipcClient = FakeRuntimeIpcClient();

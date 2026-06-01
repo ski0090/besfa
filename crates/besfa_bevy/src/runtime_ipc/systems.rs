@@ -5,11 +5,16 @@ use super::{
     },
     snapshot::build_scene_snapshot,
 };
-use crate::preview::{PreviewSceneNode, PreviewSceneObjects};
-use besfa_ipc::{
-    CreateEntityResult, FrameStatsPayload, IpcError, RuntimeCommand, empty_ok_response,
-    error_response, frame_stats_message, log_message, ok_response, scene_snapshot_message,
+use crate::{
+    external_preview::{PREVIEW_SURFACE_HEIGHT, PREVIEW_SURFACE_WIDTH},
+    preview::{PreviewPickTarget, PreviewSceneNode, PreviewSceneObjects},
 };
+use besfa_ipc::{
+    CreateEntityResult, FrameStatsPayload, IpcError, PickEntityParams, PickEntityResult,
+    RuntimeCommand, empty_ok_response, error_response, frame_stats_message, log_message,
+    ok_response, scene_snapshot_message,
+};
+use bevy::math::bounding::{Aabb3d, RayCast3d};
 use bevy::prelude::*;
 use serde_json::json;
 
@@ -23,6 +28,8 @@ pub(super) fn process_runtime_ipc_commands(
     mut materials: ResMut<Assets<StandardMaterial>>,
     scene_nodes: Query<&PreviewSceneNode>,
     mut transforms: Query<(&PreviewSceneNode, &mut Transform)>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    pick_targets: Query<(&PreviewSceneNode, &GlobalTransform, &PreviewPickTarget)>,
 ) {
     for request in server.drain_commands() {
         match request.command {
@@ -56,6 +63,21 @@ pub(super) fn process_runtime_ipc_commands(
                             format!("Runtime entity was not found: {}", params.entity_id),
                         ),
                     ));
+                }
+            }
+            RuntimeCommand::PickEntity(params) => {
+                match pick_entity_from_viewport(&params, &cameras, &pick_targets) {
+                    Ok(entity_id) => {
+                        selection.selected_entity_id = entity_id.clone();
+                        let _ = request.response_tx.send(ok_response(
+                            request.id,
+                            json!(PickEntityResult { entity_id }),
+                        ));
+                        server.request_snapshot();
+                    }
+                    Err(error) => {
+                        let _ = request.response_tx.send(error_response(request.id, error));
+                    }
                 }
             }
             RuntimeCommand::CreateEntity(params) => {
@@ -99,6 +121,9 @@ pub(super) fn process_runtime_ipc_commands(
                         ..default()
                     })),
                     Transform::from_translation(position),
+                    PreviewPickTarget {
+                        half_extents: Vec3::splat(0.5),
+                    },
                     Name::new(name.clone()),
                     PreviewSceneNode::child(
                         entity_id.clone(),
@@ -146,6 +171,57 @@ pub(super) fn process_runtime_ipc_commands(
             }
         }
     }
+}
+
+fn pick_entity_from_viewport(
+    params: &PickEntityParams,
+    cameras: &Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    pick_targets: &Query<(&PreviewSceneNode, &GlobalTransform, &PreviewPickTarget)>,
+) -> Result<Option<String>, IpcError> {
+    if !params.viewport_x.is_finite() || !params.viewport_y.is_finite() {
+        return Err(IpcError::new(
+            "invalid_pick_coordinates",
+            "Viewport pick coordinates must be finite.",
+        ));
+    }
+
+    let Some((camera, camera_transform)) = cameras.iter().next() else {
+        return Err(IpcError::new(
+            "camera_not_found",
+            "Runtime preview camera was not found.",
+        ));
+    };
+
+    let viewport_position = Vec2::new(
+        params.viewport_x.clamp(0.0, 1.0) * PREVIEW_SURFACE_WIDTH as f32,
+        params.viewport_y.clamp(0.0, 1.0) * PREVIEW_SURFACE_HEIGHT as f32,
+    );
+    let ray = camera
+        .viewport_to_world(camera_transform, viewport_position)
+        .map_err(|_| {
+            IpcError::new(
+                "pick_ray_failed",
+                "Viewport pick ray could not be computed.",
+            )
+        })?;
+    let raycast = RayCast3d::from_ray(ray, 10_000.0);
+
+    let mut nearest_hit: Option<(f32, String)> = None;
+    for (node, transform, pick_target) in pick_targets.iter() {
+        let bounds = Aabb3d::new(transform.translation(), pick_target.half_extents);
+        let Some(distance) = raycast.aabb_intersection_at(&bounds) else {
+            continue;
+        };
+
+        if nearest_hit
+            .as_ref()
+            .is_none_or(|(nearest_distance, _)| distance < *nearest_distance)
+        {
+            nearest_hit = Some((distance, node.id.clone()));
+        }
+    }
+
+    Ok(nearest_hit.map(|(_, entity_id)| entity_id))
 }
 
 pub(super) fn emit_requested_scene_snapshot(

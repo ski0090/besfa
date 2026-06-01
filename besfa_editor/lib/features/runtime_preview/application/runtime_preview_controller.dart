@@ -208,6 +208,22 @@ class RuntimePreviewController extends ChangeNotifier {
     }
   }
 
+  /// Picks the runtime entity under normalized viewport coordinates.
+  Future<void> pickViewportEntity({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    if (status != RuntimePreviewStatus.running || !_isRuntimeIpcReady) {
+      return;
+    }
+
+    try {
+      await _ipcClient.pickEntity(viewportX: viewportX, viewportY: viewportY);
+    } on Object {
+      _apply(message: 'Runtime viewport pick failed.');
+    }
+  }
+
   /// Creates a cube entity in the runtime scene.
   Future<void> createCube() async {
     if (isBusy ||

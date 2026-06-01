@@ -89,6 +89,7 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
       StreamController<RuntimeIpcEvent>.broadcast();
   int createEntityCalls = 0;
   RuntimeVector3? lastTranslation;
+  ({double viewportX, double viewportY})? lastPick;
   Object? connectError;
 
   @override
@@ -135,6 +136,15 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
   }) async {
     createEntityCalls += 1;
     return 'created_$createEntityCalls';
+  }
+
+  @override
+  Future<String?> pickEntity({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    lastPick = (viewportX: viewportX, viewportY: viewportY);
+    return 'picked_entity';
   }
 
   @override

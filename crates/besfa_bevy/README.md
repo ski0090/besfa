@@ -40,8 +40,9 @@ The IPC plugin handles editor commands against the live preview world. The
 first editing command is `create_entity` with `kind: "cube"`, which spawns a
 cube under the requested parent, selects it, and requests a fresh
 `scene_snapshot`. The runtime also accepts `set_transform` for translation
-updates and includes transform metadata in scene snapshots when an entity has a
-Bevy `Transform` component.
+updates and `pick_entity` for selecting an entity from normalized preview
+viewport coordinates. Scene snapshots include transform metadata when an entity
+has a Bevy `Transform` component.
 
 ## Usage
 

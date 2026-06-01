@@ -34,6 +34,12 @@ Transform updates target one runtime entity and currently carry translation:
 {"type":"command","id":3,"method":"set_transform","params":{"entity_id":"cube_1","translation":{"x":1.0,"y":0.5,"z":-2.0}}}
 ```
 
+Viewport picks use normalized coordinates inside the runtime preview surface:
+
+```json
+{"type":"command","id":4,"method":"pick_entity","params":{"viewport_x":0.5,"viewport_y":0.5}}
+```
+
 Responses are sent by the runtime:
 
 ```json
@@ -51,6 +57,8 @@ Events are pushed by the runtime:
 - `open_project`: records the project path for the runtime session.
 - `reload_scene`: asks the runtime to rebuild or refresh its preview scene.
 - `select_entity`: asks the runtime to update its selected entity.
+- `pick_entity`: asks the runtime to ray-pick and select an entity from
+  normalized preview viewport coordinates.
 - `create_entity`: asks the runtime to create an entity in the active scene.
   The current runtime supports `kind: "cube"` and returns `entity_id`.
 - `set_transform`: asks the runtime to update an entity transform. The current

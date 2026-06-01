@@ -9,6 +9,8 @@ pub const METHOD_OPEN_PROJECT: &str = "open_project";
 pub const METHOD_RELOAD_SCENE: &str = "reload_scene";
 /// Runtime command method name for selecting an entity.
 pub const METHOD_SELECT_ENTITY: &str = "select_entity";
+/// Runtime command method name for picking an entity from viewport coordinates.
+pub const METHOD_PICK_ENTITY: &str = "pick_entity";
 /// Runtime command method name for creating an entity.
 pub const METHOD_CREATE_ENTITY: &str = "create_entity";
 /// Runtime command method name for updating an entity transform.
@@ -23,6 +25,8 @@ pub enum RuntimeCommand {
     ReloadScene,
     /// Select one runtime entity by id.
     SelectEntity(SelectEntityParams),
+    /// Pick and select a runtime entity from normalized viewport coordinates.
+    PickEntity(PickEntityParams),
     /// Create a runtime entity in the active scene.
     CreateEntity(CreateEntityParams),
     /// Update a runtime entity transform.
@@ -36,6 +40,7 @@ impl RuntimeCommand {
             RuntimeCommand::OpenProject(_) => METHOD_OPEN_PROJECT,
             RuntimeCommand::ReloadScene => METHOD_RELOAD_SCENE,
             RuntimeCommand::SelectEntity(_) => METHOD_SELECT_ENTITY,
+            RuntimeCommand::PickEntity(_) => METHOD_PICK_ENTITY,
             RuntimeCommand::CreateEntity(_) => METHOD_CREATE_ENTITY,
             RuntimeCommand::SetTransform(_) => METHOD_SET_TRANSFORM,
         }
@@ -47,6 +52,7 @@ impl RuntimeCommand {
             RuntimeCommand::OpenProject(params) => json!(params),
             RuntimeCommand::ReloadScene => json!({}),
             RuntimeCommand::SelectEntity(params) => json!(params),
+            RuntimeCommand::PickEntity(params) => json!(params),
             RuntimeCommand::CreateEntity(params) => json!(params),
             RuntimeCommand::SetTransform(params) => json!(params),
         }
@@ -61,6 +67,9 @@ impl RuntimeCommand {
             METHOD_RELOAD_SCENE => Ok(RuntimeCommand::ReloadScene),
             METHOD_SELECT_ENTITY => serde_json::from_value(params)
                 .map(RuntimeCommand::SelectEntity)
+                .map_err(|error| IpcError::invalid_params(method, error)),
+            METHOD_PICK_ENTITY => serde_json::from_value(params)
+                .map(RuntimeCommand::PickEntity)
                 .map_err(|error| IpcError::invalid_params(method, error)),
             METHOD_CREATE_ENTITY => serde_json::from_value(params)
                 .map(RuntimeCommand::CreateEntity)
@@ -85,6 +94,22 @@ pub struct OpenProjectParams {
 pub struct SelectEntityParams {
     /// Stable runtime entity id to select.
     pub entity_id: String,
+}
+
+/// Parameters for the `pick_entity` command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PickEntityParams {
+    /// Horizontal viewport coordinate normalized from left `0.0` to right `1.0`.
+    pub viewport_x: f32,
+    /// Vertical viewport coordinate normalized from top `0.0` to bottom `1.0`.
+    pub viewport_y: f32,
+}
+
+/// Result payload returned by a successful `pick_entity` command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PickEntityResult {
+    /// Stable runtime entity id selected by the pick, or `None` when nothing was hit.
+    pub entity_id: Option<String>,
 }
 
 /// Parameters for the `create_entity` command.
