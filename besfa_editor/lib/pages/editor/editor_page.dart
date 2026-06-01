@@ -81,6 +81,7 @@ class _EditorPageState extends State<EditorPage> {
                           runtimeStatus: runtimePreview.status,
                           runtimeMessage: runtimePreview.message,
                           frameStats: runtimePreview.frameStats,
+                          editorCameraState: runtimePreview.editorCameraState,
                           previewTextureId: runtimePreview.previewTextureId,
                           onPickViewport: (viewportX, viewportY) {
                             unawaited(

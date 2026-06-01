@@ -17,7 +17,8 @@ The editor follows a lightweight Feature-Sliced Design layout:
 - Add cube entities to the live runtime scene through IPC.
 - Attach the runtime-owned Windows shared preview surface in the viewport when
   available.
-- Show a fixed world-space X/Y/Z axis gizmo in the Scene View overlay.
+- Show a fixed-position world-space X/Y/Z axis gizmo in the Scene View overlay
+  that follows the editor camera orientation.
 - Show the selected runtime object's local X/Y/Z axis gizmo in the Scene View.
 - Control the editor-only Scene View camera with secondary-button drag,
   WASD/QE movement, Shift acceleration, and mouse-wheel dolly.

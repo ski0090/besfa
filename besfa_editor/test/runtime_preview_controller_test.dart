@@ -279,6 +279,33 @@ void main() {
     expect(ipcClient.lastEditorCameraInput?.deltaSeconds, 0.02);
   });
 
+  test('updates editor camera state from runtime IPC events', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    ipcClient.emit(
+      const RuntimeIpcEvent(
+        kind: RuntimeIpcEventKind.editorCameraState,
+        payload: {
+          'right': {'x': 0, 'y': 0, 'z': -1},
+          'up': {'x': 0, 'y': 1, 'z': 0},
+          'forward': {'x': 1, 'y': 0, 'z': 0},
+        },
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.editorCameraState?.right.z, -1);
+    expect(controller.editorCameraState?.up.y, 1);
+    expect(controller.editorCameraState?.forward.x, 1);
+  });
+
   test('attaches runtime preview surface events', () async {
     final plugin = FakeBesfaFlutterPlugin();
     final ipcClient = FakeRuntimeIpcClient();

@@ -1,7 +1,7 @@
 use super::{
     resources::{
-        RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection, RuntimeIpcServer,
-        RuntimeIpcSnapshotCursor,
+        RuntimeIpcEditorCameraState, RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection,
+        RuntimeIpcServer, RuntimeIpcSnapshotCursor,
     },
     snapshot::build_scene_snapshot,
 };
@@ -14,6 +14,7 @@ use besfa_ipc::{
     PickEntityResult, RuntimeCommand, empty_ok_response, error_response, frame_stats_message,
     log_message, ok_response, scene_snapshot_message,
 };
+use besfa_ipc::{EditorCameraStatePayload, Vec3Payload, editor_camera_state_message};
 use bevy::math::bounding::{Aabb3d, RayCast3d};
 use bevy::prelude::*;
 use serde_json::json;
@@ -23,6 +24,7 @@ const LOCAL_AXIS_TIP_LENGTH: f32 = 0.18;
 const EDITOR_CAMERA_ROTATE_SENSITIVITY: f32 = 0.006;
 const EDITOR_CAMERA_BASE_SPEED: f32 = 5.0;
 const EDITOR_CAMERA_MAX_DELTA_SECONDS: f32 = 0.1;
+const EDITOR_CAMERA_STATE_REBROADCAST_SECS: f32 = 1.0;
 
 pub(super) fn process_runtime_ipc_commands(
     server: Res<RuntimeIpcServer>,
@@ -269,6 +271,45 @@ fn apply_editor_camera_input(params: &EditorCameraInputParams, transform: &mut T
 
 fn finite_or_zero(value: f32) -> f32 {
     if value.is_finite() { value } else { 0.0 }
+}
+
+pub(super) fn emit_editor_camera_state(
+    server: Res<RuntimeIpcServer>,
+    mut state: ResMut<RuntimeIpcEditorCameraState>,
+    time: Res<Time>,
+    cameras: Query<&Transform, With<EditorPreviewCamera>>,
+) {
+    let Some(transform) = cameras.iter().next() else {
+        return;
+    };
+    let payload = build_editor_camera_state_payload(transform);
+
+    state.elapsed_secs += time.delta_secs();
+    if state.last.as_ref() == Some(&payload)
+        && state.elapsed_secs < EDITOR_CAMERA_STATE_REBROADCAST_SECS
+    {
+        return;
+    }
+
+    server.broadcast(editor_camera_state_message(payload.clone()));
+    state.last = Some(payload);
+    state.elapsed_secs = 0.0;
+}
+
+fn build_editor_camera_state_payload(transform: &Transform) -> EditorCameraStatePayload {
+    EditorCameraStatePayload {
+        right: vec3_payload(*transform.right()),
+        up: vec3_payload(*transform.up()),
+        forward: vec3_payload(*transform.forward()),
+    }
+}
+
+fn vec3_payload(value: Vec3) -> Vec3Payload {
+    Vec3Payload {
+        x: value.x,
+        y: value.y,
+        z: value.z,
+    }
 }
 
 fn pick_entity_from_viewport(

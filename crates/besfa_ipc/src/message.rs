@@ -66,4 +66,6 @@ pub enum RuntimeEvent {
     FrameStats,
     /// Runtime D3D preview surface descriptor.
     PreviewSurfaceReady,
+    /// Editor-only preview camera orientation.
+    EditorCameraState,
 }

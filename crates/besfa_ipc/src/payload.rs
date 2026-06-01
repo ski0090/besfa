@@ -54,6 +54,17 @@ pub struct FrameStatsPayload {
     pub frame_time_ms: f64,
 }
 
+/// Editor preview camera orientation payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EditorCameraStatePayload {
+    /// Camera-local right direction expressed in world space.
+    pub right: Vec3Payload,
+    /// Camera-local up direction expressed in world space.
+    pub up: Vec3Payload,
+    /// Camera-local forward/view direction expressed in world space.
+    pub forward: Vec3Payload,
+}
+
 /// Runtime log event payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogPayload {

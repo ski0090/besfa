@@ -7,8 +7,9 @@ mod payload;
 
 pub use codec::{
     PROTOCOL_VERSION, command_message, decode_client_message, decode_runtime_message,
-    empty_ok_response, encode_line, error_response, frame_stats_message, log_message, ok_response,
-    preview_surface_ready_message, runtime_ready_message, scene_snapshot_message,
+    editor_camera_state_message, empty_ok_response, encode_line, error_response,
+    frame_stats_message, log_message, ok_response, preview_surface_ready_message,
+    runtime_ready_message, scene_snapshot_message,
 };
 pub use command::{
     CreateEntityParams, CreateEntityResult, EditorCameraInputParams, METHOD_CREATE_ENTITY,
@@ -20,8 +21,8 @@ pub use config::RuntimeIpcConfig;
 pub use error::IpcError;
 pub use message::{ClientMessage, RuntimeEvent, RuntimeMessage};
 pub use payload::{
-    FrameStatsPayload, LogPayload, PreviewSurfacePayload, SceneEntityPayload, SceneSnapshotPayload,
-    SceneTransformPayload, Vec3Payload,
+    EditorCameraStatePayload, FrameStatsPayload, LogPayload, PreviewSurfacePayload,
+    SceneEntityPayload, SceneSnapshotPayload, SceneTransformPayload, Vec3Payload,
 };
 
 #[cfg(test)]
@@ -232,5 +233,30 @@ mod tests {
 
         assert!(line.contains("\"event\":\"preview_surface_ready\""));
         assert!(line.contains("\"shared_handle_name\""));
+    }
+
+    #[test]
+    fn encodes_editor_camera_state_event() {
+        let line = encode_line(&editor_camera_state_message(EditorCameraStatePayload {
+            right: Vec3Payload {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            up: Vec3Payload {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            forward: Vec3Payload {
+                x: 0.0,
+                y: 0.0,
+                z: -1.0,
+            },
+        }))
+        .unwrap();
+
+        assert!(line.contains("\"event\":\"editor_camera_state\""));
+        assert!(line.contains("\"forward\""));
     }
 }

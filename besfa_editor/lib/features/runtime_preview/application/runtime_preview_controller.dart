@@ -56,6 +56,9 @@ class RuntimePreviewController extends ChangeNotifier {
   /// Latest runtime frame timing telemetry.
   RuntimeFrameStats? frameStats;
 
+  /// Latest editor-only Scene View camera orientation.
+  RuntimeEditorCameraState? editorCameraState;
+
   /// Recent runtime log entries.
   List<RuntimeLogEntry> logs = const [];
 
@@ -437,6 +440,9 @@ class RuntimePreviewController extends ChangeNotifier {
       case RuntimeIpcEventKind.frameStats:
         frameStats = RuntimeFrameStats.fromPayload(event.payload);
         notifyListeners();
+      case RuntimeIpcEventKind.editorCameraState:
+        editorCameraState = RuntimeEditorCameraState.fromPayload(event.payload);
+        notifyListeners();
       case RuntimeIpcEventKind.previewSurfaceReady:
         unawaited(
           _attachPreviewSurface(
@@ -571,6 +577,7 @@ class RuntimePreviewController extends ChangeNotifier {
     _stopNativeRuntimeLogTail();
     sceneSnapshot = null;
     frameStats = null;
+    editorCameraState = null;
     if (clearLogs) {
       logs = const [];
     }

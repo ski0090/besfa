@@ -1,6 +1,6 @@
 use crate::{
-    ClientMessage, FrameStatsPayload, IpcError, LogPayload, PreviewSurfacePayload, RuntimeCommand,
-    RuntimeEvent, RuntimeMessage, SceneSnapshotPayload,
+    ClientMessage, EditorCameraStatePayload, FrameStatsPayload, IpcError, LogPayload,
+    PreviewSurfacePayload, RuntimeCommand, RuntimeEvent, RuntimeMessage, SceneSnapshotPayload,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -75,6 +75,14 @@ pub fn frame_stats_message(payload: FrameStatsPayload) -> RuntimeMessage {
 pub fn preview_surface_ready_message(payload: PreviewSurfacePayload) -> RuntimeMessage {
     RuntimeMessage::Event {
         event: RuntimeEvent::PreviewSurfaceReady,
+        payload: json!(payload),
+    }
+}
+
+/// Builds an editor preview camera orientation event.
+pub fn editor_camera_state_message(payload: EditorCameraStatePayload) -> RuntimeMessage {
+    RuntimeMessage::Event {
+        event: RuntimeEvent::EditorCameraState,
         payload: json!(payload),
     }
 }

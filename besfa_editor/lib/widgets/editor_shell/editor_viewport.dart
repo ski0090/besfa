@@ -63,6 +63,7 @@ class EditorViewport extends StatefulWidget {
     required this.previewTextureId,
     required this.onPickViewport,
     required this.onEditorCameraInput,
+    this.editorCameraState,
     super.key,
   });
 
@@ -71,6 +72,9 @@ class EditorViewport extends StatefulWidget {
   final RuntimePreviewStatus runtimeStatus;
   final String? runtimeMessage;
   final RuntimeFrameStats? frameStats;
+
+  /// Latest editor-only Scene View camera orientation.
+  final RuntimeEditorCameraState? editorCameraState;
 
   /// Flutter texture id for the native preview surface, when available.
   final int? previewTextureId;
@@ -182,11 +186,13 @@ class _EditorViewportState extends State<EditorViewport> {
                                           ),
                                   ),
                                 ),
-                                const Positioned(
+                                Positioned(
                                   left: 12,
                                   top: 12,
                                   child: IgnorePointer(
-                                    child: _ViewportAxisGizmo(),
+                                    child: _ViewportAxisGizmo(
+                                      cameraState: widget.editorCameraState,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -433,49 +439,68 @@ class _EditorViewportState extends State<EditorViewport> {
 }
 
 class _ViewportAxisGizmo extends StatelessWidget {
-  const _ViewportAxisGizmo();
+  const _ViewportAxisGizmo({required this.cameraState});
+
+  final RuntimeEditorCameraState? cameraState;
 
   @override
   Widget build(BuildContext context) {
     return Semantics(
       label: 'World axis gizmo',
-      child: const SizedBox(
-        key: ValueKey('viewportAxisGizmo'),
+      child: SizedBox(
+        key: const ValueKey('viewportAxisGizmo'),
         width: 96,
         height: 80,
-        child: CustomPaint(painter: _ViewportAxisGizmoPainter()),
+        child: CustomPaint(
+          painter: _ViewportAxisGizmoPainter(cameraState: cameraState),
+        ),
       ),
     );
   }
 }
 
 class _ViewportAxisGizmoPainter extends CustomPainter {
-  const _ViewportAxisGizmoPainter();
+  const _ViewportAxisGizmoPainter({required this.cameraState});
 
   static const Color _xColor = Color(0xFFF04438);
   static const Color _yColor = Color(0xFF22C55E);
   static const Color _zColor = Color(0xFF3B82F6);
+  static const RuntimeEditorCameraState _fallbackCameraState =
+      RuntimeEditorCameraState(
+        right: RuntimeVector3(x: 1, y: 0, z: 0),
+        up: RuntimeVector3(x: 0, y: 1, z: 0),
+        forward: RuntimeVector3(x: 0, y: 0, z: -1),
+      );
+
+  final RuntimeEditorCameraState? cameraState;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final cameraState = this.cameraState ?? _fallbackCameraState;
     final origin = Offset(size.width * 0.42, size.height * 0.62);
-    final axes = [
-      _AxisGlyph(
+    final axes = <_AxisGlyph>[
+      _projectAxis(
         label: 'X',
-        end: origin + Offset(size.width * 0.34, size.height * 0.16),
+        worldAxis: const RuntimeVector3(x: 1, y: 0, z: 0),
+        origin: origin,
+        cameraState: cameraState,
         color: _xColor,
       ),
-      _AxisGlyph(
+      _projectAxis(
         label: 'Y',
-        end: origin - Offset(0, size.height * 0.42),
+        worldAxis: const RuntimeVector3(x: 0, y: 1, z: 0),
+        origin: origin,
+        cameraState: cameraState,
         color: _yColor,
       ),
-      _AxisGlyph(
+      _projectAxis(
         label: 'Z',
-        end: origin + Offset(-size.width * 0.26, size.height * 0.16),
+        worldAxis: const RuntimeVector3(x: 0, y: 0, z: 1),
+        origin: origin,
+        cameraState: cameraState,
         color: _zColor,
       ),
-    ];
+    ]..sort((a, b) => b.depth.compareTo(a.depth));
 
     final shadow = Paint()
       ..color = const Color(0x99000000)
@@ -497,6 +522,35 @@ class _ViewportAxisGizmoPainter extends CustomPainter {
     }
 
     canvas.drawCircle(origin, 4, Paint()..color = const Color(0xFFE5E7EB));
+  }
+
+  _AxisGlyph _projectAxis({
+    required String label,
+    required RuntimeVector3 worldAxis,
+    required Offset origin,
+    required RuntimeEditorCameraState cameraState,
+    required Color color,
+  }) {
+    final projected = Offset(
+      _dot(worldAxis, cameraState.right),
+      -_dot(worldAxis, cameraState.up),
+    );
+    final projectedLength = projected.distance;
+    final direction = projectedLength < 0.001
+        ? const Offset(0, -1)
+        : projected / projectedLength;
+    final length = (projectedLength * 32).clamp(12.0, 32.0).toDouble();
+
+    return _AxisGlyph(
+      label: label,
+      end: origin + direction * length,
+      color: color,
+      depth: _dot(worldAxis, cameraState.forward),
+    );
+  }
+
+  double _dot(RuntimeVector3 left, RuntimeVector3 right) {
+    return left.x * right.x + left.y * right.y + left.z * right.z;
   }
 
   void _drawArrowHead(Canvas canvas, Offset origin, Offset end, Color color) {
@@ -536,7 +590,9 @@ class _ViewportAxisGizmoPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _ViewportAxisGizmoPainter oldDelegate) {
+    return oldDelegate.cameraState != cameraState;
+  }
 }
 
 class _AxisGlyph {
@@ -544,9 +600,11 @@ class _AxisGlyph {
     required this.label,
     required this.end,
     required this.color,
+    required this.depth,
   });
 
   final String label;
   final Offset end;
   final Color color;
+  final double depth;
 }

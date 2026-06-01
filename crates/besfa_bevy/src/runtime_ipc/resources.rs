@@ -150,3 +150,9 @@ pub(super) struct RuntimeIpcFrameStats {
     pub(super) elapsed_secs: f32,
     pub(super) frames: u32,
 }
+
+#[derive(Resource, Default)]
+pub(super) struct RuntimeIpcEditorCameraState {
+    pub(super) elapsed_secs: f32,
+    pub(super) last: Option<besfa_ipc::EditorCameraStatePayload>,
+}

@@ -52,7 +52,9 @@ overlay.
 The scene's runtime camera remains a selectable scene entity, but it is not used
 for the editor Scene View render target. The editor preview camera is an
 internal runtime component controlled through `editor_camera_input` IPC commands
-and does not appear in scene snapshots.
+and does not appear in scene snapshots. Its orientation is broadcast through
+`editor_camera_state` events so Flutter overlays can stay aligned to the
+current Scene View camera.
 
 ## Usage
 

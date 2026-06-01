@@ -15,6 +15,9 @@ enum RuntimeIpcEventKind {
   /// Runtime preview surface descriptor.
   previewSurfaceReady('preview_surface_ready'),
 
+  /// Editor Scene View camera orientation.
+  editorCameraState('editor_camera_state'),
+
   /// Unknown or unsupported event name.
   unknown('');
 
@@ -290,6 +293,33 @@ class RuntimeFrameStats {
 
   /// Average frame time in milliseconds.
   final double frameTimeMs;
+}
+
+/// Editor-only Scene View camera orientation.
+class RuntimeEditorCameraState {
+  const RuntimeEditorCameraState({
+    required this.right,
+    required this.up,
+    required this.forward,
+  });
+
+  /// Parses an editor camera state event payload.
+  factory RuntimeEditorCameraState.fromPayload(Map<String, Object?> payload) {
+    return RuntimeEditorCameraState(
+      right: RuntimeVector3.fromPayload(_asMap(payload['right'])),
+      up: RuntimeVector3.fromPayload(_asMap(payload['up'])),
+      forward: RuntimeVector3.fromPayload(_asMap(payload['forward'])),
+    );
+  }
+
+  /// Camera-local right direction in world space.
+  final RuntimeVector3 right;
+
+  /// Camera-local up direction in world space.
+  final RuntimeVector3 up;
+
+  /// Camera-local forward/view direction in world space.
+  final RuntimeVector3 forward;
 }
 
 /// Runtime log message shown by editor status surfaces.

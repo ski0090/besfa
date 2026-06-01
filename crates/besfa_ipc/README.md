@@ -80,11 +80,19 @@ Events are pushed by the runtime:
 - `log`: runtime message suitable for editor status/log surfaces.
 - `frame_stats`: frame rate and frame time telemetry.
 - `preview_surface_ready`: runtime-owned shared preview surface descriptor.
+- `editor_camera_state`: editor-only Scene View camera basis vectors used by
+  viewport overlays such as the world-space axis gizmo.
 
 `preview_surface_ready` currently carries Windows DirectX metadata:
 
 ```json
 {"shared_handle_name":"Local\\BesfaPreviewSurface-1234","width":640,"height":360,"format":"bgra8_unorm"}
+```
+
+`editor_camera_state` carries camera basis vectors in world space:
+
+```json
+{"right":{"x":1.0,"y":0.0,"z":0.0},"up":{"x":0.0,"y":1.0,"z":0.0},"forward":{"x":0.0,"y":0.0,"z":-1.0}}
 ```
 
 ## Ownership
