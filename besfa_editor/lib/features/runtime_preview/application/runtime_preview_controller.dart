@@ -28,6 +28,7 @@ class RuntimePreviewController extends ChangeNotifier {
   Timer? _statusTimer;
   Timer? _previewTextureFrameTimer;
   bool _isMarkingPreviewFrame = false;
+  bool _isRuntimeIpcReady = false;
   bool _disposed = false;
 
   late final Future<String?> platformVersion;
@@ -55,40 +56,19 @@ class RuntimePreviewController extends ChangeNotifier {
   int? previewTextureId;
   String? _previewSurfaceHandleName;
 
-  /// Starts the preview runtime and waits for IPC readiness.
-  Future<void> runPreview() async {
-    if (isBusy) {
+  /// Ensures the editor-owned scene runtime is running and IPC-ready.
+  Future<void> ensureRuntimeReady() async {
+    if (isBusy ||
+        (status == RuntimePreviewStatus.running && _isRuntimeIpcReady)) {
       return;
     }
 
-    _apply(isBusy: true);
-    try {
-      final handshake = await _ipcClient.reserveHandshake();
-      final result = _plugin.startRuntimeWithIpc(
-        port: handshake.port,
-        token: handshake.token,
-      );
+    await _startRuntimeSession(restartTrackedRuntime: true);
+  }
 
-      if (result != BesfaRuntimeCommandResult.ok) {
-        _apply(
-          status: _statusForStartResult(result),
-          message: _messageForStartResult(result),
-          isBusy: false,
-        );
-        return;
-      }
-
-      await _ipcClient.connectAndWaitReady(handshake);
-      _apply(status: RuntimePreviewStatus.running, isBusy: false);
-    } on Object {
-      _plugin.stopRuntime();
-      await _ipcClient.disconnect();
-      _apply(
-        status: RuntimePreviewStatus.failed,
-        message: 'Runtime IPC did not become ready.',
-        isBusy: false,
-      );
-    }
+  /// Starts the scene runtime and waits for IPC readiness.
+  Future<void> runPreview() async {
+    await ensureRuntimeReady();
   }
 
   /// Stops the preview runtime process and clears runtime data.
@@ -99,6 +79,7 @@ class RuntimePreviewController extends ChangeNotifier {
 
     _apply(isBusy: true);
     await _ipcClient.disconnect();
+    _isRuntimeIpcReady = false;
     final result = _plugin.stopRuntime();
     _clearRuntimeData();
     _apply(
@@ -108,13 +89,43 @@ class RuntimePreviewController extends ChangeNotifier {
     );
   }
 
+  /// Restarts the editor-owned scene runtime process.
+  Future<void> restartRuntime() async {
+    if (isBusy) {
+      return;
+    }
+
+    _apply(
+      status: RuntimePreviewStatus.starting,
+      message: 'Restarting scene runtime.',
+      isBusy: true,
+    );
+    await _ipcClient.disconnect();
+    _isRuntimeIpcReady = false;
+    final stopResult = _plugin.stopRuntime();
+    _clearRuntimeData();
+    if (stopResult == BesfaRuntimeCommandResult.failed) {
+      _apply(
+        status: RuntimePreviewStatus.failed,
+        message: _messageForStopResult(stopResult),
+        isBusy: false,
+      );
+      return;
+    }
+
+    await _startRuntimeSession(
+      restartTrackedRuntime: false,
+      startingMessage: 'Restarting scene runtime.',
+    );
+  }
+
   /// Reloads the running scene, or restarts the runtime if it is stopped.
   Future<void> reloadRuntime() async {
     if (isBusy) {
       return;
     }
 
-    if (status == RuntimePreviewStatus.running) {
+    if (status == RuntimePreviewStatus.running && _isRuntimeIpcReady) {
       _apply(isBusy: true);
       try {
         await _ipcClient.reloadScene();
@@ -129,36 +140,7 @@ class RuntimePreviewController extends ChangeNotifier {
       return;
     }
 
-    _apply(isBusy: true);
-    await _ipcClient.disconnect();
-    _plugin.stopRuntime();
-    try {
-      final handshake = await _ipcClient.reserveHandshake();
-      final result = _plugin.startRuntimeWithIpc(
-        port: handshake.port,
-        token: handshake.token,
-      );
-
-      if (result != BesfaRuntimeCommandResult.ok) {
-        _apply(
-          status: _statusForStartResult(result),
-          message: _messageForStartResult(result),
-          isBusy: false,
-        );
-        return;
-      }
-
-      await _ipcClient.connectAndWaitReady(handshake);
-      _apply(status: RuntimePreviewStatus.running, isBusy: false);
-    } on Object {
-      _plugin.stopRuntime();
-      await _ipcClient.disconnect();
-      _apply(
-        status: RuntimePreviewStatus.failed,
-        message: 'Runtime IPC did not become ready.',
-        isBusy: false,
-      );
-    }
+    await ensureRuntimeReady();
   }
 
   /// Polls the native bridge for process state changes.
@@ -173,14 +155,12 @@ class RuntimePreviewController extends ChangeNotifier {
         return;
       case BesfaRuntimeState.stopped:
       case BesfaRuntimeState.exited:
-        unawaited(_ipcClient.disconnect());
-        _clearRuntimeData();
-        _apply(
-          status: RuntimePreviewStatus.stopped,
-          message: 'Preview window closed.',
+        unawaited(
+          _recoverRuntimeAfterExit('Scene runtime closed; restarting.'),
         );
       case BesfaRuntimeState.failed:
         unawaited(_ipcClient.disconnect());
+        _isRuntimeIpcReady = false;
         _clearRuntimeData();
         _apply(
           status: RuntimePreviewStatus.failed,
@@ -200,13 +180,16 @@ class RuntimePreviewController extends ChangeNotifier {
       unawaited(_plugin.disposePreviewTexture(textureId));
     }
     unawaited(_ipcClient.disconnect());
+    _isRuntimeIpcReady = false;
     _plugin.stopRuntime();
     super.dispose();
   }
 
   /// Sends a runtime entity selection command.
   Future<void> selectEntity(String entityId) async {
-    if (status != RuntimePreviewStatus.running || entityId.isEmpty) {
+    if (status != RuntimePreviewStatus.running ||
+        !_isRuntimeIpcReady ||
+        entityId.isEmpty) {
       return;
     }
 
@@ -215,6 +198,97 @@ class RuntimePreviewController extends ChangeNotifier {
     } on Object {
       _apply(message: 'Runtime entity could not be selected.');
     }
+  }
+
+  Future<void> _recoverRuntimeAfterExit(String startingMessage) async {
+    if (_disposed || isBusy) {
+      return;
+    }
+
+    _apply(
+      status: RuntimePreviewStatus.starting,
+      message: startingMessage,
+      isBusy: true,
+    );
+    await _ipcClient.disconnect();
+    _isRuntimeIpcReady = false;
+    _clearRuntimeData();
+    await _startRuntimeSession(
+      restartTrackedRuntime: false,
+      startingMessage: startingMessage,
+    );
+  }
+
+  Future<void> _startRuntimeSession({
+    required bool restartTrackedRuntime,
+    String? startingMessage,
+  }) async {
+    _isRuntimeIpcReady = false;
+    _apply(
+      status: RuntimePreviewStatus.starting,
+      message: startingMessage,
+      isBusy: true,
+    );
+
+    try {
+      final handshake = await _startRuntimeProcess(
+        restartTrackedRuntime: restartTrackedRuntime,
+      );
+      if (handshake == null) {
+        return;
+      }
+
+      await _ipcClient.connectAndWaitReady(handshake);
+      if (_disposed) {
+        return;
+      }
+
+      _isRuntimeIpcReady = true;
+      _apply(status: RuntimePreviewStatus.running, isBusy: false);
+    } on Object {
+      _plugin.stopRuntime();
+      await _ipcClient.disconnect();
+      _isRuntimeIpcReady = false;
+      _clearRuntimeData();
+      _apply(
+        status: RuntimePreviewStatus.failed,
+        message: 'Scene runtime IPC did not become ready.',
+        isBusy: false,
+      );
+    }
+  }
+
+  Future<RuntimeIpcHandshake?> _startRuntimeProcess({
+    required bool restartTrackedRuntime,
+  }) async {
+    var handshake = await _ipcClient.reserveHandshake();
+    var result = _plugin.startRuntimeWithIpc(
+      port: handshake.port,
+      token: handshake.token,
+    );
+
+    if (result == BesfaRuntimeCommandResult.alreadyRunning &&
+        restartTrackedRuntime) {
+      _plugin.stopRuntime();
+      await _ipcClient.disconnect();
+      _clearRuntimeData();
+      handshake = await _ipcClient.reserveHandshake();
+      result = _plugin.startRuntimeWithIpc(
+        port: handshake.port,
+        token: handshake.token,
+      );
+    }
+
+    if (result != BesfaRuntimeCommandResult.ok) {
+      _apply(
+        status: _statusForStartResult(result),
+        message: _messageForStartResult(result),
+        isBusy: false,
+      );
+      return null;
+    }
+
+    return handshake;
   }
 
   void _syncInitialStatus() {
@@ -361,8 +435,8 @@ class RuntimePreviewController extends ChangeNotifier {
 
   RuntimePreviewStatus _statusForStartResult(BesfaRuntimeCommandResult result) {
     return switch (result) {
-      BesfaRuntimeCommandResult.ok ||
-      BesfaRuntimeCommandResult.alreadyRunning => RuntimePreviewStatus.running,
+      BesfaRuntimeCommandResult.ok => RuntimePreviewStatus.running,
+      BesfaRuntimeCommandResult.alreadyRunning ||
       BesfaRuntimeCommandResult.notRunning ||
       BesfaRuntimeCommandResult.failed => RuntimePreviewStatus.failed,
     };
@@ -379,11 +453,12 @@ class RuntimePreviewController extends ChangeNotifier {
 
   String? _messageForStartResult(BesfaRuntimeCommandResult result) {
     return switch (result) {
-      BesfaRuntimeCommandResult.ok ||
-      BesfaRuntimeCommandResult.alreadyRunning => null,
+      BesfaRuntimeCommandResult.ok => null,
+      BesfaRuntimeCommandResult.alreadyRunning =>
+        'Scene runtime is already running but could not be attached.',
       BesfaRuntimeCommandResult.notRunning ||
       BesfaRuntimeCommandResult.failed => _errorMessage(
-        'Preview runtime could not start.',
+        'Scene runtime could not start.',
       ),
     };
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:besfa_editor/features/runtime_preview/application/runtime_preview_controller.dart';
 import 'package:besfa_editor/widgets/editor_shell/editor_top_bar.dart';
 import 'package:besfa_editor/widgets/editor_shell/editor_viewport.dart';
@@ -5,8 +7,16 @@ import 'package:besfa_editor/widgets/editor_shell/inspector_panel.dart';
 import 'package:besfa_editor/widgets/editor_shell/scene_tree_panel.dart';
 import 'package:flutter/material.dart';
 
+/// Main desktop editor shell with an always-on scene runtime.
 class EditorPage extends StatefulWidget {
-  const EditorPage({super.key});
+  const EditorPage({
+    @visibleForTesting this.runtimePreviewController,
+    super.key,
+  });
+
+  /// Controller override used by widget tests.
+  @visibleForTesting
+  final RuntimePreviewController? runtimePreviewController;
 
   @override
   State<EditorPage> createState() => _EditorPageState();
@@ -14,16 +24,22 @@ class EditorPage extends StatefulWidget {
 
 class _EditorPageState extends State<EditorPage> {
   late final RuntimePreviewController _runtimePreviewController;
+  late final bool _ownsRuntimePreviewController;
 
   @override
   void initState() {
     super.initState();
-    _runtimePreviewController = RuntimePreviewController();
+    _runtimePreviewController =
+        widget.runtimePreviewController ?? RuntimePreviewController();
+    _ownsRuntimePreviewController = widget.runtimePreviewController == null;
+    unawaited(_runtimePreviewController.ensureRuntimeReady());
   }
 
   @override
   void dispose() {
-    _runtimePreviewController.dispose();
+    if (_ownsRuntimePreviewController) {
+      _runtimePreviewController.dispose();
+    }
     super.dispose();
   }
 
@@ -42,9 +58,8 @@ class _EditorPageState extends State<EditorPage> {
                   runtimeStatus: runtimePreview.status,
                   runtimeMessage: runtimePreview.message,
                   isRuntimeBusy: runtimePreview.isBusy,
-                  onRunPreview: runtimePreview.runPreview,
-                  onStopPreview: runtimePreview.stopPreview,
                   onReloadRuntime: runtimePreview.reloadRuntime,
+                  onRestartRuntime: runtimePreview.restartRuntime,
                 ),
                 Expanded(
                   child: Row(

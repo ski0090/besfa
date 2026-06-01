@@ -1,6 +1,7 @@
 import 'package:besfa_editor/pages/editor/editor_page.dart';
 import 'package:flutter/material.dart';
 
+/// Root application widget for the Besfa desktop editor.
 class BesfaApp extends StatelessWidget {
   const BesfaApp({super.key});
 

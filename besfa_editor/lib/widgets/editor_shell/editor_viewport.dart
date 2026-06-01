@@ -2,6 +2,7 @@ import 'package:besfa_editor/features/runtime_ipc/domain/runtime_ipc_models.dart
 import 'package:besfa_editor/features/runtime_preview/domain/runtime_preview_status.dart';
 import 'package:flutter/material.dart';
 
+/// Central Scene View surface backed by the editor-owned runtime.
 class EditorViewport extends StatelessWidget {
   const EditorViewport({
     required this.platformVersion,
@@ -25,31 +26,38 @@ class EditorViewport extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: const Color(0xFFF4F1EA),
+      color: const Color(0xFF171A1A),
       child: Stack(
         children: [
-          Center(
-            child: Container(
-              width: 520,
-              height: 320,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: const Color(0xFF202124),
-                borderRadius: BorderRadius.circular(6),
+          Positioned.fill(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF101314),
+                      border: Border.all(color: const Color(0xFF303637)),
+                    ),
+                    child: previewTextureId == null
+                        ? Center(
+                            child: Text(
+                              _placeholderText(),
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(color: Colors.white70),
+                            ),
+                          )
+                        : Texture(textureId: previewTextureId!),
+                  ),
+                ),
               ),
-              clipBehavior: Clip.antiAlias,
-              child: previewTextureId == null
-                  ? const Text(
-                      'Preview surface',
-                      style: TextStyle(color: Colors.white70),
-                    )
-                  : Texture(textureId: previewTextureId!),
             ),
           ),
           Positioned(
             left: 16,
             right: 16,
-            bottom: 16,
+            bottom: 12,
             child: FutureBuilder<String?>(
               future: platformVersion,
               builder: (context, snapshot) {
@@ -64,7 +72,9 @@ class EditorViewport extends StatelessWidget {
                   '$platform | Rust ABI $abiVersion | $runtimeText$statsText',
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
-                  style: Theme.of(context).textTheme.bodySmall,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xDBFFFFFF),
+                  ),
                 );
               },
             ),
@@ -72,5 +82,14 @@ class EditorViewport extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  String _placeholderText() {
+    return switch (runtimeStatus) {
+      RuntimePreviewStatus.stopped => 'Scene runtime offline',
+      RuntimePreviewStatus.starting => 'Starting scene runtime',
+      RuntimePreviewStatus.running => 'Waiting for scene surface',
+      RuntimePreviewStatus.failed => 'Scene runtime failed',
+    };
   }
 }
