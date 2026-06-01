@@ -11,6 +11,8 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
   BesfaRuntimeCommandResult stopResult = BesfaRuntimeCommandResult.ok;
   String? runtimeLogPathValue;
   int? createdTextureId;
+  final Set<int> createdTextureIds = <int>{};
+  int _nextAttachedTextureId = 13;
   int stopCalls = 0;
 
   @override
@@ -58,6 +60,7 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
   @override
   Future<int?> createPreviewTexture({int width = 640, int height = 360}) async {
     createdTextureId = 11;
+    createdTextureIds.add(createdTextureId!);
     return createdTextureId;
   }
 
@@ -65,17 +68,26 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
   Future<int?> attachPreviewSurface(
     BesfaPreviewSurfaceDescriptor descriptor,
   ) async {
-    createdTextureId = 13;
+    createdTextureId = _nextAttachedTextureId++;
+    createdTextureIds.add(createdTextureId!);
     return createdTextureId;
   }
 
   @override
   Future<bool> markPreviewTextureFrameAvailable(int textureId) async {
-    return createdTextureId == textureId;
+    return createdTextureIds.contains(textureId);
   }
 
   @override
   Future<bool> disposePreviewTexture(int textureId) async {
+    if (createdTextureIds.remove(textureId)) {
+      if (createdTextureId == textureId) {
+        createdTextureId = createdTextureIds.isEmpty
+            ? null
+            : createdTextureIds.last;
+      }
+      return true;
+    }
     if (createdTextureId == textureId) {
       createdTextureId = null;
       return true;

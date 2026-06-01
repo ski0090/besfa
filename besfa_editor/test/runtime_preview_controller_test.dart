@@ -332,6 +332,32 @@ void main() {
     expect(controller.previewTextureId, 13);
   });
 
+  test('attaches selected camera preview surface events', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    ipcClient.emit(
+      const RuntimeIpcEvent(
+        kind: RuntimeIpcEventKind.cameraPreviewSurfaceReady,
+        payload: {
+          'shared_handle_name': 'Local\\BesfaCameraPreviewSurface-42',
+          'width': 320,
+          'height': 180,
+          'format': 'bgra8_unorm',
+        },
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.cameraPreviewTextureId, 13);
+  });
+
   test('keeps runtime logs for the bottom console', () async {
     final plugin = FakeBesfaFlutterPlugin();
     final ipcClient = FakeRuntimeIpcClient();

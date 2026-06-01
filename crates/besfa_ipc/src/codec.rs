@@ -79,6 +79,14 @@ pub fn preview_surface_ready_message(payload: PreviewSurfacePayload) -> RuntimeM
     }
 }
 
+/// Builds a selected camera preview surface descriptor event.
+pub fn camera_preview_surface_ready_message(payload: PreviewSurfacePayload) -> RuntimeMessage {
+    RuntimeMessage::Event {
+        event: RuntimeEvent::CameraPreviewSurfaceReady,
+        payload: json!(payload),
+    }
+}
+
 /// Builds an editor preview camera orientation event.
 pub fn editor_camera_state_message(payload: EditorCameraStatePayload) -> RuntimeMessage {
     RuntimeMessage::Event {

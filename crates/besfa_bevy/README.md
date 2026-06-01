@@ -11,7 +11,7 @@ plugin. It deliberately sits between the engine/editor domain and the concrete
 - `preview.rs`: `BesfaPreviewPlugin`, preview scene setup, grid drawing,
   runtime/editor camera setup, light, and cube animation.
 - `external_preview.rs`: runtime-owned D3D12 shared render target for embedded
-  editor preview.
+  editor and selected camera previews.
 - `runtime_ipc.rs`: `BesfaRuntimeIpcPlugin` composition.
 - `runtime_ipc/transport.rs`: localhost TCP handshake, command reads, event
   writes.
@@ -55,6 +55,11 @@ internal runtime component controlled through `editor_camera_input` IPC commands
 and does not appear in scene snapshots. Its orientation is broadcast through
 `editor_camera_state` events so Flutter overlays can stay aligned to the
 current Scene View camera.
+
+The runtime also owns a separate selected-camera preview surface. When the
+selected scene entity is a camera, an internal preview camera mirrors that
+camera's transform and renders into the `camera_preview_surface_ready` target
+used by the Inspector.
 
 ## Usage
 

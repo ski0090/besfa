@@ -6,12 +6,16 @@ import 'package:flutter/material.dart';
 class InspectorPanel extends StatefulWidget {
   const InspectorPanel({
     required this.selectedEntity,
+    required this.cameraPreviewTextureId,
     required this.onSetTranslation,
     super.key,
   });
 
   /// Entity selected in the runtime scene snapshot, if any.
   final RuntimeSceneEntity? selectedEntity;
+
+  /// Flutter texture id for the selected camera preview, when available.
+  final int? cameraPreviewTextureId;
 
   /// Applies a new translation to the selected runtime entity.
   final ValueChanged<RuntimeVector3> onSetTranslation;
@@ -87,6 +91,15 @@ class _InspectorPanelState extends State<InspectorPanel> {
               onChanged: _markDirty,
               onApply: _applyTranslation,
             ),
+          if (selectedEntity.kind == 'camera') ...[
+            const SizedBox(height: 16),
+            Text(
+              'Camera Preview',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 8),
+            _CameraPreview(textureId: widget.cameraPreviewTextureId),
+          ],
         ],
       ],
     );
@@ -151,6 +164,35 @@ class _InspectorPanelState extends State<InspectorPanel> {
     }
 
     return value.toStringAsFixed(2);
+  }
+}
+
+class _CameraPreview extends StatelessWidget {
+  const _CameraPreview({required this.textureId});
+
+  final int? textureId;
+
+  @override
+  Widget build(BuildContext context) {
+    return AspectRatio(
+      aspectRatio: 16 / 9,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFF101314),
+          border: Border.all(color: const Color(0xFF303637)),
+        ),
+        child: textureId == null
+            ? Center(
+                child: Text(
+                  'Waiting for camera preview',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                ),
+              )
+            : Texture(textureId: textureId!),
+      ),
+    );
   }
 }
 

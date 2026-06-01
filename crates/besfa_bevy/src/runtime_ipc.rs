@@ -11,7 +11,7 @@ use resources::{
 };
 use systems::{
     draw_selected_local_axes, emit_editor_camera_state, emit_frame_stats,
-    emit_requested_scene_snapshot, process_runtime_ipc_commands,
+    emit_requested_scene_snapshot, process_runtime_ipc_commands, sync_selected_camera_preview,
 };
 use transport::start_runtime_ipc_server;
 
@@ -45,6 +45,7 @@ impl Plugin for BesfaRuntimeIpcPlugin {
                     process_runtime_ipc_commands,
                     emit_requested_scene_snapshot,
                     draw_selected_local_axes,
+                    sync_selected_camera_preview,
                     emit_editor_camera_state,
                     emit_frame_stats,
                 )

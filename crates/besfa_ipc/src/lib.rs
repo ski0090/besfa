@@ -6,9 +6,9 @@ mod message;
 mod payload;
 
 pub use codec::{
-    PROTOCOL_VERSION, command_message, decode_client_message, decode_runtime_message,
-    editor_camera_state_message, empty_ok_response, encode_line, error_response,
-    frame_stats_message, log_message, ok_response, preview_surface_ready_message,
+    PROTOCOL_VERSION, camera_preview_surface_ready_message, command_message, decode_client_message,
+    decode_runtime_message, editor_camera_state_message, empty_ok_response, encode_line,
+    error_response, frame_stats_message, log_message, ok_response, preview_surface_ready_message,
     runtime_ready_message, scene_snapshot_message,
 };
 pub use command::{
@@ -232,6 +232,22 @@ mod tests {
         .unwrap();
 
         assert!(line.contains("\"event\":\"preview_surface_ready\""));
+        assert!(line.contains("\"shared_handle_name\""));
+    }
+
+    #[test]
+    fn encodes_camera_preview_surface_ready_event() {
+        let line = encode_line(&camera_preview_surface_ready_message(
+            PreviewSurfacePayload {
+                shared_handle_name: "Local\\BesfaCameraPreviewSurface-42".to_string(),
+                width: 320,
+                height: 180,
+                format: "bgra8_unorm".to_string(),
+            },
+        ))
+        .unwrap();
+
+        assert!(line.contains("\"event\":\"camera_preview_surface_ready\""));
         assert!(line.contains("\"shared_handle_name\""));
     }
 

@@ -24,6 +24,7 @@ The editor follows a lightweight Feature-Sliced Design layout:
   WASD/QE movement, Shift acceleration, and mouse-wheel dolly.
 - Connect to the runtime over localhost TCP IPC.
 - Render the runtime `scene_snapshot` in the Scene panel.
+- Show a selected scene camera preview texture in the Inspector.
 - Forward scene tree selection to the runtime with `select_entity`.
 - Forward Scene View clicks to the runtime with `pick_entity` so objects can be
   selected directly from the viewport.

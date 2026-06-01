@@ -15,6 +15,9 @@ enum RuntimeIpcEventKind {
   /// Runtime preview surface descriptor.
   previewSurfaceReady('preview_surface_ready'),
 
+  /// Runtime selected camera preview surface descriptor.
+  cameraPreviewSurfaceReady('camera_preview_surface_ready'),
+
   /// Editor Scene View camera orientation.
   editorCameraState('editor_camera_state'),
 

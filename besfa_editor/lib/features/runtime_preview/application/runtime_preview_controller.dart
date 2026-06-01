@@ -66,6 +66,10 @@ class RuntimePreviewController extends ChangeNotifier {
   int? previewTextureId;
   String? _previewSurfaceHandleName;
 
+  /// Flutter texture id for the selected runtime camera preview surface.
+  int? cameraPreviewTextureId;
+  String? _cameraPreviewSurfaceHandleName;
+
   /// Ensures the editor-owned scene runtime is running and IPC-ready.
   Future<void> ensureRuntimeReady() async {
     if (isBusy ||
@@ -189,6 +193,10 @@ class RuntimePreviewController extends ChangeNotifier {
     final textureId = previewTextureId;
     if (textureId != null) {
       unawaited(_plugin.disposePreviewTexture(textureId));
+    }
+    final cameraPreviewTextureId = this.cameraPreviewTextureId;
+    if (cameraPreviewTextureId != null) {
+      unawaited(_plugin.disposePreviewTexture(cameraPreviewTextureId));
     }
     unawaited(_ipcClient.disconnect());
     _isRuntimeIpcReady = false;
@@ -449,6 +457,12 @@ class RuntimePreviewController extends ChangeNotifier {
             RuntimePreviewSurface.fromPayload(event.payload),
           ),
         );
+      case RuntimeIpcEventKind.cameraPreviewSurfaceReady:
+        unawaited(
+          _attachCameraPreviewSurface(
+            RuntimePreviewSurface.fromPayload(event.payload),
+          ),
+        );
       case RuntimeIpcEventKind.log:
         final log = RuntimeLogEntry.fromPayload(event.payload);
         _appendLog(log, updateMessage: true);
@@ -585,10 +599,16 @@ class RuntimePreviewController extends ChangeNotifier {
     _previewTextureFrameTimer = null;
     _isMarkingPreviewFrame = false;
     _previewSurfaceHandleName = null;
+    _cameraPreviewSurfaceHandleName = null;
     final textureId = previewTextureId;
     previewTextureId = null;
     if (textureId != null) {
       unawaited(_plugin.disposePreviewTexture(textureId));
+    }
+    final cameraPreviewTextureId = this.cameraPreviewTextureId;
+    this.cameraPreviewTextureId = null;
+    if (cameraPreviewTextureId != null) {
+      unawaited(_plugin.disposePreviewTexture(cameraPreviewTextureId));
     }
   }
 
@@ -631,6 +651,47 @@ class RuntimePreviewController extends ChangeNotifier {
     }
   }
 
+  Future<void> _attachCameraPreviewSurface(
+    RuntimePreviewSurface surface,
+  ) async {
+    if (surface.sharedHandleName.isEmpty ||
+        surface.width <= 0 ||
+        surface.height <= 0) {
+      return;
+    }
+
+    try {
+      if (_cameraPreviewSurfaceHandleName == surface.sharedHandleName &&
+          cameraPreviewTextureId != null) {
+        _ensurePreviewTextureFrameTimer();
+        return;
+      }
+
+      final oldTextureId = cameraPreviewTextureId;
+      final textureId = await _plugin.attachPreviewSurface(
+        BesfaPreviewSurfaceDescriptor(
+          sharedHandleName: surface.sharedHandleName,
+          width: surface.width,
+          height: surface.height,
+          format: surface.format,
+        ),
+      );
+      if (_disposed || textureId == null || textureId <= 0) {
+        return;
+      }
+
+      cameraPreviewTextureId = textureId;
+      _cameraPreviewSurfaceHandleName = surface.sharedHandleName;
+      _ensurePreviewTextureFrameTimer();
+      notifyListeners();
+      if (oldTextureId != null && oldTextureId != textureId) {
+        unawaited(_plugin.disposePreviewTexture(oldTextureId));
+      }
+    } on Object {
+      _apply(message: 'Runtime camera preview surface could not attach.');
+    }
+  }
+
   void _ensurePreviewTextureFrameTimer() {
     if (_previewTextureFrameTimer != null) {
       return;
@@ -640,16 +701,23 @@ class RuntimePreviewController extends ChangeNotifier {
       const Duration(milliseconds: 16),
       (_) {
         final textureId = previewTextureId;
+        final cameraPreviewTextureId = this.cameraPreviewTextureId;
         if (_disposed ||
-            textureId == null ||
+            (textureId == null && cameraPreviewTextureId == null) ||
             status != RuntimePreviewStatus.running ||
             _isMarkingPreviewFrame) {
           return;
         }
 
         _isMarkingPreviewFrame = true;
+        final marks = <Future<bool>>[
+          if (textureId != null)
+            _plugin.markPreviewTextureFrameAvailable(textureId),
+          if (cameraPreviewTextureId != null)
+            _plugin.markPreviewTextureFrameAvailable(cameraPreviewTextureId),
+        ];
         unawaited(
-          _plugin.markPreviewTextureFrameAvailable(textureId).whenComplete(() {
+          Future.wait(marks).whenComplete(() {
             _isMarkingPreviewFrame = false;
           }),
         );

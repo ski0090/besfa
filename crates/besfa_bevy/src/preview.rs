@@ -1,6 +1,9 @@
 use crate::{
     BesfaRuntimeIpcPlugin, PreviewRuntimeOptions,
-    external_preview::{BesfaExternalPreviewPlugin, create_preview_surface_image},
+    external_preview::{
+        BesfaExternalPreviewPlugin, create_camera_preview_surface_image,
+        create_preview_surface_image,
+    },
 };
 use bevy::{
     asset::Assets,
@@ -122,6 +125,10 @@ struct PreviewCube;
 #[derive(Component)]
 pub(crate) struct EditorPreviewCamera;
 
+/// Runtime-only camera used to render the selected scene camera preview.
+#[derive(Component)]
+pub(crate) struct SelectedCameraPreviewCamera;
+
 /// Runtime-side pick bounds for a scene object.
 #[derive(Component)]
 pub(crate) struct PreviewPickTarget {
@@ -136,7 +143,10 @@ fn setup_scene(
     mut images: ResMut<Assets<Image>>,
 ) {
     let (preview_surface_image, preview_surface_target) = create_preview_surface_image(&mut images);
+    let (camera_preview_surface_image, camera_preview_surface_target) =
+        create_camera_preview_surface_image(&mut images);
     commands.insert_resource(preview_surface_target);
+    commands.insert_resource(camera_preview_surface_target);
 
     commands.spawn((
         Name::new("World"),
@@ -205,6 +215,18 @@ fn setup_scene(
         camera_transform,
         EditorPreviewCamera,
         Name::new("Editor Preview Camera"),
+    ));
+
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            is_active: false,
+            ..default()
+        },
+        RenderTarget::from(camera_preview_surface_image),
+        camera_transform,
+        SelectedCameraPreviewCamera,
+        Name::new("Selected Camera Preview"),
     ));
 }
 

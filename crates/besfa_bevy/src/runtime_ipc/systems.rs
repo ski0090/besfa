@@ -7,7 +7,10 @@ use super::{
 };
 use crate::{
     external_preview::{PREVIEW_SURFACE_HEIGHT, PREVIEW_SURFACE_WIDTH},
-    preview::{EditorPreviewCamera, PreviewPickTarget, PreviewSceneNode, PreviewSceneObjects},
+    preview::{
+        EditorPreviewCamera, PreviewPickTarget, PreviewSceneNode, PreviewSceneObjects,
+        SelectedCameraPreviewCamera,
+    },
 };
 use besfa_ipc::{
     CreateEntityResult, EditorCameraInputParams, FrameStatsPayload, IpcError, PickEntityParams,
@@ -294,6 +297,39 @@ pub(super) fn emit_editor_camera_state(
     server.broadcast(editor_camera_state_message(payload.clone()));
     state.last = Some(payload);
     state.elapsed_secs = 0.0;
+}
+
+pub(super) fn sync_selected_camera_preview(
+    selection: Res<RuntimeIpcSelection>,
+    scene_nodes: Query<(&PreviewSceneNode, &Transform)>,
+    mut preview_cameras: Query<
+        (&mut Camera, &mut Transform),
+        (With<SelectedCameraPreviewCamera>, Without<PreviewSceneNode>),
+    >,
+) {
+    let Some((mut preview_camera, mut preview_transform)) = preview_cameras.iter_mut().next()
+    else {
+        return;
+    };
+    let Some(selected_entity_id) = selection.selected_entity_id.as_deref() else {
+        preview_camera.is_active = false;
+        return;
+    };
+    let Some((node, transform)) = scene_nodes
+        .iter()
+        .find(|(node, _)| node.id.as_str() == selected_entity_id)
+    else {
+        preview_camera.is_active = false;
+        return;
+    };
+
+    if node.kind != "camera" {
+        preview_camera.is_active = false;
+        return;
+    }
+
+    *preview_transform = *transform;
+    preview_camera.is_active = true;
 }
 
 fn build_editor_camera_state_payload(transform: &Transform) -> EditorCameraStatePayload {
