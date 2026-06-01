@@ -15,6 +15,8 @@ pub const METHOD_PICK_ENTITY: &str = "pick_entity";
 pub const METHOD_CREATE_ENTITY: &str = "create_entity";
 /// Runtime command method name for updating an entity transform.
 pub const METHOD_SET_TRANSFORM: &str = "set_transform";
+/// Runtime command method name for moving the editor preview camera.
+pub const METHOD_EDITOR_CAMERA_INPUT: &str = "editor_camera_input";
 
 /// Typed editor-to-runtime command set.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +33,8 @@ pub enum RuntimeCommand {
     CreateEntity(CreateEntityParams),
     /// Update a runtime entity transform.
     SetTransform(SetTransformParams),
+    /// Apply editor-only camera navigation input to the preview camera.
+    EditorCameraInput(EditorCameraInputParams),
 }
 
 impl RuntimeCommand {
@@ -43,6 +47,7 @@ impl RuntimeCommand {
             RuntimeCommand::PickEntity(_) => METHOD_PICK_ENTITY,
             RuntimeCommand::CreateEntity(_) => METHOD_CREATE_ENTITY,
             RuntimeCommand::SetTransform(_) => METHOD_SET_TRANSFORM,
+            RuntimeCommand::EditorCameraInput(_) => METHOD_EDITOR_CAMERA_INPUT,
         }
     }
 
@@ -55,6 +60,7 @@ impl RuntimeCommand {
             RuntimeCommand::PickEntity(params) => json!(params),
             RuntimeCommand::CreateEntity(params) => json!(params),
             RuntimeCommand::SetTransform(params) => json!(params),
+            RuntimeCommand::EditorCameraInput(params) => json!(params),
         }
     }
 
@@ -76,6 +82,9 @@ impl RuntimeCommand {
                 .map_err(|error| IpcError::invalid_params(method, error)),
             METHOD_SET_TRANSFORM => serde_json::from_value(params)
                 .map(RuntimeCommand::SetTransform)
+                .map_err(|error| IpcError::invalid_params(method, error)),
+            METHOD_EDITOR_CAMERA_INPUT => serde_json::from_value(params)
+                .map(RuntimeCommand::EditorCameraInput)
                 .map_err(|error| IpcError::invalid_params(method, error)),
             _ => Err(IpcError::unsupported_command(method)),
         }
@@ -139,4 +148,34 @@ pub struct SetTransformParams {
     pub entity_id: String,
     /// New local translation in runtime world units.
     pub translation: Vec3Payload,
+}
+
+/// Parameters for the `editor_camera_input` command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EditorCameraInputParams {
+    /// Horizontal pointer delta in editor logical pixels.
+    #[serde(default)]
+    pub rotate_delta_x: f32,
+    /// Vertical pointer delta in editor logical pixels.
+    #[serde(default)]
+    pub rotate_delta_y: f32,
+    /// Local forward movement intent, usually in the `-1.0..=1.0` range.
+    #[serde(default)]
+    pub move_forward: f32,
+    /// Local right movement intent, usually in the `-1.0..=1.0` range.
+    #[serde(default)]
+    pub move_right: f32,
+    /// World-up movement intent, usually in the `-1.0..=1.0` range.
+    #[serde(default)]
+    pub move_up: f32,
+    /// Movement speed multiplier used for accelerated flythrough controls.
+    #[serde(default = "default_editor_camera_speed_multiplier")]
+    pub speed_multiplier: f32,
+    /// Editor-side elapsed time for movement input, in seconds.
+    #[serde(default)]
+    pub delta_seconds: f32,
+}
+
+fn default_editor_camera_speed_multiplier() -> f32 {
+    1.0
 }

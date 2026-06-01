@@ -11,10 +11,10 @@ pub use codec::{
     preview_surface_ready_message, runtime_ready_message, scene_snapshot_message,
 };
 pub use command::{
-    CreateEntityParams, CreateEntityResult, METHOD_CREATE_ENTITY, METHOD_OPEN_PROJECT,
-    METHOD_PICK_ENTITY, METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, METHOD_SET_TRANSFORM,
-    OpenProjectParams, PickEntityParams, PickEntityResult, RuntimeCommand, SelectEntityParams,
-    SetTransformParams,
+    CreateEntityParams, CreateEntityResult, EditorCameraInputParams, METHOD_CREATE_ENTITY,
+    METHOD_EDITOR_CAMERA_INPUT, METHOD_OPEN_PROJECT, METHOD_PICK_ENTITY, METHOD_RELOAD_SCENE,
+    METHOD_SELECT_ENTITY, METHOD_SET_TRANSFORM, OpenProjectParams, PickEntityParams,
+    PickEntityResult, RuntimeCommand, SelectEntityParams, SetTransformParams,
 };
 pub use config::RuntimeIpcConfig;
 pub use error::IpcError;
@@ -120,6 +120,27 @@ mod tests {
     }
 
     #[test]
+    fn encodes_editor_camera_input_command() {
+        let line = encode_line(&command_message(
+            11,
+            RuntimeCommand::EditorCameraInput(EditorCameraInputParams {
+                rotate_delta_x: 4.0,
+                rotate_delta_y: -2.0,
+                move_forward: 1.0,
+                move_right: -1.0,
+                move_up: 0.0,
+                speed_multiplier: 4.0,
+                delta_seconds: 0.016,
+            }),
+        ))
+        .unwrap();
+
+        assert!(line.contains("\"method\":\"editor_camera_input\""));
+        assert!(line.contains("\"rotate_delta_x\":4.0"));
+        assert!(line.contains("\"speed_multiplier\":4.0"));
+    }
+
+    #[test]
     fn decodes_runtime_command() {
         let command = RuntimeCommand::from_method_params(
             METHOD_OPEN_PROJECT,
@@ -148,6 +169,28 @@ mod tests {
             RuntimeCommand::PickEntity(PickEntityParams {
                 viewport_x: 0.25,
                 viewport_y: 0.75,
+            })
+        );
+    }
+
+    #[test]
+    fn decodes_editor_camera_input_command_with_defaults() {
+        let command = RuntimeCommand::from_method_params(
+            METHOD_EDITOR_CAMERA_INPUT,
+            json!({ "move_forward": 1.0 }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            RuntimeCommand::EditorCameraInput(EditorCameraInputParams {
+                rotate_delta_x: 0.0,
+                rotate_delta_y: 0.0,
+                move_forward: 1.0,
+                move_right: 0.0,
+                move_up: 0.0,
+                speed_multiplier: 1.0,
+                delta_seconds: 0.0,
             })
         );
     }

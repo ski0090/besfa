@@ -118,6 +118,10 @@ impl PreviewSceneNode {
 #[derive(Component)]
 struct PreviewCube;
 
+/// Runtime-only camera used to render the editor Scene View.
+#[derive(Component)]
+pub(crate) struct EditorPreviewCamera;
+
 /// Runtime-side pick bounds for a scene object.
 #[derive(Component)]
 pub(crate) struct PreviewPickTarget {
@@ -182,12 +186,25 @@ fn setup_scene(
         PreviewSceneNode::child("key_light", "Key Light", "light", "world"),
     ));
 
+    let camera_transform =
+        Transform::from_xyz(-4.5, 4.2, 7.5).looking_at(Vec3::new(0.0, 0.6, 0.0), Vec3::Y);
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            is_active: false,
+            ..default()
+        },
+        camera_transform,
+        Name::new("Camera3d"),
+        PreviewSceneNode::child("camera_3d", "Camera3d", "camera", "world"),
+    ));
+
     commands.spawn((
         Camera3d::default(),
         RenderTarget::from(preview_surface_image),
-        Transform::from_xyz(-4.5, 4.2, 7.5).looking_at(Vec3::new(0.0, 0.6, 0.0), Vec3::Y),
-        Name::new("Camera3d"),
-        PreviewSceneNode::child("camera_3d", "Camera3d", "camera", "world"),
+        camera_transform,
+        EditorPreviewCamera,
+        Name::new("Editor Preview Camera"),
     ));
 }
 

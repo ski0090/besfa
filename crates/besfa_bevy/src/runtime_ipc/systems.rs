@@ -7,12 +7,12 @@ use super::{
 };
 use crate::{
     external_preview::{PREVIEW_SURFACE_HEIGHT, PREVIEW_SURFACE_WIDTH},
-    preview::{PreviewPickTarget, PreviewSceneNode, PreviewSceneObjects},
+    preview::{EditorPreviewCamera, PreviewPickTarget, PreviewSceneNode, PreviewSceneObjects},
 };
 use besfa_ipc::{
-    CreateEntityResult, FrameStatsPayload, IpcError, PickEntityParams, PickEntityResult,
-    RuntimeCommand, empty_ok_response, error_response, frame_stats_message, log_message,
-    ok_response, scene_snapshot_message,
+    CreateEntityResult, EditorCameraInputParams, FrameStatsPayload, IpcError, PickEntityParams,
+    PickEntityResult, RuntimeCommand, empty_ok_response, error_response, frame_stats_message,
+    log_message, ok_response, scene_snapshot_message,
 };
 use bevy::math::bounding::{Aabb3d, RayCast3d};
 use bevy::prelude::*;
@@ -20,6 +20,9 @@ use serde_json::json;
 
 const LOCAL_AXIS_LENGTH: f32 = 1.5;
 const LOCAL_AXIS_TIP_LENGTH: f32 = 0.18;
+const EDITOR_CAMERA_ROTATE_SENSITIVITY: f32 = 0.006;
+const EDITOR_CAMERA_BASE_SPEED: f32 = 5.0;
+const EDITOR_CAMERA_MAX_DELTA_SECONDS: f32 = 0.1;
 
 pub(super) fn process_runtime_ipc_commands(
     server: Res<RuntimeIpcServer>,
@@ -30,8 +33,9 @@ pub(super) fn process_runtime_ipc_commands(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     scene_nodes: Query<&PreviewSceneNode>,
-    mut transforms: Query<(&PreviewSceneNode, &mut Transform)>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    mut transforms: Query<(&PreviewSceneNode, &mut Transform), Without<EditorPreviewCamera>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<EditorPreviewCamera>>,
+    mut editor_cameras: Query<&mut Transform, With<EditorPreviewCamera>>,
     pick_targets: Query<(&PreviewSceneNode, &GlobalTransform, &PreviewPickTarget)>,
 ) {
     for request in server.drain_commands() {
@@ -172,6 +176,20 @@ pub(super) fn process_runtime_ipc_commands(
                     ));
                 }
             }
+            RuntimeCommand::EditorCameraInput(params) => {
+                if let Some(mut transform) = editor_cameras.iter_mut().next() {
+                    apply_editor_camera_input(&params, &mut transform);
+                    let _ = request.response_tx.send(empty_ok_response(request.id));
+                } else {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "editor_camera_not_found",
+                            "Runtime editor preview camera was not found.",
+                        ),
+                    ));
+                }
+            }
         }
     }
 }
@@ -222,9 +240,40 @@ fn draw_local_axis(gizmos: &mut Gizmos, origin: Vec3, axis: Vec3, color: Color) 
         .with_tip_length(LOCAL_AXIS_TIP_LENGTH);
 }
 
+fn apply_editor_camera_input(params: &EditorCameraInputParams, transform: &mut Transform) {
+    let rotate_delta_x = finite_or_zero(params.rotate_delta_x).clamp(-500.0, 500.0);
+    let rotate_delta_y = finite_or_zero(params.rotate_delta_y).clamp(-500.0, 500.0);
+
+    if rotate_delta_x != 0.0 {
+        transform.rotate_y(-rotate_delta_x * EDITOR_CAMERA_ROTATE_SENSITIVITY);
+    }
+    if rotate_delta_y != 0.0 {
+        transform.rotate_local_x(-rotate_delta_y * EDITOR_CAMERA_ROTATE_SENSITIVITY);
+    }
+    transform.rotation = transform.rotation.normalize();
+
+    let movement = *transform.forward() * finite_or_zero(params.move_forward).clamp(-1.0, 1.0)
+        + *transform.right() * finite_or_zero(params.move_right).clamp(-1.0, 1.0)
+        + Vec3::Y * finite_or_zero(params.move_up).clamp(-1.0, 1.0);
+    if movement == Vec3::ZERO {
+        return;
+    }
+
+    let delta_seconds = finite_or_zero(params.delta_seconds)
+        .max(0.0)
+        .min(EDITOR_CAMERA_MAX_DELTA_SECONDS);
+    let speed_multiplier = finite_or_zero(params.speed_multiplier).max(0.1).min(8.0);
+    transform.translation +=
+        movement.normalize() * EDITOR_CAMERA_BASE_SPEED * speed_multiplier * delta_seconds;
+}
+
+fn finite_or_zero(value: f32) -> f32 {
+    if value.is_finite() { value } else { 0.0 }
+}
+
 fn pick_entity_from_viewport(
     params: &PickEntityParams,
-    cameras: &Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: &Query<(&Camera, &GlobalTransform), With<EditorPreviewCamera>>,
     pick_targets: &Query<(&PreviewSceneNode, &GlobalTransform, &PreviewPickTarget)>,
 ) -> Result<Option<String>, IpcError> {
     if !params.viewport_x.is_finite() || !params.viewport_y.is_finite() {

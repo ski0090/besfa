@@ -9,7 +9,7 @@ plugin. It deliberately sits between the engine/editor domain and the concrete
 ## Modules
 
 - `preview.rs`: `BesfaPreviewPlugin`, preview scene setup, grid drawing,
-  camera, light, and cube animation.
+  runtime/editor camera setup, light, and cube animation.
 - `external_preview.rs`: runtime-owned D3D12 shared render target for embedded
   editor preview.
 - `runtime_ipc.rs`: `BesfaRuntimeIpcPlugin` composition.
@@ -25,8 +25,8 @@ plugin. It deliberately sits between the engine/editor domain and the concrete
 
 The preview runtime is pinned to DX12 through Bevy/wgpu on Windows and keeps its
 Bevy host window offscreen and out of the taskbar. The visible preview lives in
-the Flutter editor: the preview camera renders into a shared D3D12 texture that
-is wrapped as a Bevy image render target. The runtime publishes a
+the Flutter editor: an editor-only preview camera renders into a shared D3D12
+texture that is wrapped as a Bevy image render target. The runtime publishes a
 `preview_surface_ready` IPC event with a named shared handle so the Flutter
 editor can attach the same GPU resource as a `Texture`.
 
@@ -48,6 +48,11 @@ When an entity with a `Transform` is selected, the runtime draws a local X/Y/Z
 axis gizmo at that entity's origin. The axes follow the entity rotation so the
 editor preview can distinguish local orientation from the fixed viewport axis
 overlay.
+
+The scene's runtime camera remains a selectable scene entity, but it is not used
+for the editor Scene View render target. The editor preview camera is an
+internal runtime component controlled through `editor_camera_input` IPC commands
+and does not appear in scene snapshots.
 
 ## Usage
 

@@ -40,6 +40,12 @@ Viewport picks use normalized coordinates inside the runtime preview surface:
 {"type":"command","id":4,"method":"pick_entity","params":{"viewport_x":0.5,"viewport_y":0.5}}
 ```
 
+Editor camera navigation input is separate from scene entity transforms:
+
+```json
+{"type":"command","id":5,"method":"editor_camera_input","params":{"rotate_delta_x":12.0,"rotate_delta_y":-4.0,"move_forward":1.0,"speed_multiplier":4.0,"delta_seconds":0.016}}
+```
+
 Responses are sent by the runtime:
 
 ```json
@@ -63,6 +69,9 @@ Events are pushed by the runtime:
   The current runtime supports `kind: "cube"` and returns `entity_id`.
 - `set_transform`: asks the runtime to update an entity transform. The current
   payload supports `translation`.
+- `editor_camera_input`: applies editor-only Scene View camera navigation. It
+  can carry pointer rotation deltas, local forward/right/world-up movement
+  intent, a speed multiplier, and elapsed movement time.
 
 ## Events
 
