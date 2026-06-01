@@ -39,7 +39,8 @@ The runtime binary is discovered by the native plugin under the workspace
 
 The editor treats the runtime as a resident Scene View backend rather than a
 manual preview window. On startup it launches the runtime with IPC arguments,
-waits for `runtime_ready`, and keeps the viewport available for scene editing.
+waits up to 20 seconds for `runtime_ready`, and keeps the viewport available
+for scene editing.
 Scene editing commands, such as adding a cube, are sent to the runtime over IPC
 and reflected back through `scene_snapshot`. Position edits use `set_transform`
 and are confirmed by the next runtime snapshot.

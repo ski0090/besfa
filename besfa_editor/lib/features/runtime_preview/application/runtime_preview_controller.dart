@@ -285,13 +285,14 @@ class RuntimePreviewController extends ChangeNotifier {
       _isRuntimeIpcReady = true;
       _apply(status: RuntimePreviewStatus.running, isBusy: false);
     } on Object {
+      final runtimeState = _plugin.runtimeState;
       _plugin.stopRuntime();
       await _ipcClient.disconnect();
       _isRuntimeIpcReady = false;
       _clearRuntimeData();
       _apply(
         status: RuntimePreviewStatus.failed,
-        message: 'Scene runtime IPC did not become ready.',
+        message: _runtimeReadyFailureMessage(runtimeState),
         isBusy: false,
       );
     }
@@ -520,5 +521,17 @@ class RuntimePreviewController extends ChangeNotifier {
     }
 
     return error.message;
+  }
+
+  String _runtimeReadyFailureMessage(BesfaRuntimeState runtimeState) {
+    return switch (runtimeState) {
+      BesfaRuntimeState.exited ||
+      BesfaRuntimeState.stopped => 'Scene runtime exited before IPC was ready.',
+      BesfaRuntimeState.failed => _errorMessage(
+        'Scene runtime status could not be read.',
+      ),
+      BesfaRuntimeState.running =>
+        'Scene runtime IPC did not become ready after 20 seconds.',
+    };
   }
 }

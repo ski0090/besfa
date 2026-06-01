@@ -48,7 +48,7 @@ class RuntimeIpcClient {
   /// Connects to the launched runtime and waits for `runtime_ready`.
   Future<void> connectAndWaitReady(
     RuntimeIpcHandshake handshake, {
-    Duration timeout = const Duration(seconds: 5),
+    Duration timeout = const Duration(seconds: 20),
   }) async {
     await disconnect();
 
