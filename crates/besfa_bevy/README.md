@@ -16,7 +16,7 @@ plugin. It deliberately sits between the engine/editor domain and the concrete
 - `runtime_ipc/transport.rs`: localhost TCP handshake, command reads, event
   writes.
 - `runtime_ipc/systems.rs`: Bevy systems that handle commands, create preview
-  scene entities, and emit events.
+  scene entities, draw selection gizmos, and emit events.
 - `runtime_ipc/snapshot.rs`: preview ECS metadata to `scene_snapshot` payloads.
 - `runtime_ipc/resources.rs`: runtime IPC resources, command queues, and client
   registry.
@@ -43,6 +43,11 @@ cube under the requested parent, selects it, and requests a fresh
 updates and `pick_entity` for selecting an entity from normalized preview
 viewport coordinates. Scene snapshots include transform metadata when an entity
 has a Bevy `Transform` component.
+
+When an entity with a `Transform` is selected, the runtime draws a local X/Y/Z
+axis gizmo at that entity's origin. The axes follow the entity rotation so the
+editor preview can distinguish local orientation from the fixed viewport axis
+overlay.
 
 ## Usage
 

@@ -18,6 +18,9 @@ use bevy::math::bounding::{Aabb3d, RayCast3d};
 use bevy::prelude::*;
 use serde_json::json;
 
+const LOCAL_AXIS_LENGTH: f32 = 1.5;
+const LOCAL_AXIS_TIP_LENGTH: f32 = 0.18;
+
 pub(super) fn process_runtime_ipc_commands(
     server: Res<RuntimeIpcServer>,
     mut commands: Commands,
@@ -171,6 +174,52 @@ pub(super) fn process_runtime_ipc_commands(
             }
         }
     }
+}
+
+pub(super) fn draw_selected_local_axes(
+    mut gizmos: Gizmos,
+    selection: Res<RuntimeIpcSelection>,
+    scene_nodes: Query<(&PreviewSceneNode, &Transform)>,
+) {
+    let Some(selected_entity_id) = selection.selected_entity_id.as_deref() else {
+        return;
+    };
+    let Some((_, transform)) = scene_nodes
+        .iter()
+        .find(|(node, _)| node.id.as_str() == selected_entity_id)
+    else {
+        return;
+    };
+
+    let origin = transform.translation;
+    draw_local_axis(
+        &mut gizmos,
+        origin,
+        transform.rotation * Vec3::X,
+        Color::srgb(0.95, 0.16, 0.12),
+    );
+    draw_local_axis(
+        &mut gizmos,
+        origin,
+        transform.rotation * Vec3::Y,
+        Color::srgb(0.25, 0.86, 0.32),
+    );
+    draw_local_axis(
+        &mut gizmos,
+        origin,
+        transform.rotation * Vec3::Z,
+        Color::srgb(0.22, 0.48, 1.0),
+    );
+}
+
+fn draw_local_axis(gizmos: &mut Gizmos, origin: Vec3, axis: Vec3, color: Color) {
+    gizmos
+        .arrow(
+            origin,
+            origin + axis.normalize_or_zero() * LOCAL_AXIS_LENGTH,
+            color,
+        )
+        .with_tip_length(LOCAL_AXIS_TIP_LENGTH);
 }
 
 fn pick_entity_from_viewport(

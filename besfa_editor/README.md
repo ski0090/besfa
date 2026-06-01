@@ -18,6 +18,7 @@ The editor follows a lightweight Feature-Sliced Design layout:
 - Attach the runtime-owned Windows shared preview surface in the viewport when
   available.
 - Show a fixed world-space X/Y/Z axis gizmo in the Scene View overlay.
+- Show the selected runtime object's local X/Y/Z axis gizmo in the Scene View.
 - Connect to the runtime over localhost TCP IPC.
 - Render the runtime `scene_snapshot` in the Scene panel.
 - Forward scene tree selection to the runtime with `select_entity`.

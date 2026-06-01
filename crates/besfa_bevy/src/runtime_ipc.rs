@@ -9,7 +9,10 @@ use resources::{
     RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection, RuntimeIpcServerConfig,
     RuntimeIpcSnapshotCursor,
 };
-use systems::{emit_frame_stats, emit_requested_scene_snapshot, process_runtime_ipc_commands};
+use systems::{
+    draw_selected_local_axes, emit_frame_stats, emit_requested_scene_snapshot,
+    process_runtime_ipc_commands,
+};
 use transport::start_runtime_ipc_server;
 
 pub(crate) use resources::RuntimeIpcServer;
@@ -40,6 +43,7 @@ impl Plugin for BesfaRuntimeIpcPlugin {
                 (
                     process_runtime_ipc_commands,
                     emit_requested_scene_snapshot,
+                    draw_selected_local_axes,
                     emit_frame_stats,
                 )
                     .chain(),
