@@ -140,6 +140,11 @@ class RuntimeSceneSnapshot {
   /// Currently selected entity id, if any.
   final String? selectedEntityId;
 
+  /// Returns this snapshot with a different selected entity id.
+  RuntimeSceneSnapshot withSelectedEntityId(String? selectedEntityId) {
+    return RuntimeSceneSnapshot(root: root, selectedEntityId: selectedEntityId);
+  }
+
   /// Currently selected entity node, if it exists in this snapshot.
   RuntimeSceneEntity? get selectedEntity {
     final selectedEntityId = this.selectedEntityId;

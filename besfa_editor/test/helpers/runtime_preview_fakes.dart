@@ -90,6 +90,7 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
   int createEntityCalls = 0;
   RuntimeVector3? lastTranslation;
   ({double viewportX, double viewportY})? lastPick;
+  String? pickResult = 'picked_entity';
   Object? connectError;
 
   @override
@@ -144,7 +145,7 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
     required double viewportY,
   }) async {
     lastPick = (viewportX: viewportX, viewportY: viewportY);
-    return 'picked_entity';
+    return pickResult;
   }
 
   @override

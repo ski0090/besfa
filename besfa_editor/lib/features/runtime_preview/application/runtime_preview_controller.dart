@@ -203,6 +203,7 @@ class RuntimePreviewController extends ChangeNotifier {
 
     try {
       await _ipcClient.selectEntity(entityId);
+      _selectEntityInCurrentSnapshot(entityId);
     } on Object {
       _apply(message: 'Runtime entity could not be selected.');
     }
@@ -218,7 +219,11 @@ class RuntimePreviewController extends ChangeNotifier {
     }
 
     try {
-      await _ipcClient.pickEntity(viewportX: viewportX, viewportY: viewportY);
+      final entityId = await _ipcClient.pickEntity(
+        viewportX: viewportX,
+        viewportY: viewportY,
+      );
+      _selectEntityInCurrentSnapshot(entityId);
     } on Object {
       _apply(message: 'Runtime viewport pick failed.');
     }
@@ -415,6 +420,16 @@ class RuntimePreviewController extends ChangeNotifier {
       case RuntimeIpcEventKind.unknown:
         return;
     }
+  }
+
+  void _selectEntityInCurrentSnapshot(String? entityId) {
+    final snapshot = sceneSnapshot;
+    if (snapshot == null || snapshot.selectedEntityId == entityId) {
+      return;
+    }
+
+    sceneSnapshot = snapshot.withSelectedEntityId(entityId);
+    notifyListeners();
   }
 
   void _appendLog(RuntimeLogEntry log, {bool updateMessage = false}) {

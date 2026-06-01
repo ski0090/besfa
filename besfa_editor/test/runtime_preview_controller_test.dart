@@ -145,6 +145,51 @@ void main() {
     expect(ipcClient.lastTranslation?.z, 3);
   });
 
+  test(
+    'updates current snapshot selection after select command succeeds',
+    () async {
+      final plugin = FakeBesfaFlutterPlugin();
+      final ipcClient = FakeRuntimeIpcClient();
+      final controller = RuntimePreviewController(
+        plugin: plugin,
+        ipcClient: ipcClient,
+      );
+      addTearDown(controller.dispose);
+      addTearDown(ipcClient.close);
+
+      await controller.ensureRuntimeReady();
+      ipcClient.emit(
+        const RuntimeIpcEvent(
+          kind: RuntimeIpcEventKind.sceneSnapshot,
+          payload: {
+            'root': {
+              'id': 'world',
+              'name': 'World',
+              'kind': 'world',
+              'children': [
+                {
+                  'id': 'cube_1',
+                  'name': 'Cube 1',
+                  'kind': 'mesh',
+                  'transform': {
+                    'translation': {'x': 0, 'y': 0, 'z': 0},
+                  },
+                  'children': <Object?>[],
+                },
+              ],
+            },
+          },
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      await controller.selectEntity('cube_1');
+
+      expect(controller.sceneSnapshot?.selectedEntityId, 'cube_1');
+      expect(controller.sceneSnapshot?.selectedEntity?.name, 'Cube 1');
+    },
+  );
+
   test('creates cubes through runtime IPC', () async {
     final plugin = FakeBesfaFlutterPlugin();
     final ipcClient = FakeRuntimeIpcClient();
@@ -164,7 +209,7 @@ void main() {
 
   test('picks entities from normalized viewport coordinates', () async {
     final plugin = FakeBesfaFlutterPlugin();
-    final ipcClient = FakeRuntimeIpcClient();
+    final ipcClient = FakeRuntimeIpcClient()..pickResult = 'cube_1';
     final controller = RuntimePreviewController(
       plugin: plugin,
       ipcClient: ipcClient,
@@ -173,10 +218,37 @@ void main() {
     addTearDown(ipcClient.close);
 
     await controller.ensureRuntimeReady();
+    ipcClient.emit(
+      const RuntimeIpcEvent(
+        kind: RuntimeIpcEventKind.sceneSnapshot,
+        payload: {
+          'root': {
+            'id': 'world',
+            'name': 'World',
+            'kind': 'world',
+            'children': [
+              {
+                'id': 'cube_1',
+                'name': 'Cube 1',
+                'kind': 'mesh',
+                'transform': {
+                  'translation': {'x': 0, 'y': 0, 'z': 0},
+                },
+                'children': <Object?>[],
+              },
+            ],
+          },
+        },
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
     await controller.pickViewportEntity(viewportX: 0.4, viewportY: 0.6);
 
     expect(ipcClient.lastPick?.viewportX, 0.4);
     expect(ipcClient.lastPick?.viewportY, 0.6);
+    expect(controller.sceneSnapshot?.selectedEntityId, 'cube_1');
+    expect(controller.sceneSnapshot?.selectedEntity?.name, 'Cube 1');
   });
 
   test('attaches runtime preview surface events', () async {
