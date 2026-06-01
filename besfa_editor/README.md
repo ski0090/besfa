@@ -25,7 +25,8 @@ The editor follows a lightweight Feature-Sliced Design layout:
 - Display runtime status, log messages, and frame stats in the editor shell.
 - Show a collapsible bottom runtime log panel. The collapsed panel shows the
   latest log line; the expanded panel scrolls through runtime logs and can copy
-  all logs to the clipboard.
+  all logs to the clipboard. The panel includes runtime IPC log events and
+  native stdout/stderr lines tailed from the runtime process log file.
 - Recover the Scene Runtime automatically when the tracked process exits.
 
 ## Development

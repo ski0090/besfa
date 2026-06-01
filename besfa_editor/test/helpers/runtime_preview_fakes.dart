@@ -9,6 +9,7 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
   BesfaRuntimeErrorCode error = BesfaRuntimeErrorCode.none;
   BesfaRuntimeCommandResult startResult = BesfaRuntimeCommandResult.ok;
   BesfaRuntimeCommandResult stopResult = BesfaRuntimeCommandResult.ok;
+  String? runtimeLogPathValue;
   int? createdTextureId;
   int stopCalls = 0;
 
@@ -52,6 +53,9 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
   BesfaRuntimeErrorCode get runtimeLastError => error;
 
   @override
+  String? get runtimeLogPath => runtimeLogPathValue;
+
+  @override
   Future<int?> createPreviewTexture({int width = 640, int height = 360}) async {
     createdTextureId = 11;
     return createdTextureId;
@@ -85,6 +89,7 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
       StreamController<RuntimeIpcEvent>.broadcast();
   int createEntityCalls = 0;
   RuntimeVector3? lastTranslation;
+  Object? connectError;
 
   @override
   Stream<RuntimeIpcEvent> get events => _events.stream;
@@ -106,7 +111,12 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
   Future<void> connectAndWaitReady(
     RuntimeIpcHandshake handshake, {
     Duration timeout = const Duration(seconds: 5),
-  }) async {}
+  }) async {
+    final error = connectError;
+    if (error != null) {
+      throw error;
+    }
+  }
 
   @override
   Future<void> disconnect() async {}

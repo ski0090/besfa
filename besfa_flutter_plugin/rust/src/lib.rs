@@ -1,6 +1,9 @@
 use std::{
+    ffi::{CString, c_char},
+    fs::{File, OpenOptions, create_dir_all},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    ptr,
     sync::Mutex,
 };
 
@@ -24,6 +27,7 @@ const RUNTIME_ERROR_INVALID_ARGUMENT: i32 = 6;
 
 static RUNTIME_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 static RUNTIME_LAST_ERROR: Mutex<i32> = Mutex::new(RUNTIME_ERROR_NONE);
+static RUNTIME_LOG_PATH: Mutex<Option<CString>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Copy)]
 struct RuntimeIpcLaunch {
@@ -97,11 +101,8 @@ fn start_runtime(ipc: Option<RuntimeIpcLaunch>) -> i32 {
     let working_dir = runtime_working_dir(&runtime_path);
 
     let mut command = Command::new(runtime_path);
-    command
-        .current_dir(working_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    command.current_dir(&working_dir).stdin(Stdio::null());
+    configure_runtime_stdio(&mut command, &working_dir);
 
     if let Some(ipc) = ipc {
         command
@@ -118,10 +119,24 @@ fn start_runtime(ipc: Option<RuntimeIpcLaunch>) -> i32 {
             RUNTIME_COMMAND_OK
         }
         Err(_) => {
+            set_runtime_log_path(None);
             set_last_error(RUNTIME_ERROR_SPAWN_FAILED);
             RUNTIME_COMMAND_FAILED
         }
     }
+}
+
+/// Returns the current runtime stdout/stderr log file path as UTF-8.
+#[unsafe(no_mangle)]
+pub extern "C" fn besfa_runtime_log_path() -> *const c_char {
+    let Ok(log_path) = RUNTIME_LOG_PATH.lock() else {
+        return ptr::null();
+    };
+
+    log_path
+        .as_ref()
+        .map(|path| path.as_ptr())
+        .unwrap_or(ptr::null())
 }
 
 /// Stops the tracked preview runtime process.
@@ -208,6 +223,49 @@ fn set_last_error(code: i32) {
     }
 }
 
+fn configure_runtime_stdio(command: &mut Command, working_dir: &Path) {
+    let log_path = runtime_log_path(working_dir);
+    match open_runtime_log_file(&log_path) {
+        Ok(stdout) => match stdout.try_clone() {
+            Ok(stderr) => {
+                command
+                    .stdout(Stdio::from(stdout))
+                    .stderr(Stdio::from(stderr));
+                set_runtime_log_path(Some(log_path));
+            }
+            Err(_) => {
+                command.stdout(Stdio::null()).stderr(Stdio::null());
+                set_runtime_log_path(None);
+            }
+        },
+        Err(_) => {
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+            set_runtime_log_path(None);
+        }
+    }
+}
+
+fn open_runtime_log_file(log_path: &Path) -> std::io::Result<File> {
+    if let Some(parent) = log_path.parent() {
+        create_dir_all(parent)?;
+    }
+
+    OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(log_path)
+}
+
+fn set_runtime_log_path(path: Option<PathBuf>) {
+    if let Ok(mut runtime_log_path) = RUNTIME_LOG_PATH.lock() {
+        *runtime_log_path = path.and_then(|path| {
+            let path = path.to_string_lossy().into_owned();
+            CString::new(path).ok()
+        });
+    }
+}
+
 fn find_runtime_executable() -> Option<PathBuf> {
     if let Ok(runtime_path) = std::env::var("BESFA_RUNTIME_PATH") {
         let runtime_path = PathBuf::from(runtime_path);
@@ -235,6 +293,15 @@ fn runtime_executable_candidates() -> Vec<PathBuf> {
     candidates.push(root.join("target").join("debug").join(executable_name));
     candidates.push(root.join("target").join("release").join(executable_name));
     candidates
+}
+
+fn runtime_log_path(working_dir: &Path) -> PathBuf {
+    let root = workspace_root();
+    if root.is_dir() {
+        return root.join("target").join("besfa_runtime.log");
+    }
+
+    working_dir.join("besfa_runtime.log")
 }
 
 fn runtime_working_dir(runtime_path: &Path) -> PathBuf {
@@ -276,5 +343,10 @@ mod tests {
             crate::besfa_flutter_plugin_abi_version(),
             besfa_core::ABI_VERSION
         );
+    }
+
+    #[test]
+    fn runtime_log_path_is_null_before_launch() {
+        assert!(crate::besfa_runtime_log_path().is_null());
     }
 }

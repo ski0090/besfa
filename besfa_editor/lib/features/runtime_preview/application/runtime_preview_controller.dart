@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:besfa_editor/features/runtime_ipc/application/runtime_ipc_client.dart';
 import 'package:besfa_editor/features/runtime_ipc/domain/runtime_ipc_models.dart';
@@ -27,7 +29,12 @@ class RuntimePreviewController extends ChangeNotifier {
   StreamSubscription<RuntimeIpcEvent>? _ipcEventsSubscription;
   Timer? _statusTimer;
   Timer? _previewTextureFrameTimer;
+  Timer? _nativeLogTimer;
+  String? _nativeLogPath;
+  int _nativeLogOffset = 0;
+  String _nativeLogRemainder = '';
   bool _isMarkingPreviewFrame = false;
+  bool _isReadingNativeLog = false;
   bool _isRuntimeIpcReady = false;
   bool _disposed = false;
 
@@ -174,6 +181,7 @@ class RuntimePreviewController extends ChangeNotifier {
     _disposed = true;
     _statusTimer?.cancel();
     _previewTextureFrameTimer?.cancel();
+    _stopNativeRuntimeLogTail();
     unawaited(_ipcEventsSubscription?.cancel());
     final textureId = previewTextureId;
     if (textureId != null) {
@@ -289,7 +297,8 @@ class RuntimePreviewController extends ChangeNotifier {
       _plugin.stopRuntime();
       await _ipcClient.disconnect();
       _isRuntimeIpcReady = false;
-      _clearRuntimeData();
+      await _pollNativeRuntimeLog();
+      _clearRuntimeData(clearLogs: false);
       _apply(
         status: RuntimePreviewStatus.failed,
         message: _runtimeReadyFailureMessage(runtimeState),
@@ -328,6 +337,7 @@ class RuntimePreviewController extends ChangeNotifier {
       return null;
     }
 
+    _beginNativeRuntimeLogTail(reset: true);
     return handshake;
   }
 
@@ -385,21 +395,125 @@ class RuntimePreviewController extends ChangeNotifier {
         );
       case RuntimeIpcEventKind.log:
         final log = RuntimeLogEntry.fromPayload(event.payload);
-        final nextLogs = [...logs, log];
-        logs = nextLogs.length <= 200
-            ? nextLogs
-            : nextLogs.sublist(nextLogs.length - 200);
-        message = log.message;
-        notifyListeners();
+        _appendLog(log, updateMessage: true);
       case RuntimeIpcEventKind.unknown:
         return;
     }
   }
 
-  void _clearRuntimeData() {
+  void _appendLog(RuntimeLogEntry log, {bool updateMessage = false}) {
+    _appendLogs([log], updateMessage: updateMessage);
+  }
+
+  void _appendLogs(
+    List<RuntimeLogEntry> newLogs, {
+    bool updateMessage = false,
+  }) {
+    if (_disposed || newLogs.isEmpty) {
+      return;
+    }
+
+    final nextLogs = [...logs, ...newLogs];
+    logs = nextLogs.length <= 200
+        ? nextLogs
+        : nextLogs.sublist(nextLogs.length - 200);
+    if (updateMessage) {
+      message = newLogs.last.message;
+    }
+    notifyListeners();
+  }
+
+  void _beginNativeRuntimeLogTail({bool reset = false}) {
+    final path = _plugin.runtimeLogPath;
+    if (path == null || path.isEmpty) {
+      return;
+    }
+
+    _nativeLogPath = path;
+    if (reset) {
+      _nativeLogOffset = 0;
+      _nativeLogRemainder = '';
+    }
+
+    _nativeLogTimer?.cancel();
+    _nativeLogTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      unawaited(_pollNativeRuntimeLog());
+    });
+    unawaited(_pollNativeRuntimeLog());
+  }
+
+  void _stopNativeRuntimeLogTail() {
+    _nativeLogTimer?.cancel();
+    _nativeLogTimer = null;
+    _nativeLogPath = null;
+    _nativeLogOffset = 0;
+    _nativeLogRemainder = '';
+    _isReadingNativeLog = false;
+  }
+
+  Future<void> _pollNativeRuntimeLog() async {
+    final path = _nativeLogPath;
+    if (_disposed || path == null || _isReadingNativeLog) {
+      return;
+    }
+
+    _isReadingNativeLog = true;
+    try {
+      final file = File(path);
+      if (!await file.exists()) {
+        return;
+      }
+
+      final length = await file.length();
+      if (length < _nativeLogOffset) {
+        _nativeLogOffset = 0;
+        _nativeLogRemainder = '';
+      }
+      if (length == _nativeLogOffset) {
+        return;
+      }
+
+      final reader = await file.open();
+      try {
+        await reader.setPosition(_nativeLogOffset);
+        final bytes = await reader.read(length - _nativeLogOffset);
+        _nativeLogOffset = length;
+        _appendNativeLogText(utf8.decode(bytes, allowMalformed: true));
+      } finally {
+        await reader.close();
+      }
+    } finally {
+      _isReadingNativeLog = false;
+    }
+  }
+
+  void _appendNativeLogText(String text) {
+    if (text.isEmpty) {
+      return;
+    }
+
+    final combined = '$_nativeLogRemainder$text'
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n');
+    final endsWithNewline = combined.endsWith('\n');
+    final lines = combined.split('\n');
+    _nativeLogRemainder = endsWithNewline ? '' : lines.removeLast();
+
+    final entries = [
+      for (final line in lines)
+        if (line.trim().isNotEmpty)
+          RuntimeLogEntry(level: 'native', message: line),
+    ];
+    _appendLogs(entries);
+  }
+
+  void _clearRuntimeData({bool clearLogs = true}) {
+    _stopNativeRuntimeLogTail();
     sceneSnapshot = null;
     frameStats = null;
-    logs = const [];
+    if (clearLogs) {
+      logs = const [];
+    }
     _previewTextureFrameTimer?.cancel();
     _previewTextureFrameTimer = null;
     _isMarkingPreviewFrame = false;

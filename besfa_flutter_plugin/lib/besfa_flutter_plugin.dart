@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:ffi';
+
 import 'besfa_flutter_plugin_platform_interface.dart';
 import 'src/native_api.dart' as native;
 import 'src/preview_surface_descriptor.dart';
@@ -184,4 +187,29 @@ class BesfaFlutterPlugin {
       native.besfaRuntimeLastErrorCode(),
     );
   }
+
+  /// Native stdout/stderr log file path for the tracked runtime process.
+  String? get runtimeLogPath {
+    return _nativeUtf8PointerToString(native.besfaRuntimeLogPath());
+  }
+}
+
+String? _nativeUtf8PointerToString(Pointer<Char> pointer) {
+  if (pointer == nullptr) {
+    return null;
+  }
+
+  final units = <int>[];
+  var offset = 0;
+  while (true) {
+    final value = (pointer + offset).value;
+    if (value == 0) {
+      break;
+    }
+
+    units.add(value & 0xff);
+    offset += 1;
+  }
+
+  return utf8.decode(units, allowMalformed: true);
 }

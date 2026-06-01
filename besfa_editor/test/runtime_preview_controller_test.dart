@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:besfa_editor/features/runtime_ipc/domain/runtime_ipc_models.dart';
 import 'package:besfa_editor/features/runtime_preview/application/runtime_preview_controller.dart';
 import 'package:besfa_editor/features/runtime_preview/domain/runtime_preview_status.dart';
@@ -206,5 +208,65 @@ void main() {
 
     expect(controller.logs.single.message, 'Created Cube 1');
     expect(controller.message, 'Created Cube 1');
+  });
+
+  test('tails native runtime stdout and stderr logs', () async {
+    final tempDir = await Directory.systemTemp.createTemp('besfa_logs_');
+    addTearDown(() => tempDir.delete(recursive: true));
+    final logFile = File('${tempDir.path}${Platform.pathSeparator}runtime.log');
+    await logFile.writeAsString('');
+
+    final plugin = FakeBesfaFlutterPlugin()..runtimeLogPathValue = logFile.path;
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    await controller.ensureRuntimeReady();
+    await logFile.writeAsString('native hello\n', mode: FileMode.append);
+    await Future<void>.delayed(const Duration(milliseconds: 650));
+
+    expect(
+      controller.logs,
+      contains(
+        isA<RuntimeLogEntry>()
+            .having((entry) => entry.level, 'level', 'native')
+            .having((entry) => entry.message, 'message', 'native hello'),
+      ),
+    );
+    expect(controller.message, isNull);
+  });
+
+  test('keeps native runtime logs when IPC startup fails', () async {
+    final tempDir = await Directory.systemTemp.createTemp('besfa_logs_');
+    addTearDown(() => tempDir.delete(recursive: true));
+    final logFile = File('${tempDir.path}${Platform.pathSeparator}runtime.log');
+    await logFile.writeAsString('startup failed\n');
+
+    final plugin = FakeBesfaFlutterPlugin()..runtimeLogPathValue = logFile.path;
+    final ipcClient = FakeRuntimeIpcClient()
+      ..connectError = StateError('not ready');
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    await controller.ensureRuntimeReady();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(controller.status, RuntimePreviewStatus.failed);
+    expect(
+      controller.logs,
+      contains(
+        isA<RuntimeLogEntry>()
+            .having((entry) => entry.level, 'level', 'native')
+            .having((entry) => entry.message, 'message', 'startup failed'),
+      ),
+    );
   });
 }
