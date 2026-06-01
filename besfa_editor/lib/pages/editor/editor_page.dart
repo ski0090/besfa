@@ -89,6 +89,8 @@ class _EditorPageState extends State<EditorPage> {
                         child: InspectorPanel(
                           selectedEntity:
                               runtimePreview.sceneSnapshot?.selectedEntity,
+                          onSetTranslation:
+                              runtimePreview.setSelectedEntityTranslation,
                         ),
                       ),
                     ],
