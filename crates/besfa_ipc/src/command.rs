@@ -8,6 +8,8 @@ pub const METHOD_OPEN_PROJECT: &str = "open_project";
 pub const METHOD_RELOAD_SCENE: &str = "reload_scene";
 /// Runtime command method name for selecting an entity.
 pub const METHOD_SELECT_ENTITY: &str = "select_entity";
+/// Runtime command method name for creating an entity.
+pub const METHOD_CREATE_ENTITY: &str = "create_entity";
 
 /// Typed editor-to-runtime command set.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +20,8 @@ pub enum RuntimeCommand {
     ReloadScene,
     /// Select one runtime entity by id.
     SelectEntity(SelectEntityParams),
+    /// Create a runtime entity in the active scene.
+    CreateEntity(CreateEntityParams),
 }
 
 impl RuntimeCommand {
@@ -27,6 +31,7 @@ impl RuntimeCommand {
             RuntimeCommand::OpenProject(_) => METHOD_OPEN_PROJECT,
             RuntimeCommand::ReloadScene => METHOD_RELOAD_SCENE,
             RuntimeCommand::SelectEntity(_) => METHOD_SELECT_ENTITY,
+            RuntimeCommand::CreateEntity(_) => METHOD_CREATE_ENTITY,
         }
     }
 
@@ -36,6 +41,7 @@ impl RuntimeCommand {
             RuntimeCommand::OpenProject(params) => json!(params),
             RuntimeCommand::ReloadScene => json!({}),
             RuntimeCommand::SelectEntity(params) => json!(params),
+            RuntimeCommand::CreateEntity(params) => json!(params),
         }
     }
 
@@ -48,6 +54,9 @@ impl RuntimeCommand {
             METHOD_RELOAD_SCENE => Ok(RuntimeCommand::ReloadScene),
             METHOD_SELECT_ENTITY => serde_json::from_value(params)
                 .map(RuntimeCommand::SelectEntity)
+                .map_err(|error| IpcError::invalid_params(method, error)),
+            METHOD_CREATE_ENTITY => serde_json::from_value(params)
+                .map(RuntimeCommand::CreateEntity)
                 .map_err(|error| IpcError::invalid_params(method, error)),
             _ => Err(IpcError::unsupported_command(method)),
         }
@@ -65,5 +74,25 @@ pub struct OpenProjectParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SelectEntityParams {
     /// Stable runtime entity id to select.
+    pub entity_id: String,
+}
+
+/// Parameters for the `create_entity` command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateEntityParams {
+    /// Runtime-supported entity kind, such as `cube`.
+    pub kind: String,
+    /// Optional display name. The runtime generates one when omitted.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Optional parent entity id. The runtime uses the world root when omitted.
+    #[serde(default)]
+    pub parent_entity_id: Option<String>,
+}
+
+/// Result payload returned by a successful `create_entity` command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateEntityResult {
+    /// Stable runtime entity id assigned by the runtime.
     pub entity_id: String,
 }

@@ -15,7 +15,8 @@ plugin. It deliberately sits between the engine/editor domain and the concrete
 - `runtime_ipc.rs`: `BesfaRuntimeIpcPlugin` composition.
 - `runtime_ipc/transport.rs`: localhost TCP handshake, command reads, event
   writes.
-- `runtime_ipc/systems.rs`: Bevy systems that handle commands and emit events.
+- `runtime_ipc/systems.rs`: Bevy systems that handle commands, create preview
+  scene entities, and emit events.
 - `runtime_ipc/snapshot.rs`: preview ECS metadata to `scene_snapshot` payloads.
 - `runtime_ipc/resources.rs`: runtime IPC resources, command queues, and client
   registry.
@@ -32,6 +33,13 @@ editor can attach the same GPU resource as a `Texture`.
 The direct render bridge uses `wgpu-hal` and `windows` versions that match
 Bevy's `wgpu` stack. Updating those crates independently can create duplicate
 D3D12 wrapper types and break raw HAL interop.
+
+## Runtime Editing
+
+The IPC plugin handles editor commands against the live preview world. The
+first editing command is `create_entity` with `kind: "cube"`, which spawns a
+cube under the requested parent, selects it, and requests a fresh
+`scene_snapshot`.
 
 ## Usage
 

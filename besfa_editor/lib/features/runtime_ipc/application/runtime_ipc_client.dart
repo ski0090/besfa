@@ -9,6 +9,7 @@ const int runtimeIpcProtocolVersion = 1;
 const String runtimeIpcOpenProjectMethod = 'open_project';
 const String runtimeIpcReloadSceneMethod = 'reload_scene';
 const String runtimeIpcSelectEntityMethod = 'select_entity';
+const String runtimeIpcCreateEntityMethod = 'create_entity';
 
 /// Port and token reserved by the editor before launching the runtime.
 class RuntimeIpcHandshake {
@@ -143,6 +144,27 @@ class RuntimeIpcClient {
       runtimeIpcSelectEntityMethod,
       params: {'entity_id': entityId},
     );
+  }
+
+  /// Sends `create_entity` to the runtime and returns the new entity id.
+  Future<String?> createEntity({
+    required String kind,
+    String? name,
+    String? parentEntityId,
+  }) async {
+    final params = <String, Object?>{'kind': kind};
+    if (name != null) {
+      params['name'] = name;
+    }
+    if (parentEntityId != null) {
+      params['parent_entity_id'] = parentEntityId;
+    }
+
+    final response = await sendCommand(
+      runtimeIpcCreateEntityMethod,
+      params: params,
+    );
+    return response.result['entity_id'] as String?;
   }
 
   void _sendHello(Socket socket, RuntimeIpcHandshake handshake) {

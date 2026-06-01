@@ -14,6 +14,7 @@ The editor follows a lightweight Feature-Sliced Design layout:
 
 - Boot an editor-owned Scene Runtime automatically when the editor opens.
 - Restart the Scene Runtime and reload the active scene from the top bar.
+- Add cube entities to the live runtime scene through IPC.
 - Attach the runtime-owned Windows shared preview surface in the viewport when
   available.
 - Connect to the runtime over localhost TCP IPC.
@@ -37,3 +38,5 @@ The runtime binary is discovered by the native plugin under the workspace
 The editor treats the runtime as a resident Scene View backend rather than a
 manual preview window. On startup it launches the runtime with IPC arguments,
 waits for `runtime_ready`, and keeps the viewport available for scene editing.
+Scene editing commands, such as adding a cube, are sent to the runtime over IPC
+and reflected back through `scene_snapshot`.

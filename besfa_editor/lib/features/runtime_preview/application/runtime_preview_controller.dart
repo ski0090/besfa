@@ -200,6 +200,23 @@ class RuntimePreviewController extends ChangeNotifier {
     }
   }
 
+  /// Creates a cube entity in the runtime scene.
+  Future<void> createCube() async {
+    if (isBusy ||
+        status != RuntimePreviewStatus.running ||
+        !_isRuntimeIpcReady) {
+      return;
+    }
+
+    _apply(isBusy: true);
+    try {
+      await _ipcClient.createEntity(kind: 'cube');
+      _apply(isBusy: false);
+    } on Object {
+      _apply(message: 'Runtime cube could not be created.', isBusy: false);
+    }
+  }
+
   Future<void> _recoverRuntimeAfterExit(String startingMessage) async {
     if (_disposed || isBusy) {
       return;

@@ -326,6 +326,7 @@ dependencies = [
  "besfa_core",
  "besfa_ipc",
  "bevy",
+ "serde_json",
  "wgpu-hal",
  "windows 0.58.0",
 ]

@@ -83,6 +83,7 @@ class FakeBesfaFlutterPlugin extends BesfaFlutterPlugin {
 class FakeRuntimeIpcClient extends RuntimeIpcClient {
   final StreamController<RuntimeIpcEvent> _events =
       StreamController<RuntimeIpcEvent>.broadcast();
+  int createEntityCalls = 0;
 
   @override
   Stream<RuntimeIpcEvent> get events => _events.stream;
@@ -114,4 +115,14 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
 
   @override
   Future<void> selectEntity(String entityId) async {}
+
+  @override
+  Future<String?> createEntity({
+    required String kind,
+    String? name,
+    String? parentEntityId,
+  }) async {
+    createEntityCalls += 1;
+    return 'created_$createEntityCalls';
+  }
 }

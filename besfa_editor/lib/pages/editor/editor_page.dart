@@ -58,6 +58,7 @@ class _EditorPageState extends State<EditorPage> {
                   runtimeStatus: runtimePreview.status,
                   runtimeMessage: runtimePreview.message,
                   isRuntimeBusy: runtimePreview.isBusy,
+                  onCreateCube: runtimePreview.createCube,
                   onReloadRuntime: runtimePreview.reloadRuntime,
                   onRestartRuntime: runtimePreview.restartRuntime,
                 ),

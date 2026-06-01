@@ -94,6 +94,52 @@ void main() {
     expect((await command.future)['method'], runtimeIpcReloadSceneMethod);
     expect((await snapshotEvent).payload['root'], isA<Map<String, Object?>>());
   });
+
+  test('sends create_entity and returns the runtime entity id', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final command = Completer<Map<String, Object?>>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              command.complete(decoded);
+              socket.write(
+                '${jsonEncode({
+                  'type': 'response',
+                  'id': decoded['id'],
+                  'ok': true,
+                  'result': {'entity_id': 'cube_1'},
+                })}\n',
+              );
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+
+    final entityId = await client.createEntity(kind: 'cube', name: 'Cube');
+
+    expect((await command.future)['method'], runtimeIpcCreateEntityMethod);
+    expect(entityId, 'cube_1');
+  });
 }
 
 Map<String, Object?> _asMap(Object? value) {

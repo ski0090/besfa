@@ -7,6 +7,7 @@ class EditorTopBar extends StatelessWidget {
     required this.runtimeStatus,
     required this.runtimeMessage,
     required this.isRuntimeBusy,
+    required this.onCreateCube,
     required this.onReloadRuntime,
     required this.onRestartRuntime,
     super.key,
@@ -15,6 +16,9 @@ class EditorTopBar extends StatelessWidget {
   final RuntimePreviewStatus runtimeStatus;
   final String? runtimeMessage;
   final bool isRuntimeBusy;
+
+  /// Creates a cube in the active runtime scene.
+  final VoidCallback onCreateCube;
 
   /// Reloads the currently running scene, starting the runtime if needed.
   final VoidCallback onReloadRuntime;
@@ -70,6 +74,14 @@ class EditorTopBar extends StatelessWidget {
             tooltip: 'Open project',
             onPressed: () {},
             icon: const Icon(Icons.folder_open),
+          ),
+          IconButton(
+            tooltip: 'Add cube',
+            onPressed:
+                isRuntimeBusy || runtimeStatus != RuntimePreviewStatus.running
+                ? null
+                : onCreateCube,
+            icon: const Icon(Icons.add_box),
           ),
           IconButton(
             tooltip: 'Reload scene',

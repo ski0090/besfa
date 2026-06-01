@@ -52,10 +52,10 @@ struct PreviewSceneRecord {
 impl From<&PreviewSceneNode> for PreviewSceneRecord {
     fn from(node: &PreviewSceneNode) -> Self {
         Self {
-            id: node.id.to_string(),
-            name: node.name.to_string(),
-            kind: node.kind.to_string(),
-            parent_id: node.parent_id.map(str::to_string),
+            id: node.id.clone(),
+            name: node.name.clone(),
+            kind: node.kind.clone(),
+            parent_id: node.parent_id.clone(),
         }
     }
 }

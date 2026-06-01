@@ -38,10 +38,11 @@ impl Plugin for BesfaRuntimeIpcPlugin {
             .add_systems(
                 Update,
                 (
-                    process_runtime_ipc_commands,
                     emit_requested_scene_snapshot,
+                    process_runtime_ipc_commands,
                     emit_frame_stats,
-                ),
+                )
+                    .chain(),
             );
     }
 }

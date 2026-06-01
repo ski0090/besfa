@@ -22,6 +22,12 @@ Commands are sent by the editor:
 {"type":"command","id":1,"method":"reload_scene","params":{}}
 ```
 
+Entity creation includes the entity kind and optional display/parent metadata:
+
+```json
+{"type":"command","id":2,"method":"create_entity","params":{"kind":"cube","name":"Cube","parent_entity_id":"world"}}
+```
+
 Responses are sent by the runtime:
 
 ```json
@@ -39,6 +45,8 @@ Events are pushed by the runtime:
 - `open_project`: records the project path for the runtime session.
 - `reload_scene`: asks the runtime to rebuild or refresh its preview scene.
 - `select_entity`: asks the runtime to update its selected entity.
+- `create_entity`: asks the runtime to create an entity in the active scene.
+  The current runtime supports `kind: "cube"` and returns `entity_id`.
 
 ## Events
 

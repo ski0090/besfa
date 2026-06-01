@@ -11,8 +11,9 @@ pub use codec::{
     preview_surface_ready_message, runtime_ready_message, scene_snapshot_message,
 };
 pub use command::{
-    METHOD_OPEN_PROJECT, METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, OpenProjectParams,
-    RuntimeCommand, SelectEntityParams,
+    CreateEntityParams, CreateEntityResult, METHOD_CREATE_ENTITY, METHOD_OPEN_PROJECT,
+    METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, OpenProjectParams, RuntimeCommand,
+    SelectEntityParams,
 };
 pub use config::RuntimeIpcConfig;
 pub use error::IpcError;
@@ -61,6 +62,23 @@ mod tests {
 
         assert!(line.contains("\"method\":\"select_entity\""));
         assert!(line.contains("\"entity_id\":\"camera\""));
+    }
+
+    #[test]
+    fn encodes_create_entity_command() {
+        let line = encode_line(&command_message(
+            8,
+            RuntimeCommand::CreateEntity(CreateEntityParams {
+                kind: "cube".to_string(),
+                name: Some("Cube".to_string()),
+                parent_entity_id: Some("world".to_string()),
+            }),
+        ))
+        .unwrap();
+
+        assert!(line.contains("\"method\":\"create_entity\""));
+        assert!(line.contains("\"kind\":\"cube\""));
+        assert!(line.contains("\"parent_entity_id\":\"world\""));
     }
 
     #[test]

@@ -5,17 +5,22 @@ use super::{
     },
     snapshot::build_scene_snapshot,
 };
-use crate::preview::PreviewSceneNode;
+use crate::preview::{PreviewSceneNode, PreviewSceneObjects};
 use besfa_ipc::{
-    FrameStatsPayload, IpcError, RuntimeCommand, empty_ok_response, error_response,
-    frame_stats_message, log_message, scene_snapshot_message,
+    CreateEntityResult, FrameStatsPayload, IpcError, RuntimeCommand, empty_ok_response,
+    error_response, frame_stats_message, log_message, ok_response, scene_snapshot_message,
 };
 use bevy::prelude::*;
+use serde_json::json;
 
 pub(super) fn process_runtime_ipc_commands(
     server: Res<RuntimeIpcServer>,
+    mut commands: Commands,
     mut project: ResMut<RuntimeIpcProject>,
     mut selection: ResMut<RuntimeIpcSelection>,
+    mut scene_objects: ResMut<PreviewSceneObjects>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     scene_nodes: Query<&PreviewSceneNode>,
 ) {
     for request in server.drain_commands() {
@@ -35,7 +40,10 @@ pub(super) fn process_runtime_ipc_commands(
                 server.request_snapshot();
             }
             RuntimeCommand::SelectEntity(params) => {
-                if scene_nodes.iter().any(|node| node.id == params.entity_id) {
+                if scene_nodes
+                    .iter()
+                    .any(|node| node.id.as_str() == params.entity_id)
+                {
                     selection.selected_entity_id = Some(params.entity_id.clone());
                     let _ = request.response_tx.send(empty_ok_response(request.id));
                     server.request_snapshot();
@@ -48,6 +56,66 @@ pub(super) fn process_runtime_ipc_commands(
                         ),
                     ));
                 }
+            }
+            RuntimeCommand::CreateEntity(params) => {
+                if params.kind != "cube" {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "unsupported_entity_kind",
+                            format!("Runtime cannot create entity kind: {}", params.kind),
+                        ),
+                    ));
+                    continue;
+                }
+
+                let parent_entity_id = params
+                    .parent_entity_id
+                    .clone()
+                    .unwrap_or_else(|| "world".to_string());
+                if !scene_nodes
+                    .iter()
+                    .any(|node| node.id.as_str() == parent_entity_id)
+                {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "parent_entity_not_found",
+                            format!("Parent runtime entity was not found: {parent_entity_id}"),
+                        ),
+                    ));
+                    continue;
+                }
+
+                let (entity_id, default_name, position) = scene_objects.next_cube();
+                let name = params.name.clone().unwrap_or(default_name);
+                commands.spawn((
+                    Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+                    MeshMaterial3d(materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.35, 0.47, 0.95),
+                        metallic: 0.05,
+                        perceptual_roughness: 0.6,
+                        ..default()
+                    })),
+                    Transform::from_translation(position),
+                    Name::new(name.clone()),
+                    PreviewSceneNode::child(
+                        entity_id.clone(),
+                        name.clone(),
+                        "mesh",
+                        parent_entity_id,
+                    ),
+                ));
+
+                selection.selected_entity_id = Some(entity_id.clone());
+                let _ = request.response_tx.send(ok_response(
+                    request.id,
+                    json!(CreateEntityResult {
+                        entity_id: entity_id.clone(),
+                    }),
+                ));
+                server.broadcast(log_message("info", format!("Created {name}")));
+                server.request_snapshot();
             }
         }
     }

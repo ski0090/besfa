@@ -88,6 +88,23 @@ void main() {
     expect(controller.sceneSnapshot?.root.name, 'World');
   });
 
+  test('creates cubes through runtime IPC', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    await controller.ensureRuntimeReady();
+    await controller.createCube();
+
+    expect(controller.status, RuntimePreviewStatus.running);
+    expect(ipcClient.createEntityCalls, 1);
+  });
+
   test('attaches runtime preview surface events', () async {
     final plugin = FakeBesfaFlutterPlugin();
     final ipcClient = FakeRuntimeIpcClient();
