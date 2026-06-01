@@ -37,4 +37,36 @@ void main() {
     expect(pickedX, closeTo(0.5, 0.01));
     expect(pickedY, closeTo(0.5, 0.01));
   });
+
+  testWidgets('pins the axis gizmo to the preview surface corner', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 800,
+            height: 600,
+            child: EditorViewport(
+              platformVersion: Future.value('test platform'),
+              abiVersion: 1,
+              runtimeStatus: RuntimePreviewStatus.running,
+              runtimeMessage: null,
+              frameStats: null,
+              previewTextureId: 1,
+              onPickViewport: (_, _) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final textureRect = tester.getRect(find.byType(Texture));
+    final gizmoRect = tester.getRect(
+      find.byKey(const ValueKey('viewportAxisGizmo')),
+    );
+
+    expect(gizmoRect.left, closeTo(textureRect.left + 12, 0.01));
+    expect(gizmoRect.top, closeTo(textureRect.top + 12, 0.01));
+  });
 }

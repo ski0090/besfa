@@ -8,8 +8,8 @@ plugin. It deliberately sits between the engine/editor domain and the concrete
 
 ## Modules
 
-- `preview.rs`: `BesfaPreviewPlugin`, preview scene setup, grid and world axis
-  gizmo drawing, camera, light, and cube animation.
+- `preview.rs`: `BesfaPreviewPlugin`, preview scene setup, grid drawing,
+  camera, light, and cube animation.
 - `external_preview.rs`: runtime-owned D3D12 shared render target for embedded
   editor preview.
 - `runtime_ipc.rs`: `BesfaRuntimeIpcPlugin` composition.
@@ -33,9 +33,6 @@ editor can attach the same GPU resource as a `Texture`.
 The direct render bridge uses `wgpu-hal` and `windows` versions that match
 Bevy's `wgpu` stack. Updating those crates independently can create duplicate
 D3D12 wrapper types and break raw HAL interop.
-
-The preview scene draws a world-space axis gizmo at the origin. X is red, Y is
-green, and Z is blue, matching common editor conventions.
 
 ## Runtime Editing
 
