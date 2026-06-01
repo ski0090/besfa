@@ -4,6 +4,7 @@ import 'package:besfa_editor/features/runtime_preview/application/runtime_previe
 import 'package:besfa_editor/widgets/editor_shell/editor_top_bar.dart';
 import 'package:besfa_editor/widgets/editor_shell/editor_viewport.dart';
 import 'package:besfa_editor/widgets/editor_shell/inspector_panel.dart';
+import 'package:besfa_editor/widgets/editor_shell/runtime_log_panel.dart';
 import 'package:besfa_editor/widgets/editor_shell/scene_tree_panel.dart';
 import 'package:flutter/material.dart';
 
@@ -96,6 +97,7 @@ class _EditorPageState extends State<EditorPage> {
                     ],
                   ),
                 ),
+                RuntimeLogPanel(logs: runtimePreview.logs),
               ],
             ),
           ),

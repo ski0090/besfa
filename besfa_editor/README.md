@@ -23,6 +23,9 @@ The editor follows a lightweight Feature-Sliced Design layout:
 - Show selected runtime entity metadata and editable position fields in the
   Inspector panel.
 - Display runtime status, log messages, and frame stats in the editor shell.
+- Show a collapsible bottom runtime log panel. The collapsed panel shows the
+  latest log line; the expanded panel scrolls through runtime logs and can copy
+  all logs to the clipboard.
 - Recover the Scene Runtime automatically when the tracked process exits.
 
 ## Development

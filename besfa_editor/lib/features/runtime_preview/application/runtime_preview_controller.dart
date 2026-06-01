@@ -385,7 +385,10 @@ class RuntimePreviewController extends ChangeNotifier {
         );
       case RuntimeIpcEventKind.log:
         final log = RuntimeLogEntry.fromPayload(event.payload);
-        logs = [...logs.take(19), log];
+        final nextLogs = [...logs, log];
+        logs = nextLogs.length <= 200
+            ? nextLogs
+            : nextLogs.sublist(nextLogs.length - 200);
         message = log.message;
         notifyListeners();
       case RuntimeIpcEventKind.unknown:

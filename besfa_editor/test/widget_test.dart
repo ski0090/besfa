@@ -30,6 +30,7 @@ void main() {
 
       expect(find.text('Besfa'), findsOneWidget);
       expect(find.text('Waiting for scene surface'), findsOneWidget);
+      expect(find.text('No runtime logs'), findsOneWidget);
     } finally {
       controller.dispose();
       await ipcClient.close();

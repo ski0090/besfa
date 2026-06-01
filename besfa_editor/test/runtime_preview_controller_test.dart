@@ -185,4 +185,26 @@ void main() {
 
     expect(controller.previewTextureId, 13);
   });
+
+  test('keeps runtime logs for the bottom console', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    ipcClient.emit(
+      const RuntimeIpcEvent(
+        kind: RuntimeIpcEventKind.log,
+        payload: {'level': 'info', 'message': 'Created Cube 1'},
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.logs.single.message, 'Created Cube 1');
+    expect(controller.message, 'Created Cube 1');
+  });
 }
