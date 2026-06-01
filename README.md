@@ -11,13 +11,15 @@ The early architecture is intentionally split:
 - `crates/besfa_bevy`: Bevy integration layer.
 - `crates/besfa_runtime`: preview/runtime entry point.
 
-First milestone: keep the editor UI, native bridge, and Bevy runtime loosely coupled so the preview path can evolve from a separate runtime window to Windows texture/D3D interop later.
+First milestone: keep the editor UI, native bridge, and Bevy runtime loosely
+coupled while the editor-owned Scene Runtime provides the always-on viewport
+used for scene editing.
 
 ## Project Guides
 
 Each workspace project owns a short README for its boundary:
 
-- `besfa_editor/README.md`: Flutter editor layout, Feature-Sliced Design ownership, and preview controls.
+- `besfa_editor/README.md`: Flutter editor layout, Feature-Sliced Design ownership, and resident Scene Runtime controls.
 - `besfa_flutter_plugin/README.md`: Flutter-facing native bridge API and runtime launch behavior.
 - `crates/besfa_core/README.md`: shared engine metadata and ABI constants.
 - `crates/besfa_ipc/README.md`: TCP newline-delimited JSON protocol, commands, events, and payload examples.
@@ -32,7 +34,7 @@ Note: Bevy 0.18 uses `wgpu`, which does not expose a native D3D11 backend. The p
 
 Development preview launch can be overridden with `BESFA_RUNTIME_PATH` and `BESFA_RUNTIME_WORKING_DIR` when the runtime binary is not beside the editor executable or under the workspace `target` directory.
 
-Runtime IPC starts as TCP on `127.0.0.1` with newline-delimited JSON. The editor launches the runtime with `--ipc-port` and `--ipc-token`, sends a `hello` message, and treats the preview as ready after receiving `runtime_ready`.
+Runtime IPC starts as TCP on `127.0.0.1` with newline-delimited JSON. The editor launches the runtime with `--ipc-port` and `--ipc-token`, sends a `hello` message, and treats the Scene Runtime as ready after receiving `runtime_ready`.
 
 ## Common Commands
 

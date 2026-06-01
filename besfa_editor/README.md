@@ -12,13 +12,15 @@ The editor follows a lightweight Feature-Sliced Design layout:
 
 ## Current Features
 
-- Launch, stop, and reload the standalone Bevy preview runtime.
+- Boot an editor-owned Scene Runtime automatically when the editor opens.
+- Restart the Scene Runtime and reload the active scene from the top bar.
 - Attach the runtime-owned Windows shared preview surface in the viewport when
   available.
 - Connect to the runtime over localhost TCP IPC.
 - Render the runtime `scene_snapshot` in the Scene panel.
 - Forward scene tree selection to the runtime with `select_entity`.
 - Display runtime status, log messages, and frame stats in the editor shell.
+- Recover the Scene Runtime automatically when the tracked process exits.
 
 ## Development
 
@@ -31,3 +33,7 @@ flutter build windows
 The runtime binary is discovered by the native plugin under the workspace
 `target` directory or beside the editor executable. Override discovery with
 `BESFA_RUNTIME_PATH` and `BESFA_RUNTIME_WORKING_DIR` when needed.
+
+The editor treats the runtime as a resident Scene View backend rather than a
+manual preview window. On startup it launches the runtime with IPC arguments,
+waits for `runtime_ready`, and keeps the viewport available for scene editing.
