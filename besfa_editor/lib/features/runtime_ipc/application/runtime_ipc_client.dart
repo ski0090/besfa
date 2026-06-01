@@ -12,6 +12,7 @@ const String runtimeIpcSelectEntityMethod = 'select_entity';
 const String runtimeIpcPickEntityMethod = 'pick_entity';
 const String runtimeIpcCreateEntityMethod = 'create_entity';
 const String runtimeIpcSetTransformMethod = 'set_transform';
+const String runtimeIpcEditorCameraInputMethod = 'editor_camera_input';
 
 /// Port and token reserved by the editor before launching the runtime.
 class RuntimeIpcHandshake {
@@ -189,6 +190,30 @@ class RuntimeIpcClient {
     await sendCommand(
       runtimeIpcSetTransformMethod,
       params: {'entity_id': entityId, 'translation': translation.toPayload()},
+    );
+  }
+
+  /// Sends editor-only Scene View camera navigation input to the runtime.
+  Future<void> editorCameraInput({
+    double rotateDeltaX = 0,
+    double rotateDeltaY = 0,
+    double moveForward = 0,
+    double moveRight = 0,
+    double moveUp = 0,
+    double speedMultiplier = 1,
+    double deltaSeconds = 0,
+  }) async {
+    await sendCommand(
+      runtimeIpcEditorCameraInputMethod,
+      params: {
+        'rotate_delta_x': rotateDeltaX,
+        'rotate_delta_y': rotateDeltaY,
+        'move_forward': moveForward,
+        'move_right': moveRight,
+        'move_up': moveUp,
+        'speed_multiplier': speedMultiplier,
+        'delta_seconds': deltaSeconds,
+      },
     );
   }
 

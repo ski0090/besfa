@@ -268,6 +268,35 @@ class RuntimePreviewController extends ChangeNotifier {
     }
   }
 
+  /// Applies editor Scene View camera navigation without changing scene data.
+  Future<void> applyEditorCameraInput({
+    double rotateDeltaX = 0,
+    double rotateDeltaY = 0,
+    double moveForward = 0,
+    double moveRight = 0,
+    double moveUp = 0,
+    double speedMultiplier = 1,
+    double deltaSeconds = 0,
+  }) async {
+    if (status != RuntimePreviewStatus.running || !_isRuntimeIpcReady) {
+      return;
+    }
+
+    try {
+      await _ipcClient.editorCameraInput(
+        rotateDeltaX: rotateDeltaX,
+        rotateDeltaY: rotateDeltaY,
+        moveForward: moveForward,
+        moveRight: moveRight,
+        moveUp: moveUp,
+        speedMultiplier: speedMultiplier,
+        deltaSeconds: deltaSeconds,
+      );
+    } on Object {
+      _apply(message: 'Runtime editor camera could not be updated.');
+    }
+  }
+
   Future<void> _recoverRuntimeAfterExit(String startingMessage) async {
     if (_disposed || isBusy) {
       return;

@@ -251,6 +251,34 @@ void main() {
     expect(controller.sceneSnapshot?.selectedEntity?.name, 'Cube 1');
   });
 
+  test('forwards editor camera navigation input through runtime IPC', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    await controller.ensureRuntimeReady();
+    await controller.applyEditorCameraInput(
+      rotateDeltaX: 8,
+      rotateDeltaY: -3,
+      moveForward: 1,
+      moveRight: -1,
+      speedMultiplier: 4,
+      deltaSeconds: 0.02,
+    );
+
+    expect(ipcClient.lastEditorCameraInput?.rotateDeltaX, 8);
+    expect(ipcClient.lastEditorCameraInput?.rotateDeltaY, -3);
+    expect(ipcClient.lastEditorCameraInput?.moveForward, 1);
+    expect(ipcClient.lastEditorCameraInput?.moveRight, -1);
+    expect(ipcClient.lastEditorCameraInput?.speedMultiplier, 4);
+    expect(ipcClient.lastEditorCameraInput?.deltaSeconds, 0.02);
+  });
+
   test('attaches runtime preview surface events', () async {
     final plugin = FakeBesfaFlutterPlugin();
     final ipcClient = FakeRuntimeIpcClient();

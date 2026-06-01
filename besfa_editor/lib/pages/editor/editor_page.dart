@@ -90,6 +90,19 @@ class _EditorPageState extends State<EditorPage> {
                               ),
                             );
                           },
+                          onEditorCameraInput: (input) {
+                            unawaited(
+                              runtimePreview.applyEditorCameraInput(
+                                rotateDeltaX: input.rotateDeltaX,
+                                rotateDeltaY: input.rotateDeltaY,
+                                moveForward: input.moveForward,
+                                moveRight: input.moveRight,
+                                moveUp: input.moveUp,
+                                speedMultiplier: input.speedMultiplier,
+                                deltaSeconds: input.deltaSeconds,
+                              ),
+                            );
+                          },
                         ),
                       ),
                       const VerticalDivider(width: 1),

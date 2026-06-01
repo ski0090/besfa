@@ -19,6 +19,8 @@ The editor follows a lightweight Feature-Sliced Design layout:
   available.
 - Show a fixed world-space X/Y/Z axis gizmo in the Scene View overlay.
 - Show the selected runtime object's local X/Y/Z axis gizmo in the Scene View.
+- Control the editor-only Scene View camera with secondary-button drag,
+  WASD/QE movement, Shift acceleration, and mouse-wheel dolly.
 - Connect to the runtime over localhost TCP IPC.
 - Render the runtime `scene_snapshot` in the Scene panel.
 - Forward scene tree selection to the runtime with `select_entity`.

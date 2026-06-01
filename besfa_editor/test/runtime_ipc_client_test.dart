@@ -234,6 +234,61 @@ void main() {
     expect(_asMap(sent['params'])['entity_id'], 'cube_1');
     expect(_asMap(_asMap(sent['params'])['translation'])['z'], 3);
   });
+
+  test('sends editor_camera_input with navigation payload', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final command = Completer<Map<String, Object?>>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              command.complete(decoded);
+              socket.write(
+                '${jsonEncode({'type': 'response', 'id': decoded['id'], 'ok': true, 'result': <String, Object?>{}})}\n',
+              );
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+    await client.editorCameraInput(
+      rotateDeltaX: 12,
+      rotateDeltaY: -4,
+      moveForward: 1,
+      moveRight: -1,
+      moveUp: 0,
+      speedMultiplier: 4,
+      deltaSeconds: 0.016,
+    );
+
+    final sent = await command.future;
+    final params = _asMap(sent['params']);
+    expect(sent['method'], runtimeIpcEditorCameraInputMethod);
+    expect(params['rotate_delta_x'], 12);
+    expect(params['rotate_delta_y'], -4);
+    expect(params['move_forward'], 1);
+    expect(params['move_right'], -1);
+    expect(params['speed_multiplier'], 4);
+    expect(params['delta_seconds'], 0.016);
+  });
 }
 
 Map<String, Object?> _asMap(Object? value) {

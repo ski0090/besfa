@@ -90,6 +90,16 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
   int createEntityCalls = 0;
   RuntimeVector3? lastTranslation;
   ({double viewportX, double viewportY})? lastPick;
+  ({
+    double rotateDeltaX,
+    double rotateDeltaY,
+    double moveForward,
+    double moveRight,
+    double moveUp,
+    double speedMultiplier,
+    double deltaSeconds,
+  })?
+  lastEditorCameraInput;
   String? pickResult = 'picked_entity';
   Object? connectError;
 
@@ -154,5 +164,26 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
     required RuntimeVector3 translation,
   }) async {
     lastTranslation = translation;
+  }
+
+  @override
+  Future<void> editorCameraInput({
+    double rotateDeltaX = 0,
+    double rotateDeltaY = 0,
+    double moveForward = 0,
+    double moveRight = 0,
+    double moveUp = 0,
+    double speedMultiplier = 1,
+    double deltaSeconds = 0,
+  }) async {
+    lastEditorCameraInput = (
+      rotateDeltaX: rotateDeltaX,
+      rotateDeltaY: rotateDeltaY,
+      moveForward: moveForward,
+      moveRight: moveRight,
+      moveUp: moveUp,
+      speedMultiplier: speedMultiplier,
+      deltaSeconds: deltaSeconds,
+    );
   }
 }
