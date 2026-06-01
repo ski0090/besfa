@@ -78,6 +78,9 @@ void main() {
             'id': 'world',
             'name': 'World',
             'kind': 'world',
+            'transform': {
+              'translation': {'x': 0, 'y': 1, 'z': 2},
+            },
             'children': <Object?>[],
           },
         },
@@ -88,6 +91,56 @@ void main() {
     expect(controller.status, RuntimePreviewStatus.running);
     expect(controller.sceneSnapshot?.root.name, 'World');
     expect(controller.sceneSnapshot?.selectedEntity?.name, 'World');
+    expect(
+      controller.sceneSnapshot?.selectedEntity?.transform?.translation.y,
+      1,
+    );
+  });
+
+  test('updates selected entity translation through runtime IPC', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    await controller.ensureRuntimeReady();
+    ipcClient.emit(
+      const RuntimeIpcEvent(
+        kind: RuntimeIpcEventKind.sceneSnapshot,
+        payload: {
+          'selected_entity_id': 'cube_1',
+          'root': {
+            'id': 'world',
+            'name': 'World',
+            'kind': 'world',
+            'children': [
+              {
+                'id': 'cube_1',
+                'name': 'Cube 1',
+                'kind': 'mesh',
+                'transform': {
+                  'translation': {'x': 0, 'y': 0, 'z': 0},
+                },
+                'children': <Object?>[],
+              },
+            ],
+          },
+        },
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    await controller.setSelectedEntityTranslation(
+      const RuntimeVector3(x: 1, y: 2, z: 3),
+    );
+
+    expect(ipcClient.lastTranslation?.x, 1);
+    expect(ipcClient.lastTranslation?.y, 2);
+    expect(ipcClient.lastTranslation?.z, 3);
   });
 
   test('creates cubes through runtime IPC', () async {

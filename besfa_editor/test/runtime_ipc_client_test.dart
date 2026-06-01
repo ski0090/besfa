@@ -140,6 +140,51 @@ void main() {
     expect((await command.future)['method'], runtimeIpcCreateEntityMethod);
     expect(entityId, 'cube_1');
   });
+
+  test('sends set_transform with a translation payload', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final command = Completer<Map<String, Object?>>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              command.complete(decoded);
+              socket.write(
+                '${jsonEncode({'type': 'response', 'id': decoded['id'], 'ok': true, 'result': <String, Object?>{}})}\n',
+              );
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+    await client.setTransform(
+      entityId: 'cube_1',
+      translation: const RuntimeVector3(x: 1, y: 2, z: 3),
+    );
+
+    final sent = await command.future;
+    expect(sent['method'], runtimeIpcSetTransformMethod);
+    expect(_asMap(sent['params'])['entity_id'], 'cube_1');
+    expect(_asMap(_asMap(sent['params'])['translation'])['z'], 3);
+  });
 }
 
 Map<String, Object?> _asMap(Object? value) {

@@ -22,6 +22,7 @@ pub(super) fn process_runtime_ipc_commands(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     scene_nodes: Query<&PreviewSceneNode>,
+    mut transforms: Query<(&PreviewSceneNode, &mut Transform)>,
 ) {
     for request in server.drain_commands() {
         match request.command {
@@ -117,6 +118,32 @@ pub(super) fn process_runtime_ipc_commands(
                 server.broadcast(log_message("info", format!("Created {name}")));
                 server.request_snapshot();
             }
+            RuntimeCommand::SetTransform(params) => {
+                if let Some((_, mut transform)) = transforms
+                    .iter_mut()
+                    .find(|(node, _)| node.id.as_str() == params.entity_id)
+                {
+                    transform.translation = Vec3::new(
+                        params.translation.x,
+                        params.translation.y,
+                        params.translation.z,
+                    );
+                    selection.selected_entity_id = Some(params.entity_id.clone());
+                    let _ = request.response_tx.send(empty_ok_response(request.id));
+                    server.request_snapshot();
+                } else {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "transform_not_found",
+                            format!(
+                                "Runtime entity transform was not found: {}",
+                                params.entity_id
+                            ),
+                        ),
+                    ));
+                }
+            }
         }
     }
 }
@@ -125,7 +152,7 @@ pub(super) fn emit_requested_scene_snapshot(
     server: Res<RuntimeIpcServer>,
     mut cursor: ResMut<RuntimeIpcSnapshotCursor>,
     selection: Res<RuntimeIpcSelection>,
-    scene_nodes: Query<&PreviewSceneNode>,
+    scene_nodes: Query<(&PreviewSceneNode, Option<&Transform>)>,
 ) {
     let requested = server.snapshot_request_count();
     if cursor.last_seen == requested {

@@ -28,6 +28,12 @@ Entity creation includes the entity kind and optional display/parent metadata:
 {"type":"command","id":2,"method":"create_entity","params":{"kind":"cube","name":"Cube","parent_entity_id":"world"}}
 ```
 
+Transform updates target one runtime entity and currently carry translation:
+
+```json
+{"type":"command","id":3,"method":"set_transform","params":{"entity_id":"cube_1","translation":{"x":1.0,"y":0.5,"z":-2.0}}}
+```
+
 Responses are sent by the runtime:
 
 ```json
@@ -37,7 +43,7 @@ Responses are sent by the runtime:
 Events are pushed by the runtime:
 
 ```json
-{"type":"event","event":"scene_snapshot","payload":{"root":{"id":"world","name":"World","kind":"world","children":[]}}}
+{"type":"event","event":"scene_snapshot","payload":{"root":{"id":"world","name":"World","kind":"world","children":[{"id":"cube_1","name":"Cube 1","kind":"mesh","transform":{"translation":{"x":0.0,"y":0.5,"z":0.0}},"children":[]}]}}}
 ```
 
 ## Commands
@@ -47,6 +53,8 @@ Events are pushed by the runtime:
 - `select_entity`: asks the runtime to update its selected entity.
 - `create_entity`: asks the runtime to create an entity in the active scene.
   The current runtime supports `kind: "cube"` and returns `entity_id`.
+- `set_transform`: asks the runtime to update an entity transform. The current
+  payload supports `translation`.
 
 ## Events
 

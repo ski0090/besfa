@@ -217,6 +217,28 @@ class RuntimePreviewController extends ChangeNotifier {
     }
   }
 
+  /// Updates the selected runtime entity translation.
+  Future<void> setSelectedEntityTranslation(RuntimeVector3 translation) async {
+    final entityId = sceneSnapshot?.selectedEntityId;
+    if (isBusy ||
+        status != RuntimePreviewStatus.running ||
+        !_isRuntimeIpcReady ||
+        entityId == null) {
+      return;
+    }
+
+    _apply(isBusy: true);
+    try {
+      await _ipcClient.setTransform(
+        entityId: entityId,
+        translation: translation,
+      );
+      _apply(isBusy: false);
+    } on Object {
+      _apply(message: 'Runtime transform could not be updated.', isBusy: false);
+    }
+  }
+
   Future<void> _recoverRuntimeAfterExit(String startingMessage) async {
     if (_disposed || isBusy) {
       return;

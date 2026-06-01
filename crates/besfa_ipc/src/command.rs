@@ -1,4 +1,5 @@
 use crate::IpcError;
+use crate::Vec3Payload;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -10,9 +11,11 @@ pub const METHOD_RELOAD_SCENE: &str = "reload_scene";
 pub const METHOD_SELECT_ENTITY: &str = "select_entity";
 /// Runtime command method name for creating an entity.
 pub const METHOD_CREATE_ENTITY: &str = "create_entity";
+/// Runtime command method name for updating an entity transform.
+pub const METHOD_SET_TRANSFORM: &str = "set_transform";
 
 /// Typed editor-to-runtime command set.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeCommand {
     /// Open or switch the runtime to a project path.
     OpenProject(OpenProjectParams),
@@ -22,6 +25,8 @@ pub enum RuntimeCommand {
     SelectEntity(SelectEntityParams),
     /// Create a runtime entity in the active scene.
     CreateEntity(CreateEntityParams),
+    /// Update a runtime entity transform.
+    SetTransform(SetTransformParams),
 }
 
 impl RuntimeCommand {
@@ -32,6 +37,7 @@ impl RuntimeCommand {
             RuntimeCommand::ReloadScene => METHOD_RELOAD_SCENE,
             RuntimeCommand::SelectEntity(_) => METHOD_SELECT_ENTITY,
             RuntimeCommand::CreateEntity(_) => METHOD_CREATE_ENTITY,
+            RuntimeCommand::SetTransform(_) => METHOD_SET_TRANSFORM,
         }
     }
 
@@ -42,6 +48,7 @@ impl RuntimeCommand {
             RuntimeCommand::ReloadScene => json!({}),
             RuntimeCommand::SelectEntity(params) => json!(params),
             RuntimeCommand::CreateEntity(params) => json!(params),
+            RuntimeCommand::SetTransform(params) => json!(params),
         }
     }
 
@@ -57,6 +64,9 @@ impl RuntimeCommand {
                 .map_err(|error| IpcError::invalid_params(method, error)),
             METHOD_CREATE_ENTITY => serde_json::from_value(params)
                 .map(RuntimeCommand::CreateEntity)
+                .map_err(|error| IpcError::invalid_params(method, error)),
+            METHOD_SET_TRANSFORM => serde_json::from_value(params)
+                .map(RuntimeCommand::SetTransform)
                 .map_err(|error| IpcError::invalid_params(method, error)),
             _ => Err(IpcError::unsupported_command(method)),
         }
@@ -95,4 +105,13 @@ pub struct CreateEntityParams {
 pub struct CreateEntityResult {
     /// Stable runtime entity id assigned by the runtime.
     pub entity_id: String,
+}
+
+/// Parameters for the `set_transform` command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetTransformParams {
+    /// Stable runtime entity id to update.
+    pub entity_id: String,
+    /// New local translation in runtime world units.
+    pub translation: Vec3Payload,
 }

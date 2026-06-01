@@ -157,6 +157,7 @@ class RuntimeSceneEntity {
     required this.id,
     required this.name,
     required this.kind,
+    required this.transform,
     required this.children,
   });
 
@@ -176,6 +177,9 @@ class RuntimeSceneEntity {
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? 'Entity',
       kind: json['kind'] as String? ?? 'entity',
+      transform: RuntimeSceneTransform.fromPayloadOrNull(
+        _asMap(json['transform']),
+      ),
       children: children,
     );
   }
@@ -188,6 +192,9 @@ class RuntimeSceneEntity {
 
   /// Lightweight type hint for editor UI.
   final String kind;
+
+  /// Optional runtime transform metadata for placement editing.
+  final RuntimeSceneTransform? transform;
 
   /// Child entities.
   final List<RuntimeSceneEntity> children;
@@ -207,6 +214,58 @@ class RuntimeSceneEntity {
 
     return null;
   }
+}
+
+/// Runtime transform metadata for a scene entity.
+class RuntimeSceneTransform {
+  const RuntimeSceneTransform({required this.translation});
+
+  /// Parses transform payload, returning null when the payload is absent.
+  factory RuntimeSceneTransform.fromPayload(Map<String, Object?> payload) {
+    return RuntimeSceneTransform(
+      translation: RuntimeVector3.fromPayload(_asMap(payload['translation'])),
+    );
+  }
+
+  /// Parses transform payload only when it is present.
+  static RuntimeSceneTransform? fromPayloadOrNull(
+    Map<String, Object?> payload,
+  ) {
+    if (payload.isEmpty) {
+      return null;
+    }
+
+    return RuntimeSceneTransform.fromPayload(payload);
+  }
+
+  /// Local translation in runtime world units.
+  final RuntimeVector3 translation;
+}
+
+/// Three-dimensional runtime vector.
+class RuntimeVector3 {
+  const RuntimeVector3({required this.x, required this.y, required this.z});
+
+  /// Parses a vector payload.
+  factory RuntimeVector3.fromPayload(Map<String, Object?> payload) {
+    return RuntimeVector3(
+      x: (payload['x'] as num?)?.toDouble() ?? 0,
+      y: (payload['y'] as num?)?.toDouble() ?? 0,
+      z: (payload['z'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  /// X axis component.
+  final double x;
+
+  /// Y axis component.
+  final double y;
+
+  /// Z axis component.
+  final double z;
+
+  /// Converts this vector into the runtime IPC wire shape.
+  Map<String, Object?> toPayload() => {'x': x, 'y': y, 'z': z};
 }
 
 /// Runtime frame timing telemetry.

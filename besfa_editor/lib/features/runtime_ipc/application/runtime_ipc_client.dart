@@ -10,6 +10,7 @@ const String runtimeIpcOpenProjectMethod = 'open_project';
 const String runtimeIpcReloadSceneMethod = 'reload_scene';
 const String runtimeIpcSelectEntityMethod = 'select_entity';
 const String runtimeIpcCreateEntityMethod = 'create_entity';
+const String runtimeIpcSetTransformMethod = 'set_transform';
 
 /// Port and token reserved by the editor before launching the runtime.
 class RuntimeIpcHandshake {
@@ -165,6 +166,17 @@ class RuntimeIpcClient {
       params: params,
     );
     return response.result['entity_id'] as String?;
+  }
+
+  /// Sends `set_transform` to update a runtime entity translation.
+  Future<void> setTransform({
+    required String entityId,
+    required RuntimeVector3 translation,
+  }) async {
+    await sendCommand(
+      runtimeIpcSetTransformMethod,
+      params: {'entity_id': entityId, 'translation': translation.toPayload()},
+    );
   }
 
   void _sendHello(Socket socket, RuntimeIpcHandshake handshake) {

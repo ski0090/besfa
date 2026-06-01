@@ -12,14 +12,15 @@ pub use codec::{
 };
 pub use command::{
     CreateEntityParams, CreateEntityResult, METHOD_CREATE_ENTITY, METHOD_OPEN_PROJECT,
-    METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, OpenProjectParams, RuntimeCommand,
-    SelectEntityParams,
+    METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, METHOD_SET_TRANSFORM, OpenProjectParams,
+    RuntimeCommand, SelectEntityParams, SetTransformParams,
 };
 pub use config::RuntimeIpcConfig;
 pub use error::IpcError;
 pub use message::{ClientMessage, RuntimeEvent, RuntimeMessage};
 pub use payload::{
     FrameStatsPayload, LogPayload, PreviewSurfacePayload, SceneEntityPayload, SceneSnapshotPayload,
+    SceneTransformPayload, Vec3Payload,
 };
 
 #[cfg(test)]
@@ -82,6 +83,26 @@ mod tests {
     }
 
     #[test]
+    fn encodes_set_transform_command() {
+        let line = encode_line(&command_message(
+            9,
+            RuntimeCommand::SetTransform(SetTransformParams {
+                entity_id: "cube_1".to_string(),
+                translation: Vec3Payload {
+                    x: 1.0,
+                    y: 2.0,
+                    z: 3.0,
+                },
+            }),
+        ))
+        .unwrap();
+
+        assert!(line.contains("\"method\":\"set_transform\""));
+        assert!(line.contains("\"entity_id\":\"cube_1\""));
+        assert!(line.contains("\"translation\":{\"x\":1.0,\"y\":2.0,\"z\":3.0}"));
+    }
+
+    #[test]
     fn decodes_runtime_command() {
         let command = RuntimeCommand::from_method_params(
             METHOD_OPEN_PROJECT,
@@ -105,6 +126,13 @@ mod tests {
                 id: "world".to_string(),
                 name: "World".to_string(),
                 kind: "world".to_string(),
+                transform: Some(SceneTransformPayload {
+                    translation: Vec3Payload {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                }),
                 children: vec![],
             },
         }))
@@ -112,6 +140,7 @@ mod tests {
 
         assert!(line.contains("\"event\":\"scene_snapshot\""));
         assert!(line.contains("\"selected_entity_id\":\"camera\""));
+        assert!(line.contains("\"translation\""));
     }
 
     #[test]

@@ -84,6 +84,7 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
   final StreamController<RuntimeIpcEvent> _events =
       StreamController<RuntimeIpcEvent>.broadcast();
   int createEntityCalls = 0;
+  RuntimeVector3? lastTranslation;
 
   @override
   Stream<RuntimeIpcEvent> get events => _events.stream;
@@ -124,5 +125,13 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
   }) async {
     createEntityCalls += 1;
     return 'created_$createEntityCalls';
+  }
+
+  @override
+  Future<void> setTransform({
+    required String entityId,
+    required RuntimeVector3 translation,
+  }) async {
+    lastTranslation = translation;
   }
 }

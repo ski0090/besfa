@@ -19,9 +19,30 @@ pub struct SceneEntityPayload {
     pub name: String,
     /// Lightweight kind hint used for editor icons and grouping.
     pub kind: String,
+    /// Optional transform metadata for editor inspection and placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<SceneTransformPayload>,
     /// Child entities in hierarchy order.
     #[serde(default)]
     pub children: Vec<SceneEntityPayload>,
+}
+
+/// Transform metadata for a runtime scene entity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneTransformPayload {
+    /// Local translation in runtime world units.
+    pub translation: Vec3Payload,
+}
+
+/// Three-dimensional numeric vector payload.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Vec3Payload {
+    /// X axis component.
+    pub x: f32,
+    /// Y axis component.
+    pub y: f32,
+    /// Z axis component.
+    pub z: f32,
 }
 
 /// Runtime frame timing telemetry.
