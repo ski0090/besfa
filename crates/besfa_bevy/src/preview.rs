@@ -57,7 +57,7 @@ impl Plugin for BesfaPreviewPlugin {
         app.insert_resource(ClearColor(Color::srgb(0.06, 0.07, 0.08)))
             .init_resource::<PreviewSceneObjects>()
             .add_systems(Startup, setup_scene)
-            .add_systems(Update, (draw_grid, rotate_preview_cube));
+            .add_systems(Update, (draw_grid, draw_world_axes, rotate_preview_cube));
     }
 }
 
@@ -198,6 +198,33 @@ fn draw_grid(mut gizmos: Gizmos) {
         Vec2::splat(1.0),
         LinearRgba::gray(0.38),
     );
+}
+
+fn draw_world_axes(mut gizmos: Gizmos) {
+    const POSITIVE_AXIS_LENGTH: f32 = 2.8;
+    const NEGATIVE_AXIS_LENGTH: f32 = 1.2;
+    const TIP_LENGTH: f32 = 0.28;
+
+    let origin = Vec3::ZERO;
+    let x_color = Color::srgb(0.95, 0.16, 0.12);
+    let y_color = Color::srgb(0.25, 0.86, 0.32);
+    let z_color = Color::srgb(0.22, 0.48, 1.0);
+    let faded_x = Color::srgba(0.95, 0.16, 0.12, 0.45);
+    let faded_y = Color::srgba(0.25, 0.86, 0.32, 0.45);
+    let faded_z = Color::srgba(0.22, 0.48, 1.0, 0.45);
+
+    gizmos.line(origin, -Vec3::X * NEGATIVE_AXIS_LENGTH, faded_x);
+    gizmos.line(origin, -Vec3::Y * NEGATIVE_AXIS_LENGTH, faded_y);
+    gizmos.line(origin, -Vec3::Z * NEGATIVE_AXIS_LENGTH, faded_z);
+    gizmos
+        .arrow(origin, Vec3::X * POSITIVE_AXIS_LENGTH, x_color)
+        .with_tip_length(TIP_LENGTH);
+    gizmos
+        .arrow(origin, Vec3::Y * POSITIVE_AXIS_LENGTH, y_color)
+        .with_tip_length(TIP_LENGTH);
+    gizmos
+        .arrow(origin, Vec3::Z * POSITIVE_AXIS_LENGTH, z_color)
+        .with_tip_length(TIP_LENGTH);
 }
 
 fn rotate_preview_cube(mut cubes: Query<&mut Transform, With<PreviewCube>>, time: Res<Time>) {
