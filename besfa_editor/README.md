@@ -20,6 +20,8 @@ The editor follows a lightweight Feature-Sliced Design layout:
 - Show a fixed-position world-space X/Y/Z axis gizmo in the Scene View overlay
   that follows the editor camera orientation.
 - Show the selected runtime object's local X/Y/Z axis gizmo in the Scene View.
+- Drag the selected runtime object's local X/Y/Z axis gizmo in the Scene View
+  to move it along that axis.
 - Control the editor-only Scene View camera with secondary-button drag,
   WASD/QE movement, Shift acceleration, and mouse-wheel dolly.
 - Connect to the runtime over localhost TCP IPC.

@@ -48,6 +48,10 @@ When an entity with a `Transform` is selected, the runtime draws a local X/Y/Z
 axis gizmo at that entity's origin. The axes follow the entity rotation so the
 editor preview can distinguish local orientation from the fixed viewport axis
 overlay.
+The same local axis gizmo can be manipulated through
+`begin_transform_axis_drag`, `update_transform_axis_drag`, and
+`end_transform_axis_drag`: the runtime hit-tests the projected axis lines and
+applies drag movement along the selected local axis.
 
 The scene's runtime camera remains a selectable scene entity, but it is not used
 for the editor Scene View render target. The editor preview camera is an

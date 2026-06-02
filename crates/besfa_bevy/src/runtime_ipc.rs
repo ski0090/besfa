@@ -7,7 +7,7 @@ use besfa_ipc::RuntimeIpcConfig;
 use bevy::prelude::*;
 use resources::{
     RuntimeIpcEditorCameraState, RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection,
-    RuntimeIpcServerConfig, RuntimeIpcSnapshotCursor,
+    RuntimeIpcServerConfig, RuntimeIpcSnapshotCursor, RuntimeIpcTransformAxisDrag,
 };
 use systems::{
     draw_selected_local_axes, emit_editor_camera_state, emit_frame_stats,
@@ -38,6 +38,7 @@ impl Plugin for BesfaRuntimeIpcPlugin {
             .init_resource::<RuntimeIpcSnapshotCursor>()
             .init_resource::<RuntimeIpcFrameStats>()
             .init_resource::<RuntimeIpcEditorCameraState>()
+            .init_resource::<RuntimeIpcTransformAxisDrag>()
             .add_systems(Startup, start_runtime_ipc_server)
             .add_systems(
                 Update,

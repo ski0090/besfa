@@ -13,10 +13,12 @@ pub use codec::{
 };
 pub use command::{
     CreateEntityParams, CreateEntityResult, EditorCameraInputParams,
-    METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR, METHOD_CREATE_ENTITY, METHOD_EDITOR_CAMERA_INPUT,
-    METHOD_OPEN_PROJECT, METHOD_PICK_ENTITY, METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY,
-    METHOD_SET_TRANSFORM, OpenProjectParams, PickEntityParams, PickEntityResult, RuntimeCommand,
-    SelectEntityParams, SetTransformParams,
+    METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR, METHOD_BEGIN_TRANSFORM_AXIS_DRAG, METHOD_CREATE_ENTITY,
+    METHOD_EDITOR_CAMERA_INPUT, METHOD_END_TRANSFORM_AXIS_DRAG, METHOD_OPEN_PROJECT,
+    METHOD_PICK_ENTITY, METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, METHOD_SET_TRANSFORM,
+    METHOD_UPDATE_TRANSFORM_AXIS_DRAG, OpenProjectParams, PickEntityParams, PickEntityResult,
+    RuntimeCommand, SelectEntityParams, SetTransformParams, TransformAxis,
+    TransformAxisDragStartResult, TransformAxisDragUpdateResult, TransformAxisDragViewportParams,
 };
 pub use config::RuntimeIpcConfig;
 pub use error::IpcError;
@@ -154,6 +156,33 @@ mod tests {
     }
 
     #[test]
+    fn encodes_transform_axis_drag_commands() {
+        let begin_line = encode_line(&command_message(
+            13,
+            RuntimeCommand::BeginTransformAxisDrag(TransformAxisDragViewportParams {
+                viewport_x: 0.4,
+                viewport_y: 0.6,
+            }),
+        ))
+        .unwrap();
+        let update_line = encode_line(&command_message(
+            14,
+            RuntimeCommand::UpdateTransformAxisDrag(TransformAxisDragViewportParams {
+                viewport_x: 0.45,
+                viewport_y: 0.55,
+            }),
+        ))
+        .unwrap();
+        let end_line =
+            encode_line(&command_message(15, RuntimeCommand::EndTransformAxisDrag)).unwrap();
+
+        assert!(begin_line.contains("\"method\":\"begin_transform_axis_drag\""));
+        assert!(begin_line.contains("\"viewport_x\":0.4"));
+        assert!(update_line.contains("\"method\":\"update_transform_axis_drag\""));
+        assert!(end_line.contains("\"method\":\"end_transform_axis_drag\""));
+    }
+
+    #[test]
     fn decodes_runtime_command() {
         let command = RuntimeCommand::from_method_params(
             METHOD_OPEN_PROJECT,
@@ -215,6 +244,26 @@ mod tests {
                 .unwrap();
 
         assert_eq!(command, RuntimeCommand::AlignSelectedCameraToEditor);
+    }
+
+    #[test]
+    fn decodes_transform_axis_drag_commands() {
+        let begin_command = RuntimeCommand::from_method_params(
+            METHOD_BEGIN_TRANSFORM_AXIS_DRAG,
+            json!({ "viewport_x": 0.25, "viewport_y": 0.75 }),
+        )
+        .unwrap();
+        let end_command =
+            RuntimeCommand::from_method_params(METHOD_END_TRANSFORM_AXIS_DRAG, json!({})).unwrap();
+
+        assert_eq!(
+            begin_command,
+            RuntimeCommand::BeginTransformAxisDrag(TransformAxisDragViewportParams {
+                viewport_x: 0.25,
+                viewport_y: 0.75,
+            })
+        );
+        assert_eq!(end_command, RuntimeCommand::EndTransformAxisDrag);
     }
 
     #[test]

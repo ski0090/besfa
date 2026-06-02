@@ -1,7 +1,8 @@
 use super::{
     resources::{
         RuntimeIpcEditorCameraState, RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection,
-        RuntimeIpcServer, RuntimeIpcSnapshotCursor,
+        RuntimeIpcServer, RuntimeIpcSnapshotCursor, RuntimeIpcTransformAxisDrag,
+        RuntimeIpcTransformAxisDragState,
     },
     snapshot::build_scene_snapshot,
 };
@@ -14,8 +15,9 @@ use crate::{
 };
 use besfa_ipc::{
     CreateEntityResult, EditorCameraInputParams, FrameStatsPayload, IpcError, PickEntityParams,
-    PickEntityResult, RuntimeCommand, empty_ok_response, error_response, frame_stats_message,
-    log_message, ok_response, scene_snapshot_message,
+    PickEntityResult, RuntimeCommand, TransformAxis, TransformAxisDragStartResult,
+    TransformAxisDragUpdateResult, TransformAxisDragViewportParams, empty_ok_response,
+    error_response, frame_stats_message, log_message, ok_response, scene_snapshot_message,
 };
 use besfa_ipc::{EditorCameraStatePayload, Vec3Payload, editor_camera_state_message};
 use bevy::math::bounding::{Aabb3d, RayCast3d};
@@ -24,6 +26,8 @@ use serde_json::json;
 
 const LOCAL_AXIS_LENGTH: f32 = 1.5;
 const LOCAL_AXIS_TIP_LENGTH: f32 = 0.18;
+const LOCAL_AXIS_SCREEN_HIT_THRESHOLD: f32 = 14.0;
+const LOCAL_AXIS_MIN_SCREEN_LENGTH: f32 = 8.0;
 const EDITOR_CAMERA_ROTATE_SENSITIVITY: f32 = 0.006;
 const EDITOR_CAMERA_BASE_SPEED: f32 = 5.0;
 const EDITOR_CAMERA_MAX_DELTA_SECONDS: f32 = 0.1;
@@ -34,6 +38,7 @@ pub(super) fn process_runtime_ipc_commands(
     mut commands: Commands,
     mut project: ResMut<RuntimeIpcProject>,
     mut selection: ResMut<RuntimeIpcSelection>,
+    mut axis_drag: ResMut<RuntimeIpcTransformAxisDrag>,
     mut scene_objects: ResMut<PreviewSceneObjects>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -55,6 +60,7 @@ pub(super) fn process_runtime_ipc_commands(
                 server.request_snapshot();
             }
             RuntimeCommand::ReloadScene => {
+                axis_drag.active = None;
                 let _ = request.response_tx.send(empty_ok_response(request.id));
                 server.broadcast(log_message("info", "Reloaded preview scene"));
                 server.request_snapshot();
@@ -64,6 +70,7 @@ pub(super) fn process_runtime_ipc_commands(
                     .iter()
                     .any(|node| node.id.as_str() == params.entity_id)
                 {
+                    axis_drag.active = None;
                     selection.selected_entity_id = Some(params.entity_id.clone());
                     let _ = request.response_tx.send(empty_ok_response(request.id));
                     server.request_snapshot();
@@ -80,6 +87,7 @@ pub(super) fn process_runtime_ipc_commands(
             RuntimeCommand::PickEntity(params) => {
                 match pick_entity_from_viewport(&params, &cameras, &pick_targets) {
                     Ok(entity_id) => {
+                        axis_drag.active = None;
                         selection.selected_entity_id = entity_id.clone();
                         let _ = request.response_tx.send(ok_response(
                             request.id,
@@ -146,6 +154,7 @@ pub(super) fn process_runtime_ipc_commands(
                 ));
 
                 selection.selected_entity_id = Some(entity_id.clone());
+                axis_drag.active = None;
                 let _ = request.response_tx.send(ok_response(
                     request.id,
                     json!(CreateEntityResult {
@@ -160,6 +169,7 @@ pub(super) fn process_runtime_ipc_commands(
                     .iter_mut()
                     .find(|(node, _)| node.id.as_str() == params.entity_id)
                 {
+                    axis_drag.active = None;
                     transform.translation = Vec3::new(
                         params.translation.x,
                         params.translation.y,
@@ -243,6 +253,45 @@ pub(super) fn process_runtime_ipc_commands(
                     ));
                 }
             }
+            RuntimeCommand::BeginTransformAxisDrag(params) => {
+                match begin_transform_axis_drag(
+                    &params,
+                    &selection,
+                    &mut axis_drag,
+                    &mut transforms,
+                    &cameras,
+                ) {
+                    Ok(axis) => {
+                        let _ = request.response_tx.send(ok_response(
+                            request.id,
+                            json!(TransformAxisDragStartResult { axis }),
+                        ));
+                    }
+                    Err(error) => {
+                        let _ = request.response_tx.send(error_response(request.id, error));
+                    }
+                }
+            }
+            RuntimeCommand::UpdateTransformAxisDrag(params) => {
+                match update_transform_axis_drag(&params, &mut axis_drag, &mut transforms) {
+                    Ok(translation) => {
+                        let _ = request.response_tx.send(ok_response(
+                            request.id,
+                            json!(TransformAxisDragUpdateResult {
+                                translation: vec3_payload(translation),
+                            }),
+                        ));
+                        server.request_snapshot();
+                    }
+                    Err(error) => {
+                        let _ = request.response_tx.send(error_response(request.id, error));
+                    }
+                }
+            }
+            RuntimeCommand::EndTransformAxisDrag => {
+                axis_drag.active = None;
+                let _ = request.response_tx.send(empty_ok_response(request.id));
+            }
         }
     }
 }
@@ -291,6 +340,163 @@ fn draw_local_axis(gizmos: &mut Gizmos, origin: Vec3, axis: Vec3, color: Color) 
             color,
         )
         .with_tip_length(LOCAL_AXIS_TIP_LENGTH);
+}
+
+fn begin_transform_axis_drag(
+    params: &TransformAxisDragViewportParams,
+    selection: &RuntimeIpcSelection,
+    axis_drag: &mut RuntimeIpcTransformAxisDrag,
+    transforms: &mut Query<(&PreviewSceneNode, &mut Transform), Without<EditorPreviewCamera>>,
+    cameras: &Query<(&Camera, &GlobalTransform), With<EditorPreviewCamera>>,
+) -> Result<Option<TransformAxis>, IpcError> {
+    axis_drag.active = None;
+    if !valid_viewport_coords(params.viewport_x, params.viewport_y) {
+        return Err(IpcError::new(
+            "invalid_drag_coordinates",
+            "Transform axis drag coordinates must be finite.",
+        ));
+    }
+
+    let Some(selected_entity_id) = selection.selected_entity_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some((_, transform)) = transforms
+        .iter_mut()
+        .find(|(node, _)| node.id.as_str() == selected_entity_id)
+    else {
+        return Ok(None);
+    };
+    let Some((camera, camera_transform)) = cameras.iter().next() else {
+        return Err(IpcError::new(
+            "camera_not_found",
+            "Runtime preview camera was not found.",
+        ));
+    };
+
+    let pointer = viewport_position(params.viewport_x, params.viewport_y);
+    let origin = transform.translation;
+    let Ok(origin_screen) = camera.world_to_viewport(camera_transform, origin) else {
+        return Ok(None);
+    };
+
+    let mut nearest_axis: Option<(TransformAxis, f32, Vec3, Vec2)> = None;
+    for axis in [TransformAxis::X, TransformAxis::Y, TransformAxis::Z] {
+        let axis_world = (transform.rotation * axis_direction(axis)).normalize_or_zero();
+        if axis_world == Vec3::ZERO {
+            continue;
+        }
+
+        let Ok(end_screen) =
+            camera.world_to_viewport(camera_transform, origin + axis_world * LOCAL_AXIS_LENGTH)
+        else {
+            continue;
+        };
+        let screen_axis = end_screen - origin_screen;
+        if screen_axis.length() < LOCAL_AXIS_MIN_SCREEN_LENGTH {
+            continue;
+        }
+
+        let distance = distance_to_screen_segment(pointer, origin_screen, end_screen);
+        if distance <= LOCAL_AXIS_SCREEN_HIT_THRESHOLD
+            && nearest_axis
+                .as_ref()
+                .is_none_or(|(_, nearest_distance, _, _)| distance < *nearest_distance)
+        {
+            nearest_axis = Some((axis, distance, axis_world, screen_axis));
+        }
+    }
+
+    let Some((axis, _, axis_world, screen_axis)) = nearest_axis else {
+        return Ok(None);
+    };
+    axis_drag.active = Some(RuntimeIpcTransformAxisDragState {
+        entity_id: selected_entity_id.to_string(),
+        axis,
+        start_translation: transform.translation,
+        axis_world,
+        start_viewport_position: pointer,
+        screen_axis,
+    });
+
+    Ok(Some(axis))
+}
+
+fn update_transform_axis_drag(
+    params: &TransformAxisDragViewportParams,
+    axis_drag: &mut RuntimeIpcTransformAxisDrag,
+    transforms: &mut Query<(&PreviewSceneNode, &mut Transform), Without<EditorPreviewCamera>>,
+) -> Result<Vec3, IpcError> {
+    if !valid_viewport_coords(params.viewport_x, params.viewport_y) {
+        return Err(IpcError::new(
+            "invalid_drag_coordinates",
+            "Transform axis drag coordinates must be finite.",
+        ));
+    }
+
+    let Some(drag) = axis_drag.active.clone() else {
+        return Err(IpcError::new(
+            "axis_drag_not_active",
+            "No transform axis drag is active.",
+        ));
+    };
+    let Some((_, mut transform)) = transforms
+        .iter_mut()
+        .find(|(node, _)| node.id.as_str() == drag.entity_id)
+    else {
+        axis_drag.active = None;
+        return Err(IpcError::new(
+            "transform_not_found",
+            format!("Runtime entity transform was not found: {}", drag.entity_id),
+        ));
+    };
+
+    let screen_axis_length_squared = drag.screen_axis.length_squared();
+    if screen_axis_length_squared <= f32::EPSILON {
+        axis_drag.active = None;
+        return Err(IpcError::new(
+            "axis_drag_invalid",
+            format!("Transform axis drag became invalid: {:?}", drag.axis),
+        ));
+    }
+
+    let pointer = viewport_position(params.viewport_x, params.viewport_y);
+    let screen_delta = pointer - drag.start_viewport_position;
+    let world_units =
+        screen_delta.dot(drag.screen_axis) / screen_axis_length_squared * LOCAL_AXIS_LENGTH;
+    let translation = drag.start_translation + drag.axis_world * world_units;
+    transform.translation = translation;
+
+    Ok(translation)
+}
+
+fn valid_viewport_coords(viewport_x: f32, viewport_y: f32) -> bool {
+    viewport_x.is_finite() && viewport_y.is_finite()
+}
+
+fn viewport_position(viewport_x: f32, viewport_y: f32) -> Vec2 {
+    Vec2::new(
+        viewport_x.clamp(0.0, 1.0) * PREVIEW_SURFACE_WIDTH as f32,
+        viewport_y.clamp(0.0, 1.0) * PREVIEW_SURFACE_HEIGHT as f32,
+    )
+}
+
+fn axis_direction(axis: TransformAxis) -> Vec3 {
+    match axis {
+        TransformAxis::X => Vec3::X,
+        TransformAxis::Y => Vec3::Y,
+        TransformAxis::Z => Vec3::Z,
+    }
+}
+
+fn distance_to_screen_segment(point: Vec2, start: Vec2, end: Vec2) -> f32 {
+    let segment = end - start;
+    let length_squared = segment.length_squared();
+    if length_squared <= f32::EPSILON {
+        return point.distance(start);
+    }
+
+    let t = ((point - start).dot(segment) / length_squared).clamp(0.0, 1.0);
+    point.distance(start + segment * t)
 }
 
 fn apply_editor_camera_input(params: &EditorCameraInputParams, transform: &mut Transform) {

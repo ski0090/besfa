@@ -279,6 +279,38 @@ class RuntimeVector3 {
   Map<String, Object?> toPayload() => {'x': x, 'y': y, 'z': z};
 }
 
+/// Local transform axis used by runtime viewport gizmo dragging.
+enum RuntimeTransformAxis {
+  /// Local X axis.
+  x('x'),
+
+  /// Local Y axis.
+  y('y'),
+
+  /// Local Z axis.
+  z('z');
+
+  const RuntimeTransformAxis(this.wireName);
+
+  /// Wire value used by runtime IPC.
+  final String wireName;
+
+  /// Converts a wire axis name into an editor enum value.
+  static RuntimeTransformAxis? fromWireName(Object? value) {
+    if (value is! String) {
+      return null;
+    }
+
+    for (final axis in RuntimeTransformAxis.values) {
+      if (axis.wireName == value) {
+        return axis;
+      }
+    }
+
+    return null;
+  }
+}
+
 /// Runtime frame timing telemetry.
 class RuntimeFrameStats {
   const RuntimeFrameStats({required this.fps, required this.frameTimeMs});

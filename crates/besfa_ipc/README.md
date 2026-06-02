@@ -52,6 +52,14 @@ Selected scene cameras can be aligned to the current editor camera:
 {"type":"command","id":6,"method":"align_selected_camera_to_editor","params":{}}
 ```
 
+Selected entity transform axes can be picked and dragged from the Scene View:
+
+```json
+{"type":"command","id":7,"method":"begin_transform_axis_drag","params":{"viewport_x":0.5,"viewport_y":0.5}}
+{"type":"command","id":8,"method":"update_transform_axis_drag","params":{"viewport_x":0.55,"viewport_y":0.5}}
+{"type":"command","id":9,"method":"end_transform_axis_drag","params":{}}
+```
+
 Responses are sent by the runtime:
 
 ```json
@@ -80,6 +88,12 @@ Events are pushed by the runtime:
   intent, a speed multiplier, and elapsed movement time.
 - `align_selected_camera_to_editor`: copies the editor-only Scene View camera
   transform into the currently selected scene camera.
+- `begin_transform_axis_drag`: hit-tests the selected entity's local X/Y/Z
+  axis gizmo from normalized Scene View coordinates and returns
+  `{"axis":"x"}`, `{"axis":"y"}`, `{"axis":"z"}`, or `{"axis":null}`.
+- `update_transform_axis_drag`: moves the selected entity along the active
+  local axis drag and returns the updated `translation`.
+- `end_transform_axis_drag`: clears the active local axis drag session.
 
 ## Events
 

@@ -19,6 +19,12 @@ pub const METHOD_SET_TRANSFORM: &str = "set_transform";
 pub const METHOD_EDITOR_CAMERA_INPUT: &str = "editor_camera_input";
 /// Runtime command method name for aligning the selected camera to the editor camera.
 pub const METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR: &str = "align_selected_camera_to_editor";
+/// Runtime command method name for starting a selected transform axis drag.
+pub const METHOD_BEGIN_TRANSFORM_AXIS_DRAG: &str = "begin_transform_axis_drag";
+/// Runtime command method name for updating a selected transform axis drag.
+pub const METHOD_UPDATE_TRANSFORM_AXIS_DRAG: &str = "update_transform_axis_drag";
+/// Runtime command method name for ending a selected transform axis drag.
+pub const METHOD_END_TRANSFORM_AXIS_DRAG: &str = "end_transform_axis_drag";
 
 /// Typed editor-to-runtime command set.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +45,12 @@ pub enum RuntimeCommand {
     EditorCameraInput(EditorCameraInputParams),
     /// Copy the editor preview camera transform into the selected scene camera.
     AlignSelectedCameraToEditor,
+    /// Start dragging the selected entity along one local transform axis.
+    BeginTransformAxisDrag(TransformAxisDragViewportParams),
+    /// Update the active selected entity transform axis drag.
+    UpdateTransformAxisDrag(TransformAxisDragViewportParams),
+    /// End the active selected entity transform axis drag.
+    EndTransformAxisDrag,
 }
 
 impl RuntimeCommand {
@@ -53,6 +65,9 @@ impl RuntimeCommand {
             RuntimeCommand::SetTransform(_) => METHOD_SET_TRANSFORM,
             RuntimeCommand::EditorCameraInput(_) => METHOD_EDITOR_CAMERA_INPUT,
             RuntimeCommand::AlignSelectedCameraToEditor => METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR,
+            RuntimeCommand::BeginTransformAxisDrag(_) => METHOD_BEGIN_TRANSFORM_AXIS_DRAG,
+            RuntimeCommand::UpdateTransformAxisDrag(_) => METHOD_UPDATE_TRANSFORM_AXIS_DRAG,
+            RuntimeCommand::EndTransformAxisDrag => METHOD_END_TRANSFORM_AXIS_DRAG,
         }
     }
 
@@ -67,6 +82,9 @@ impl RuntimeCommand {
             RuntimeCommand::SetTransform(params) => json!(params),
             RuntimeCommand::EditorCameraInput(params) => json!(params),
             RuntimeCommand::AlignSelectedCameraToEditor => json!({}),
+            RuntimeCommand::BeginTransformAxisDrag(params) => json!(params),
+            RuntimeCommand::UpdateTransformAxisDrag(params) => json!(params),
+            RuntimeCommand::EndTransformAxisDrag => json!({}),
         }
     }
 
@@ -95,6 +113,13 @@ impl RuntimeCommand {
             METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR => {
                 Ok(RuntimeCommand::AlignSelectedCameraToEditor)
             }
+            METHOD_BEGIN_TRANSFORM_AXIS_DRAG => serde_json::from_value(params)
+                .map(RuntimeCommand::BeginTransformAxisDrag)
+                .map_err(|error| IpcError::invalid_params(method, error)),
+            METHOD_UPDATE_TRANSFORM_AXIS_DRAG => serde_json::from_value(params)
+                .map(RuntimeCommand::UpdateTransformAxisDrag)
+                .map_err(|error| IpcError::invalid_params(method, error)),
+            METHOD_END_TRANSFORM_AXIS_DRAG => Ok(RuntimeCommand::EndTransformAxisDrag),
             _ => Err(IpcError::unsupported_command(method)),
         }
     }
@@ -187,4 +212,39 @@ pub struct EditorCameraInputParams {
 
 fn default_editor_camera_speed_multiplier() -> f32 {
     1.0
+}
+
+/// Local transform axis selected for viewport gizmo dragging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransformAxis {
+    /// Local X axis.
+    X,
+    /// Local Y axis.
+    Y,
+    /// Local Z axis.
+    Z,
+}
+
+/// Viewport coordinates for transform axis drag commands.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransformAxisDragViewportParams {
+    /// Horizontal viewport coordinate normalized from left `0.0` to right `1.0`.
+    pub viewport_x: f32,
+    /// Vertical viewport coordinate normalized from top `0.0` to bottom `1.0`.
+    pub viewport_y: f32,
+}
+
+/// Result payload returned when transform axis dragging begins.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransformAxisDragStartResult {
+    /// Axis that was hit by the pointer, or `None` when no axis was close enough.
+    pub axis: Option<TransformAxis>,
+}
+
+/// Result payload returned when transform axis dragging updates the entity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransformAxisDragUpdateResult {
+    /// Updated local translation in runtime world units.
+    pub translation: Vec3Payload,
 }

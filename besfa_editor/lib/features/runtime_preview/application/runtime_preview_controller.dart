@@ -327,6 +327,58 @@ class RuntimePreviewController extends ChangeNotifier {
     }
   }
 
+  /// Starts moving the selected entity by dragging one local transform axis.
+  Future<RuntimeTransformAxis?> beginSelectedTransformAxisDrag({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    if (status != RuntimePreviewStatus.running || !_isRuntimeIpcReady) {
+      return null;
+    }
+
+    try {
+      return _ipcClient.beginTransformAxisDrag(
+        viewportX: viewportX,
+        viewportY: viewportY,
+      );
+    } on Object {
+      _apply(message: 'Runtime transform axis could not be picked.');
+      return null;
+    }
+  }
+
+  /// Updates the active local transform axis drag.
+  Future<void> updateSelectedTransformAxisDrag({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    if (status != RuntimePreviewStatus.running || !_isRuntimeIpcReady) {
+      return;
+    }
+
+    try {
+      await _ipcClient.updateTransformAxisDrag(
+        viewportX: viewportX,
+        viewportY: viewportY,
+      );
+    } on Object {
+      _apply(message: 'Runtime transform axis could not be dragged.');
+    }
+  }
+
+  /// Ends the active local transform axis drag.
+  Future<void> endSelectedTransformAxisDrag() async {
+    if (status != RuntimePreviewStatus.running || !_isRuntimeIpcReady) {
+      return;
+    }
+
+    try {
+      await _ipcClient.endTransformAxisDrag();
+    } on Object {
+      _apply(message: 'Runtime transform axis drag could not end.');
+    }
+  }
+
   Future<void> _recoverRuntimeAfterExit(String startingMessage) async {
     if (_disposed || isBusy) {
       return;

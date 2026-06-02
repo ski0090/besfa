@@ -101,6 +101,12 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
       StreamController<RuntimeIpcEvent>.broadcast();
   int createEntityCalls = 0;
   int alignSelectedCameraToEditorCalls = 0;
+  int beginTransformAxisDragCalls = 0;
+  int updateTransformAxisDragCalls = 0;
+  int endTransformAxisDragCalls = 0;
+  RuntimeTransformAxis? transformAxisDragResult;
+  ({double viewportX, double viewportY})? lastTransformAxisDragBegin;
+  ({double viewportX, double viewportY})? lastTransformAxisDragUpdate;
   RuntimeVector3? lastTranslation;
   ({double viewportX, double viewportY})? lastPick;
   ({
@@ -203,5 +209,30 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
   @override
   Future<void> alignSelectedCameraToEditor() async {
     alignSelectedCameraToEditorCalls += 1;
+  }
+
+  @override
+  Future<RuntimeTransformAxis?> beginTransformAxisDrag({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    beginTransformAxisDragCalls += 1;
+    lastTransformAxisDragBegin = (viewportX: viewportX, viewportY: viewportY);
+    return transformAxisDragResult;
+  }
+
+  @override
+  Future<RuntimeVector3?> updateTransformAxisDrag({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    updateTransformAxisDragCalls += 1;
+    lastTransformAxisDragUpdate = (viewportX: viewportX, viewportY: viewportY);
+    return const RuntimeVector3(x: 1, y: 0, z: 0);
+  }
+
+  @override
+  Future<void> endTransformAxisDrag() async {
+    endTransformAxisDragCalls += 1;
   }
 }

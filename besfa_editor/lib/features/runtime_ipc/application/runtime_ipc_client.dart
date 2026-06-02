@@ -15,6 +15,11 @@ const String runtimeIpcSetTransformMethod = 'set_transform';
 const String runtimeIpcEditorCameraInputMethod = 'editor_camera_input';
 const String runtimeIpcAlignSelectedCameraToEditorMethod =
     'align_selected_camera_to_editor';
+const String runtimeIpcBeginTransformAxisDragMethod =
+    'begin_transform_axis_drag';
+const String runtimeIpcUpdateTransformAxisDragMethod =
+    'update_transform_axis_drag';
+const String runtimeIpcEndTransformAxisDragMethod = 'end_transform_axis_drag';
 
 /// Port and token reserved by the editor before launching the runtime.
 class RuntimeIpcHandshake {
@@ -222,6 +227,40 @@ class RuntimeIpcClient {
   /// Sends `align_selected_camera_to_editor` to copy the editor camera transform.
   Future<void> alignSelectedCameraToEditor() async {
     await sendCommand(runtimeIpcAlignSelectedCameraToEditorMethod);
+  }
+
+  /// Sends `begin_transform_axis_drag` and returns the hit axis, if any.
+  Future<RuntimeTransformAxis?> beginTransformAxisDrag({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    final response = await sendCommand(
+      runtimeIpcBeginTransformAxisDragMethod,
+      params: {'viewport_x': viewportX, 'viewport_y': viewportY},
+    );
+    return RuntimeTransformAxis.fromWireName(response.result['axis']);
+  }
+
+  /// Sends `update_transform_axis_drag` and returns the updated translation.
+  Future<RuntimeVector3?> updateTransformAxisDrag({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    final response = await sendCommand(
+      runtimeIpcUpdateTransformAxisDragMethod,
+      params: {'viewport_x': viewportX, 'viewport_y': viewportY},
+    );
+    final translation = _asJsonMap(response.result['translation']);
+    if (translation.isEmpty) {
+      return null;
+    }
+
+    return RuntimeVector3.fromPayload(translation);
+  }
+
+  /// Sends `end_transform_axis_drag` to clear the runtime drag session.
+  Future<void> endTransformAxisDrag() async {
+    await sendCommand(runtimeIpcEndTransformAxisDragMethod);
   }
 
   void _sendHello(Socket socket, RuntimeIpcHandshake handshake) {

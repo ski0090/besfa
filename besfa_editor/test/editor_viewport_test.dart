@@ -1,3 +1,4 @@
+import 'package:besfa_editor/features/runtime_ipc/domain/runtime_ipc_models.dart';
 import 'package:besfa_editor/features/runtime_preview/domain/runtime_preview_status.dart';
 import 'package:besfa_editor/widgets/editor_shell/editor_viewport.dart';
 import 'package:flutter/gestures.dart';
@@ -28,6 +29,9 @@ void main() {
                 pickedY = viewportY;
               },
               onEditorCameraInput: (_) {},
+              onBeginTransformAxisDrag: (_, _) async => null,
+              onUpdateTransformAxisDrag: (_, _) {},
+              onEndTransformAxisDrag: () {},
             ),
           ),
         ),
@@ -59,6 +63,9 @@ void main() {
               previewTextureId: 1,
               onPickViewport: (_, _) {},
               onEditorCameraInput: (_) {},
+              onBeginTransformAxisDrag: (_, _) async => null,
+              onUpdateTransformAxisDrag: (_, _) {},
+              onEndTransformAxisDrag: () {},
             ),
           ),
         ),
@@ -96,6 +103,9 @@ void main() {
                 pickedX = viewportX;
               },
               onEditorCameraInput: inputs.add,
+              onBeginTransformAxisDrag: (_, _) async => null,
+              onUpdateTransformAxisDrag: (_, _) {},
+              onEndTransformAxisDrag: () {},
             ),
           ),
         ),
@@ -137,6 +147,9 @@ void main() {
               previewTextureId: 1,
               onPickViewport: (_, _) {},
               onEditorCameraInput: inputs.add,
+              onBeginTransformAxisDrag: (_, _) async => null,
+              onUpdateTransformAxisDrag: (_, _) {},
+              onEndTransformAxisDrag: () {},
             ),
           ),
         ),
@@ -160,5 +173,63 @@ void main() {
     expect(movementInput.moveForward, 1);
     expect(movementInput.speedMultiplier, 4);
     expect(movementInput.deltaSeconds, greaterThan(0));
+  });
+
+  testWidgets('drags selected transform axis instead of viewport picking', (
+    tester,
+  ) async {
+    double? pickedX;
+    ({double viewportX, double viewportY})? begin;
+    ({double viewportX, double viewportY})? update;
+    var endCalls = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 800,
+            height: 600,
+            child: EditorViewport(
+              platformVersion: Future.value('test platform'),
+              abiVersion: 1,
+              runtimeStatus: RuntimePreviewStatus.running,
+              runtimeMessage: null,
+              frameStats: null,
+              previewTextureId: 1,
+              onPickViewport: (viewportX, _) {
+                pickedX = viewportX;
+              },
+              onEditorCameraInput: (_) {},
+              onBeginTransformAxisDrag: (viewportX, viewportY) async {
+                begin = (viewportX: viewportX, viewportY: viewportY);
+                return RuntimeTransformAxis.x;
+              },
+              onUpdateTransformAxisDrag: (viewportX, viewportY) {
+                update = (viewportX: viewportX, viewportY: viewportY);
+              },
+              onEndTransformAxisDrag: () {
+                endCalls += 1;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final gesture = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+      buttons: kPrimaryMouseButton,
+    );
+    await gesture.down(tester.getCenter(find.byType(Texture)));
+    await tester.pump();
+    await gesture.moveBy(const Offset(24, 0));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+
+    expect(begin?.viewportX, closeTo(0.5, 0.01));
+    expect(update?.viewportX, greaterThan(0.5));
+    expect(endCalls, 1);
+    expect(pickedX, isNull);
   });
 }

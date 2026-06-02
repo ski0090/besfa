@@ -52,6 +52,14 @@ class EditorCameraInput {
 /// Called when the viewport gathers editor camera navigation input.
 typedef EditorCameraInputHandler = void Function(EditorCameraInput input);
 
+/// Called when the viewport starts probing a selected transform axis drag.
+typedef TransformAxisDragStartHandler =
+    Future<RuntimeTransformAxis?> Function(double viewportX, double viewportY);
+
+/// Called when the viewport updates an active selected transform axis drag.
+typedef TransformAxisDragUpdateHandler =
+    void Function(double viewportX, double viewportY);
+
 /// Central Scene View surface backed by the editor-owned runtime.
 class EditorViewport extends StatefulWidget {
   const EditorViewport({
@@ -63,6 +71,9 @@ class EditorViewport extends StatefulWidget {
     required this.previewTextureId,
     required this.onPickViewport,
     required this.onEditorCameraInput,
+    required this.onBeginTransformAxisDrag,
+    required this.onUpdateTransformAxisDrag,
+    required this.onEndTransformAxisDrag,
     this.editorCameraState,
     super.key,
   });
@@ -85,6 +96,15 @@ class EditorViewport extends StatefulWidget {
   /// Called with Unity-style editor camera navigation input.
   final EditorCameraInputHandler onEditorCameraInput;
 
+  /// Called before primary-button selection to determine whether an axis was hit.
+  final TransformAxisDragStartHandler onBeginTransformAxisDrag;
+
+  /// Called while dragging the selected runtime entity along a local axis.
+  final TransformAxisDragUpdateHandler onUpdateTransformAxisDrag;
+
+  /// Called when a transform axis drag ends or is cancelled.
+  final VoidCallback onEndTransformAxisDrag;
+
   @override
   State<EditorViewport> createState() => _EditorViewportState();
 }
@@ -93,12 +113,21 @@ class _EditorViewportState extends State<EditorViewport> {
   static const Duration _movementTick = Duration(milliseconds: 16);
   static const double _scrollMoveSecondsPerPixel = 1 / 1200;
   static const double _boostMultiplier = 4;
+  static const double _primaryDragThreshold = 4;
 
   final FocusNode _focusNode = FocusNode(debugLabel: 'Scene View');
   final Set<LogicalKeyboardKey> _pressedKeys = <LogicalKeyboardKey>{};
   Timer? _movementTimer;
   DateTime? _lastMovementTickAt;
+  Size _previewSize = Size.zero;
   bool _isSecondaryButtonDown = false;
+  int? _primaryPointer;
+  Offset? _primaryDownPosition;
+  Offset? _latestPrimaryPosition;
+  bool _primaryMoved = false;
+  bool _primaryPointerUpPending = false;
+  bool _axisProbePending = false;
+  bool _axisDragActive = false;
 
   @override
   void didUpdateWidget(EditorViewport oldWidget) {
@@ -106,12 +135,14 @@ class _EditorViewportState extends State<EditorViewport> {
     if (widget.previewTextureId == null) {
       _stopMovementTimer();
       _isSecondaryButtonDown = false;
+      _clearPrimaryPointerState(endDrag: true);
     }
   }
 
   @override
   void dispose() {
     _stopMovementTimer();
+    _clearPrimaryPointerState(endDrag: true);
     _focusNode.dispose();
     super.dispose();
   }
@@ -130,6 +161,7 @@ class _EditorViewportState extends State<EditorViewport> {
                   aspectRatio: 16 / 9,
                   child: LayoutBuilder(
                     builder: (context, constraints) {
+                      _previewSize = constraints.biggest;
                       return Focus(
                         focusNode: _focusNode,
                         onKeyEvent: _handleKeyEvent,
@@ -140,63 +172,43 @@ class _EditorViewportState extends State<EditorViewport> {
                           onPointerUp: _handlePointerUp,
                           onPointerCancel: _handlePointerCancel,
                           onPointerSignal: _handlePointerSignal,
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTapDown: widget.previewTextureId == null
-                                ? null
-                                : (details) {
-                                    final size = constraints.biggest;
-                                    if (size.width <= 0 || size.height <= 0) {
-                                      return;
-                                    }
-
-                                    widget.onPickViewport(
-                                      (details.localPosition.dx / size.width)
-                                          .clamp(0, 1)
-                                          .toDouble(),
-                                      (details.localPosition.dy / size.height)
-                                          .clamp(0, 1)
-                                          .toDouble(),
-                                    );
-                                  },
-                            child: Stack(
-                              children: [
-                                Positioned.fill(
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF101314),
-                                      border: Border.all(
-                                        color: const Color(0xFF303637),
-                                      ),
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF101314),
+                                    border: Border.all(
+                                      color: const Color(0xFF303637),
                                     ),
-                                    child: widget.previewTextureId == null
-                                        ? Center(
-                                            child: Text(
-                                              _placeholderText(),
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodyMedium
-                                                  ?.copyWith(
-                                                    color: Colors.white70,
-                                                  ),
-                                            ),
-                                          )
-                                        : Texture(
-                                            textureId: widget.previewTextureId!,
+                                  ),
+                                  child: widget.previewTextureId == null
+                                      ? Center(
+                                          child: Text(
+                                            _placeholderText(),
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodyMedium
+                                                ?.copyWith(
+                                                  color: Colors.white70,
+                                                ),
                                           ),
+                                        )
+                                      : Texture(
+                                          textureId: widget.previewTextureId!,
+                                        ),
+                                ),
+                              ),
+                              Positioned(
+                                left: 12,
+                                top: 12,
+                                child: IgnorePointer(
+                                  child: _ViewportAxisGizmo(
+                                    cameraState: widget.editorCameraState,
                                   ),
                                 ),
-                                Positioned(
-                                  left: 12,
-                                  top: 12,
-                                  child: IgnorePointer(
-                                    child: _ViewportAxisGizmo(
-                                      cameraState: widget.editorCameraState,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
                       );
@@ -251,6 +263,11 @@ class _EditorViewportState extends State<EditorViewport> {
       return;
     }
 
+    if (_hasPrimaryButton(event.buttons)) {
+      _beginPrimaryPointer(event);
+      return;
+    }
+
     if (_hasSecondaryButton(event.buttons)) {
       _isSecondaryButtonDown = true;
       _syncMovementTimer();
@@ -258,6 +275,13 @@ class _EditorViewportState extends State<EditorViewport> {
   }
 
   void _handlePointerMove(PointerMoveEvent event) {
+    if (widget.previewTextureId != null &&
+        _primaryPointer == event.pointer &&
+        _hasPrimaryButton(event.buttons)) {
+      _updatePrimaryPointer(event.localPosition);
+      return;
+    }
+
     if (widget.previewTextureId == null ||
         !_hasSecondaryButton(event.buttons)) {
       return;
@@ -274,6 +298,11 @@ class _EditorViewportState extends State<EditorViewport> {
   }
 
   void _handlePointerUp(PointerUpEvent event) {
+    if (_primaryPointer == event.pointer) {
+      _endPrimaryPointer();
+      return;
+    }
+
     if (!_hasSecondaryButton(event.buttons)) {
       _isSecondaryButtonDown = false;
       _syncMovementTimer();
@@ -281,6 +310,9 @@ class _EditorViewportState extends State<EditorViewport> {
   }
 
   void _handlePointerCancel(PointerCancelEvent event) {
+    if (_primaryPointer == event.pointer) {
+      _clearPrimaryPointerState(endDrag: true);
+    }
     _isSecondaryButtonDown = false;
     _syncMovementTimer();
   }
@@ -373,8 +405,145 @@ class _EditorViewportState extends State<EditorViewport> {
     widget.onEditorCameraInput(input);
   }
 
+  void _beginPrimaryPointer(PointerDownEvent event) {
+    _clearPrimaryPointerState(endDrag: true);
+    _primaryPointer = event.pointer;
+    _primaryDownPosition = event.localPosition;
+    _latestPrimaryPosition = event.localPosition;
+    _primaryMoved = false;
+    _primaryPointerUpPending = false;
+    _axisProbePending = true;
+
+    final normalized = _normalizedViewportPosition(event.localPosition);
+    if (normalized == null) {
+      _clearPrimaryPointerState();
+      return;
+    }
+
+    unawaited(_probeTransformAxis(event.pointer, normalized));
+  }
+
+  Future<void> _probeTransformAxis(
+    int pointer,
+    ({double x, double y}) normalized,
+  ) async {
+    final axis = await widget.onBeginTransformAxisDrag(
+      normalized.x,
+      normalized.y,
+    );
+    if (!mounted || _primaryPointer != pointer) {
+      if (axis != null) {
+        widget.onEndTransformAxisDrag();
+      }
+      return;
+    }
+
+    _axisProbePending = false;
+    if (axis != null) {
+      _axisDragActive = true;
+      final latest = _latestPrimaryPosition;
+      if (latest != null && _primaryMoved) {
+        _emitTransformAxisDragUpdate(latest);
+      }
+      if (_primaryPointerUpPending) {
+        _clearPrimaryPointerState(endDrag: true);
+      }
+      return;
+    }
+
+    if (_primaryPointerUpPending && !_primaryMoved) {
+      _pickViewportAt(_primaryDownPosition ?? _latestPrimaryPosition);
+    }
+    if (_primaryPointerUpPending || _primaryMoved) {
+      _clearPrimaryPointerState();
+    }
+  }
+
+  void _updatePrimaryPointer(Offset position) {
+    _latestPrimaryPosition = position;
+    final downPosition = _primaryDownPosition;
+    if (downPosition != null &&
+        (position - downPosition).distance >= _primaryDragThreshold) {
+      _primaryMoved = true;
+    }
+
+    if (_axisDragActive) {
+      _emitTransformAxisDragUpdate(position);
+    }
+  }
+
+  void _endPrimaryPointer() {
+    if (_axisProbePending) {
+      _primaryPointerUpPending = true;
+      return;
+    }
+
+    if (_axisDragActive) {
+      _clearPrimaryPointerState(endDrag: true);
+      return;
+    }
+
+    if (!_primaryMoved) {
+      _pickViewportAt(_primaryDownPosition ?? _latestPrimaryPosition);
+    }
+    _clearPrimaryPointerState();
+  }
+
+  void _emitTransformAxisDragUpdate(Offset position) {
+    final normalized = _normalizedViewportPosition(position);
+    if (normalized == null) {
+      return;
+    }
+
+    widget.onUpdateTransformAxisDrag(normalized.x, normalized.y);
+  }
+
+  void _pickViewportAt(Offset? position) {
+    if (position == null) {
+      return;
+    }
+    final normalized = _normalizedViewportPosition(position);
+    if (normalized == null) {
+      return;
+    }
+
+    widget.onPickViewport(normalized.x, normalized.y);
+  }
+
+  ({double x, double y})? _normalizedViewportPosition(Offset position) {
+    final size = _previewSize;
+    if (widget.previewTextureId == null ||
+        size.width <= 0 ||
+        size.height <= 0) {
+      return null;
+    }
+
+    return (
+      x: (position.dx / size.width).clamp(0, 1).toDouble(),
+      y: (position.dy / size.height).clamp(0, 1).toDouble(),
+    );
+  }
+
+  void _clearPrimaryPointerState({bool endDrag = false}) {
+    final shouldEndDrag = endDrag && (_axisDragActive || _axisProbePending);
+    _primaryPointer = null;
+    _primaryDownPosition = null;
+    _latestPrimaryPosition = null;
+    _primaryMoved = false;
+    _primaryPointerUpPending = false;
+    _axisProbePending = false;
+    _axisDragActive = false;
+    if (shouldEndDrag) {
+      widget.onEndTransformAxisDrag();
+    }
+  }
+
   bool _hasSecondaryButton(int buttons) {
     return (buttons & kSecondaryMouseButton) != 0;
+  }
+
+  bool _hasPrimaryButton(int buttons) {
+    return (buttons & kPrimaryMouseButton) != 0;
   }
 
   bool _isCameraKey(LogicalKeyboardKey key) {

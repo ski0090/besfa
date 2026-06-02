@@ -330,6 +330,71 @@ void main() {
     expect(sent['method'], runtimeIpcAlignSelectedCameraToEditorMethod);
     expect(_asMap(sent['params']), isEmpty);
   });
+
+  test('sends transform axis drag commands', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final commands = <Map<String, Object?>>[];
+    final receivedCommands = Completer<void>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              commands.add(decoded);
+              final method = decoded['method'];
+              final result = switch (method) {
+                runtimeIpcBeginTransformAxisDragMethod => {'axis': 'x'},
+                runtimeIpcUpdateTransformAxisDragMethod => {
+                  'translation': {'x': 1, 'y': 2, 'z': 3},
+                },
+                _ => <String, Object?>{},
+              };
+              socket.write(
+                '${jsonEncode({'type': 'response', 'id': decoded['id'], 'ok': true, 'result': result})}\n',
+              );
+              if (commands.length == 3 && !receivedCommands.isCompleted) {
+                receivedCommands.complete();
+              }
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+    final axis = await client.beginTransformAxisDrag(
+      viewportX: 0.25,
+      viewportY: 0.75,
+    );
+    final translation = await client.updateTransformAxisDrag(
+      viewportX: 0.3,
+      viewportY: 0.7,
+    );
+    await client.endTransformAxisDrag();
+    await receivedCommands.future;
+
+    expect(axis, RuntimeTransformAxis.x);
+    expect(translation?.z, 3);
+    expect(commands[0]['method'], runtimeIpcBeginTransformAxisDragMethod);
+    expect(_asMap(commands[0]['params'])['viewport_y'], 0.75);
+    expect(commands[1]['method'], runtimeIpcUpdateTransformAxisDragMethod);
+    expect(commands[2]['method'], runtimeIpcEndTransformAxisDragMethod);
+  });
 }
 
 Map<String, Object?> _asMap(Object? value) {

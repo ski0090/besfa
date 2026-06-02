@@ -321,6 +321,40 @@ void main() {
     expect(ipcClient.alignSelectedCameraToEditorCalls, 1);
   });
 
+  test(
+    'forwards selected transform axis dragging through runtime IPC',
+    () async {
+      final plugin = FakeBesfaFlutterPlugin();
+      final ipcClient = FakeRuntimeIpcClient()
+        ..transformAxisDragResult = RuntimeTransformAxis.y;
+      final controller = RuntimePreviewController(
+        plugin: plugin,
+        ipcClient: ipcClient,
+      );
+      addTearDown(controller.dispose);
+      addTearDown(ipcClient.close);
+
+      await controller.ensureRuntimeReady();
+
+      final axis = await controller.beginSelectedTransformAxisDrag(
+        viewportX: 0.2,
+        viewportY: 0.3,
+      );
+      await controller.updateSelectedTransformAxisDrag(
+        viewportX: 0.25,
+        viewportY: 0.35,
+      );
+      await controller.endSelectedTransformAxisDrag();
+
+      expect(axis, RuntimeTransformAxis.y);
+      expect(ipcClient.beginTransformAxisDragCalls, 1);
+      expect(ipcClient.updateTransformAxisDragCalls, 1);
+      expect(ipcClient.endTransformAxisDragCalls, 1);
+      expect(ipcClient.lastTransformAxisDragBegin?.viewportX, 0.2);
+      expect(ipcClient.lastTransformAxisDragUpdate?.viewportY, 0.35);
+    },
+  );
+
   test('updates editor camera state from runtime IPC events', () async {
     final plugin = FakeBesfaFlutterPlugin();
     final ipcClient = FakeRuntimeIpcClient();

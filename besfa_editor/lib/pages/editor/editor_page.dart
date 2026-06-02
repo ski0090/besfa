@@ -104,6 +104,26 @@ class _EditorPageState extends State<EditorPage> {
                               ),
                             );
                           },
+                          onBeginTransformAxisDrag: (viewportX, viewportY) {
+                            return runtimePreview
+                                .beginSelectedTransformAxisDrag(
+                                  viewportX: viewportX,
+                                  viewportY: viewportY,
+                                );
+                          },
+                          onUpdateTransformAxisDrag: (viewportX, viewportY) {
+                            unawaited(
+                              runtimePreview.updateSelectedTransformAxisDrag(
+                                viewportX: viewportX,
+                                viewportY: viewportY,
+                              ),
+                            );
+                          },
+                          onEndTransformAxisDrag: () {
+                            unawaited(
+                              runtimePreview.endSelectedTransformAxisDrag(),
+                            );
+                          },
                         ),
                       ),
                       const VerticalDivider(width: 1),
