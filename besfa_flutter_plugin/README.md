@@ -24,6 +24,10 @@ under the workspace `target/debug` or `target/release` directories.
 When a runtime process is launched, stdout and stderr are written to
 `target/besfa_runtime.log` in the workspace when possible, or to
 `besfa_runtime.log` in the runtime working directory.
+IPC runtime launch is a fresh editor session launch: before starting the new
+runtime, the bridge stops its tracked child process and, on Windows, terminates
+stale `besfa_runtime.exe` processes whose executable path matches the runtime
+that will be launched.
 
 Development overrides:
 

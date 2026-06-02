@@ -1,6 +1,7 @@
 use std::{
     ffi::{CString, c_char},
     fs::{File, OpenOptions, create_dir_all},
+    mem::size_of,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     ptr,
@@ -70,6 +71,12 @@ pub extern "C" fn besfa_runtime_start_with_ipc(port: i32, token: u64) -> i32 {
 }
 
 fn start_runtime(ipc: Option<RuntimeIpcLaunch>) -> i32 {
+    let Some(runtime_path) = find_runtime_executable() else {
+        set_last_error(RUNTIME_ERROR_EXECUTABLE_NOT_FOUND);
+        return RUNTIME_COMMAND_FAILED;
+    };
+    let working_dir = runtime_working_dir(&runtime_path);
+
     let mut runtime_process = match RUNTIME_PROCESS.lock() {
         Ok(runtime_process) => runtime_process,
         Err(_) => {
@@ -78,11 +85,18 @@ fn start_runtime(ipc: Option<RuntimeIpcLaunch>) -> i32 {
         }
     };
 
-    if let Some(child) = runtime_process.as_mut() {
+    if ipc.is_some() {
+        if let Err(error) = stop_tracked_runtime_process(&mut runtime_process) {
+            set_last_error(error);
+            return RUNTIME_COMMAND_FAILED;
+        }
+        if !terminate_stale_runtime_processes(&runtime_path) {
+            set_last_error(RUNTIME_ERROR_STOP_FAILED);
+            return RUNTIME_COMMAND_FAILED;
+        }
+    } else if let Some(child) = runtime_process.as_mut() {
         match child.try_wait() {
-            Ok(Some(_)) => {
-                *runtime_process = None;
-            }
+            Ok(Some(_)) => *runtime_process = None,
             Ok(None) => {
                 set_last_error(RUNTIME_ERROR_NONE);
                 return RUNTIME_COMMAND_ALREADY_RUNNING;
@@ -94,13 +108,7 @@ fn start_runtime(ipc: Option<RuntimeIpcLaunch>) -> i32 {
         }
     }
 
-    let Some(runtime_path) = find_runtime_executable() else {
-        set_last_error(RUNTIME_ERROR_EXECUTABLE_NOT_FOUND);
-        return RUNTIME_COMMAND_FAILED;
-    };
-    let working_dir = runtime_working_dir(&runtime_path);
-
-    let mut command = Command::new(runtime_path);
+    let mut command = Command::new(&runtime_path);
     command.current_dir(&working_dir).stdin(Stdio::null());
     configure_runtime_stdio(&mut command, &working_dir);
 
@@ -123,6 +131,27 @@ fn start_runtime(ipc: Option<RuntimeIpcLaunch>) -> i32 {
             set_last_error(RUNTIME_ERROR_SPAWN_FAILED);
             RUNTIME_COMMAND_FAILED
         }
+    }
+}
+
+fn stop_tracked_runtime_process(runtime_process: &mut Option<Child>) -> Result<(), i32> {
+    let Some(child) = runtime_process.as_mut() else {
+        return Ok(());
+    };
+
+    match child.try_wait() {
+        Ok(Some(_)) => {
+            *runtime_process = None;
+            Ok(())
+        }
+        Ok(None) => match child.kill().and_then(|_| child.wait()) {
+            Ok(_) => {
+                *runtime_process = None;
+                Ok(())
+            }
+            Err(_) => Err(RUNTIME_ERROR_STOP_FAILED),
+        },
+        Err(_) => Err(RUNTIME_ERROR_STATUS_FAILED),
     }
 }
 
@@ -321,6 +350,127 @@ fn runtime_working_dir(runtime_path: &Path) -> PathBuf {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(windows)]
+fn terminate_stale_runtime_processes(runtime_path: &Path) -> bool {
+    use windows::{
+        Win32::{
+            Foundation::{CloseHandle, HANDLE},
+            System::{
+                Diagnostics::ToolHelp::{
+                    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+                    TH32CS_SNAPPROCESS,
+                },
+                Threading::{
+                    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+                    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW,
+                    TerminateProcess, WaitForSingleObject,
+                },
+            },
+        },
+        core::PWSTR,
+    };
+
+    struct HandleGuard(HANDLE);
+
+    impl Drop for HandleGuard {
+        fn drop(&mut self) {
+            if !self.0.is_invalid() {
+                unsafe {
+                    let _ = CloseHandle(self.0);
+                }
+            }
+        }
+    }
+
+    fn process_entry_executable_name(entry: &PROCESSENTRY32W) -> String {
+        let length = entry
+            .szExeFile
+            .iter()
+            .position(|value| *value == 0)
+            .unwrap_or(entry.szExeFile.len());
+        String::from_utf16_lossy(&entry.szExeFile[..length])
+    }
+
+    fn process_image_path(process: HANDLE) -> Option<String> {
+        let mut buffer = vec![0_u16; 32_768];
+        let mut length = buffer.len() as u32;
+        unsafe {
+            QueryFullProcessImageNameW(
+                process,
+                PROCESS_NAME_WIN32,
+                PWSTR(buffer.as_mut_ptr()),
+                &mut length,
+            )
+            .ok()?;
+        }
+
+        normalized_path_string(Path::new(&String::from_utf16_lossy(
+            &buffer[..length as usize],
+        )))
+    }
+
+    let Some(target_path) = normalized_path_string(runtime_path) else {
+        return false;
+    };
+    let target_executable_name = runtime_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(runtime_executable_name());
+    let current_process_id = std::process::id();
+
+    let snapshot = match unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) } {
+        Ok(snapshot) => HandleGuard(snapshot),
+        Err(_) => return false,
+    };
+    let mut entry = PROCESSENTRY32W {
+        dwSize: size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+
+    if unsafe { Process32FirstW(snapshot.0, &mut entry) }.is_err() {
+        return true;
+    }
+
+    loop {
+        let process_id = entry.th32ProcessID;
+        if process_id != current_process_id
+            && process_entry_executable_name(&entry).eq_ignore_ascii_case(target_executable_name)
+        {
+            let access =
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE;
+            if let Ok(process) = unsafe { OpenProcess(access, false, process_id) } {
+                let process = HandleGuard(process);
+                if let Some(process_path) = process_image_path(process.0)
+                    && process_path == target_path
+                    && unsafe { TerminateProcess(process.0, 1) }.is_err()
+                {
+                    return false;
+                }
+
+                unsafe {
+                    let _ = WaitForSingleObject(process.0, 1_000);
+                }
+            }
+        }
+
+        if unsafe { Process32NextW(snapshot.0, &mut entry) }.is_err() {
+            break;
+        }
+    }
+
+    true
+}
+
+#[cfg(not(windows))]
+fn terminate_stale_runtime_processes(_runtime_path: &Path) -> bool {
+    true
+}
+
+fn normalized_path_string(path: &Path) -> Option<String> {
+    let path = path.canonicalize().ok()?;
+    Some(path.to_string_lossy().replace('/', "\\").to_lowercase())
 }
 
 fn runtime_executable_name() -> &'static str {
