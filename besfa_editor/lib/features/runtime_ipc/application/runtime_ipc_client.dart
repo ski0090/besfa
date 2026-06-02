@@ -13,6 +13,8 @@ const String runtimeIpcPickEntityMethod = 'pick_entity';
 const String runtimeIpcCreateEntityMethod = 'create_entity';
 const String runtimeIpcSetTransformMethod = 'set_transform';
 const String runtimeIpcEditorCameraInputMethod = 'editor_camera_input';
+const String runtimeIpcAlignSelectedCameraToEditorMethod =
+    'align_selected_camera_to_editor';
 
 /// Port and token reserved by the editor before launching the runtime.
 class RuntimeIpcHandshake {
@@ -215,6 +217,11 @@ class RuntimeIpcClient {
         'delta_seconds': deltaSeconds,
       },
     );
+  }
+
+  /// Sends `align_selected_camera_to_editor` to copy the editor camera transform.
+  Future<void> alignSelectedCameraToEditor() async {
+    await sendCommand(runtimeIpcAlignSelectedCameraToEditorMethod);
   }
 
   void _sendHello(Socket socket, RuntimeIpcHandshake handshake) {

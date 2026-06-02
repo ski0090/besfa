@@ -8,6 +8,7 @@ class InspectorPanel extends StatefulWidget {
     required this.selectedEntity,
     required this.cameraPreviewTextureId,
     required this.onSetTranslation,
+    required this.onAlignSelectedCameraToEditor,
     super.key,
   });
 
@@ -19,6 +20,9 @@ class InspectorPanel extends StatefulWidget {
 
   /// Applies a new translation to the selected runtime entity.
   final ValueChanged<RuntimeVector3> onSetTranslation;
+
+  /// Copies the current editor Scene View camera transform to the selected camera.
+  final VoidCallback onAlignSelectedCameraToEditor;
 
   @override
   State<InspectorPanel> createState() => _InspectorPanelState();
@@ -93,9 +97,24 @@ class _InspectorPanelState extends State<InspectorPanel> {
             ),
           if (selectedEntity.kind == 'camera') ...[
             const SizedBox(height: 16),
-            Text(
-              'Camera Preview',
-              style: Theme.of(context).textTheme.labelLarge,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Camera Preview',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                ),
+                SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: IconButton(
+                    tooltip: 'Align to Scene View',
+                    onPressed: widget.onAlignSelectedCameraToEditor,
+                    icon: const Icon(Icons.center_focus_strong),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             _CameraPreview(textureId: widget.cameraPreviewTextureId),

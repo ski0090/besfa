@@ -195,6 +195,54 @@ pub(super) fn process_runtime_ipc_commands(
                     ));
                 }
             }
+            RuntimeCommand::AlignSelectedCameraToEditor => {
+                let Some(selected_entity_id) = selection.selected_entity_id.as_deref() else {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new("no_selected_entity", "No runtime entity is selected."),
+                    ));
+                    continue;
+                };
+                let Some(editor_transform) =
+                    editor_cameras.iter_mut().next().map(|transform| *transform)
+                else {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "editor_camera_not_found",
+                            "Runtime editor preview camera was not found.",
+                        ),
+                    ));
+                    continue;
+                };
+                if let Some((node, mut transform)) = transforms
+                    .iter_mut()
+                    .find(|(node, _)| node.id.as_str() == selected_entity_id)
+                {
+                    if node.kind != "camera" {
+                        let _ = request.response_tx.send(error_response(
+                            request.id,
+                            IpcError::new(
+                                "selected_entity_not_camera",
+                                format!("Selected runtime entity is not a camera: {}", node.id),
+                            ),
+                        ));
+                        continue;
+                    }
+
+                    *transform = editor_transform;
+                    let _ = request.response_tx.send(empty_ok_response(request.id));
+                    server.request_snapshot();
+                } else {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "transform_not_found",
+                            format!("Runtime entity transform was not found: {selected_entity_id}"),
+                        ),
+                    ));
+                }
+            }
         }
     }
 }

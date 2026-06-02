@@ -12,10 +12,11 @@ pub use codec::{
     runtime_ready_message, scene_snapshot_message,
 };
 pub use command::{
-    CreateEntityParams, CreateEntityResult, EditorCameraInputParams, METHOD_CREATE_ENTITY,
-    METHOD_EDITOR_CAMERA_INPUT, METHOD_OPEN_PROJECT, METHOD_PICK_ENTITY, METHOD_RELOAD_SCENE,
-    METHOD_SELECT_ENTITY, METHOD_SET_TRANSFORM, OpenProjectParams, PickEntityParams,
-    PickEntityResult, RuntimeCommand, SelectEntityParams, SetTransformParams,
+    CreateEntityParams, CreateEntityResult, EditorCameraInputParams,
+    METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR, METHOD_CREATE_ENTITY, METHOD_EDITOR_CAMERA_INPUT,
+    METHOD_OPEN_PROJECT, METHOD_PICK_ENTITY, METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY,
+    METHOD_SET_TRANSFORM, OpenProjectParams, PickEntityParams, PickEntityResult, RuntimeCommand,
+    SelectEntityParams, SetTransformParams,
 };
 pub use config::RuntimeIpcConfig;
 pub use error::IpcError;
@@ -142,6 +143,17 @@ mod tests {
     }
 
     #[test]
+    fn encodes_align_selected_camera_to_editor_command() {
+        let line = encode_line(&command_message(
+            12,
+            RuntimeCommand::AlignSelectedCameraToEditor,
+        ))
+        .unwrap();
+
+        assert!(line.contains("\"method\":\"align_selected_camera_to_editor\""));
+    }
+
+    #[test]
     fn decodes_runtime_command() {
         let command = RuntimeCommand::from_method_params(
             METHOD_OPEN_PROJECT,
@@ -194,6 +206,15 @@ mod tests {
                 delta_seconds: 0.0,
             })
         );
+    }
+
+    #[test]
+    fn decodes_align_selected_camera_to_editor_command() {
+        let command =
+            RuntimeCommand::from_method_params(METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR, json!({}))
+                .unwrap();
+
+        assert_eq!(command, RuntimeCommand::AlignSelectedCameraToEditor);
     }
 
     #[test]

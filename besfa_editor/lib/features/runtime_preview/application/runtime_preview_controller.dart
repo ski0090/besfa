@@ -308,6 +308,25 @@ class RuntimePreviewController extends ChangeNotifier {
     }
   }
 
+  /// Aligns the selected runtime camera to the current editor Scene View camera.
+  Future<void> alignSelectedCameraToEditor() async {
+    final selectedEntity = sceneSnapshot?.selectedEntity;
+    if (isBusy ||
+        status != RuntimePreviewStatus.running ||
+        !_isRuntimeIpcReady ||
+        selectedEntity?.kind != 'camera') {
+      return;
+    }
+
+    _apply(isBusy: true);
+    try {
+      await _ipcClient.alignSelectedCameraToEditor();
+      _apply(isBusy: false);
+    } on Object {
+      _apply(message: 'Runtime camera could not be aligned.', isBusy: false);
+    }
+  }
+
   Future<void> _recoverRuntimeAfterExit(String startingMessage) async {
     if (_disposed || isBusy) {
       return;

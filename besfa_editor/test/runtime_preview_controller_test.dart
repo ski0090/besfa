@@ -279,6 +279,48 @@ void main() {
     expect(ipcClient.lastEditorCameraInput?.deltaSeconds, 0.02);
   });
 
+  test('aligns selected camera to editor camera through runtime IPC', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    await controller.ensureRuntimeReady();
+    ipcClient.emit(
+      const RuntimeIpcEvent(
+        kind: RuntimeIpcEventKind.sceneSnapshot,
+        payload: {
+          'selected_entity_id': 'camera_3d',
+          'root': {
+            'id': 'world',
+            'name': 'World',
+            'kind': 'world',
+            'children': [
+              {
+                'id': 'camera_3d',
+                'name': 'Camera3d',
+                'kind': 'camera',
+                'transform': {
+                  'translation': {'x': 0, 'y': 0, 'z': 0},
+                },
+                'children': <Object?>[],
+              },
+            ],
+          },
+        },
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    await controller.alignSelectedCameraToEditor();
+
+    expect(ipcClient.alignSelectedCameraToEditorCalls, 1);
+  });
+
   test('updates editor camera state from runtime IPC events', () async {
     final plugin = FakeBesfaFlutterPlugin();
     final ipcClient = FakeRuntimeIpcClient();

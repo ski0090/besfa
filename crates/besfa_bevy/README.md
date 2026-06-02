@@ -60,6 +60,9 @@ The runtime also owns a separate selected-camera preview surface. When the
 selected scene entity is a camera, an internal preview camera mirrors that
 camera's transform and renders into the `camera_preview_surface_ready` target
 used by the Inspector.
+The `align_selected_camera_to_editor` command copies the editor preview
+camera's current `Transform` into the selected scene camera so the user can
+promote the Scene View framing into the runtime camera.
 
 ## Usage
 

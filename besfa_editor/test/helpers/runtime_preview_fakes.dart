@@ -100,6 +100,7 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
   final StreamController<RuntimeIpcEvent> _events =
       StreamController<RuntimeIpcEvent>.broadcast();
   int createEntityCalls = 0;
+  int alignSelectedCameraToEditorCalls = 0;
   RuntimeVector3? lastTranslation;
   ({double viewportX, double viewportY})? lastPick;
   ({
@@ -197,5 +198,10 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
       speedMultiplier: speedMultiplier,
       deltaSeconds: deltaSeconds,
     );
+  }
+
+  @override
+  Future<void> alignSelectedCameraToEditor() async {
+    alignSelectedCameraToEditorCalls += 1;
   }
 }

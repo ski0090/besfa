@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets('shows selected camera preview below position', (tester) async {
+    var alignCalls = 0;
+
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -20,6 +22,7 @@ void main() {
             ),
             cameraPreviewTextureId: 22,
             onSetTranslation: (_) {},
+            onAlignSelectedCameraToEditor: () => alignCalls += 1,
           ),
         ),
       ),
@@ -28,5 +31,9 @@ void main() {
     expect(find.text('Position'), findsOneWidget);
     expect(find.text('Camera Preview'), findsOneWidget);
     expect(find.byType(Texture), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Align to Scene View'));
+
+    expect(alignCalls, 1);
   });
 }

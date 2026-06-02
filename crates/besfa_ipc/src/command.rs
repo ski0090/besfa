@@ -17,6 +17,8 @@ pub const METHOD_CREATE_ENTITY: &str = "create_entity";
 pub const METHOD_SET_TRANSFORM: &str = "set_transform";
 /// Runtime command method name for moving the editor preview camera.
 pub const METHOD_EDITOR_CAMERA_INPUT: &str = "editor_camera_input";
+/// Runtime command method name for aligning the selected camera to the editor camera.
+pub const METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR: &str = "align_selected_camera_to_editor";
 
 /// Typed editor-to-runtime command set.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +37,8 @@ pub enum RuntimeCommand {
     SetTransform(SetTransformParams),
     /// Apply editor-only camera navigation input to the preview camera.
     EditorCameraInput(EditorCameraInputParams),
+    /// Copy the editor preview camera transform into the selected scene camera.
+    AlignSelectedCameraToEditor,
 }
 
 impl RuntimeCommand {
@@ -48,6 +52,7 @@ impl RuntimeCommand {
             RuntimeCommand::CreateEntity(_) => METHOD_CREATE_ENTITY,
             RuntimeCommand::SetTransform(_) => METHOD_SET_TRANSFORM,
             RuntimeCommand::EditorCameraInput(_) => METHOD_EDITOR_CAMERA_INPUT,
+            RuntimeCommand::AlignSelectedCameraToEditor => METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR,
         }
     }
 
@@ -61,6 +66,7 @@ impl RuntimeCommand {
             RuntimeCommand::CreateEntity(params) => json!(params),
             RuntimeCommand::SetTransform(params) => json!(params),
             RuntimeCommand::EditorCameraInput(params) => json!(params),
+            RuntimeCommand::AlignSelectedCameraToEditor => json!({}),
         }
     }
 
@@ -86,6 +92,9 @@ impl RuntimeCommand {
             METHOD_EDITOR_CAMERA_INPUT => serde_json::from_value(params)
                 .map(RuntimeCommand::EditorCameraInput)
                 .map_err(|error| IpcError::invalid_params(method, error)),
+            METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR => {
+                Ok(RuntimeCommand::AlignSelectedCameraToEditor)
+            }
             _ => Err(IpcError::unsupported_command(method)),
         }
     }

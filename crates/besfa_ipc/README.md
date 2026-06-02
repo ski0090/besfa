@@ -46,6 +46,12 @@ Editor camera navigation input is separate from scene entity transforms:
 {"type":"command","id":5,"method":"editor_camera_input","params":{"rotate_delta_x":12.0,"rotate_delta_y":-4.0,"move_forward":1.0,"speed_multiplier":4.0,"delta_seconds":0.016}}
 ```
 
+Selected scene cameras can be aligned to the current editor camera:
+
+```json
+{"type":"command","id":6,"method":"align_selected_camera_to_editor","params":{}}
+```
+
 Responses are sent by the runtime:
 
 ```json
@@ -72,6 +78,8 @@ Events are pushed by the runtime:
 - `editor_camera_input`: applies editor-only Scene View camera navigation. It
   can carry pointer rotation deltas, local forward/right/world-up movement
   intent, a speed multiplier, and elapsed movement time.
+- `align_selected_camera_to_editor`: copies the editor-only Scene View camera
+  transform into the currently selected scene camera.
 
 ## Events
 

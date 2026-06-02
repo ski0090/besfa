@@ -116,6 +116,8 @@ class _EditorPageState extends State<EditorPage> {
                               runtimePreview.cameraPreviewTextureId,
                           onSetTranslation:
                               runtimePreview.setSelectedEntityTranslation,
+                          onAlignSelectedCameraToEditor:
+                              runtimePreview.alignSelectedCameraToEditor,
                         ),
                       ),
                     ],
