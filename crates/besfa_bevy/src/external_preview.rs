@@ -1,4 +1,6 @@
-use besfa_ipc::{PreviewSurfacePayload, preview_surface_ready_message};
+use besfa_ipc::{
+    PreviewSurfacePayload, camera_preview_surface_ready_message, preview_surface_ready_message,
+};
 use bevy::{
     asset::RenderAssetUsages,
     prelude::*,
@@ -24,6 +26,8 @@ use crate::runtime_ipc::RuntimeIpcServer;
 
 pub(crate) const PREVIEW_SURFACE_WIDTH: u32 = 640;
 pub(crate) const PREVIEW_SURFACE_HEIGHT: u32 = 360;
+pub(crate) const CAMERA_PREVIEW_SURFACE_WIDTH: u32 = 320;
+pub(crate) const CAMERA_PREVIEW_SURFACE_HEIGHT: u32 = 180;
 pub(crate) const PREVIEW_SURFACE_FORMAT: &str = "bgra8_unorm";
 
 /// Installs the runtime-owned shared preview render target bridge.
@@ -32,18 +36,35 @@ pub(crate) struct BesfaExternalPreviewPlugin;
 impl Plugin for BesfaExternalPreviewPlugin {
     fn build(&self, app: &mut App) {
         let (event_tx, event_rx) = mpsc::channel();
+        let (camera_event_tx, camera_event_rx) = mpsc::channel();
         app.insert_resource(PreviewSurfaceEventReceiver(Mutex::new(event_rx)))
+            .insert_resource(CameraPreviewSurfaceEventReceiver(Mutex::new(
+                camera_event_rx,
+            )))
             .init_resource::<PreviewSurfaceEventState>()
+            .init_resource::<CameraPreviewSurfaceEventState>()
             .add_plugins(ExtractResourcePlugin::<PreviewSurfaceTarget>::default())
-            .add_systems(Update, broadcast_preview_surface_events);
+            .add_plugins(ExtractResourcePlugin::<CameraPreviewSurfaceTarget>::default())
+            .add_systems(
+                Update,
+                (
+                    broadcast_preview_surface_events,
+                    broadcast_camera_preview_surface_events,
+                ),
+            );
 
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
                 .insert_resource(PreviewSurfaceEventSender(event_tx))
+                .insert_resource(CameraPreviewSurfaceEventSender(camera_event_tx))
                 .init_resource::<PreviewSurfaceGpuState>()
+                .init_resource::<CameraPreviewSurfaceGpuState>()
                 .add_systems(
                     Render,
-                    prepare_shared_preview_surface
+                    (
+                        prepare_shared_preview_surface,
+                        prepare_shared_camera_preview_surface,
+                    )
                         .in_set(RenderSystems::ManageViews)
                         .after(prepare_assets::<GpuImage>)
                         .before(prepare_view_attachments),
@@ -56,9 +77,42 @@ impl Plugin for BesfaExternalPreviewPlugin {
 pub(crate) fn create_preview_surface_image(
     images: &mut Assets<Image>,
 ) -> (Handle<Image>, PreviewSurfaceTarget) {
+    let (image, info) = create_shared_surface_image(
+        images,
+        PREVIEW_SURFACE_WIDTH,
+        PREVIEW_SURFACE_HEIGHT,
+        "besfa_preview_surface",
+        "BesfaPreviewSurface",
+    );
+
+    (image, PreviewSurfaceTarget { info })
+}
+
+/// Creates the main-world image used for selected camera preview rendering.
+pub(crate) fn create_camera_preview_surface_image(
+    images: &mut Assets<Image>,
+) -> (Handle<Image>, CameraPreviewSurfaceTarget) {
+    let (image, info) = create_shared_surface_image(
+        images,
+        CAMERA_PREVIEW_SURFACE_WIDTH,
+        CAMERA_PREVIEW_SURFACE_HEIGHT,
+        "besfa_camera_preview_surface",
+        "BesfaCameraPreviewSurface",
+    );
+
+    (image, CameraPreviewSurfaceTarget { info })
+}
+
+fn create_shared_surface_image(
+    images: &mut Assets<Image>,
+    width: u32,
+    height: u32,
+    label: &'static str,
+    handle_prefix: &'static str,
+) -> (Handle<Image>, SharedPreviewSurfaceTargetInfo) {
     let size = Extent3d {
-        width: PREVIEW_SURFACE_WIDTH,
-        height: PREVIEW_SURFACE_HEIGHT,
+        width,
+        height,
         depth_or_array_layers: 1,
     };
     let mut image = Image::new_uninit(
@@ -67,24 +121,34 @@ pub(crate) fn create_preview_surface_image(
         TextureFormat::Bgra8Unorm,
         RenderAssetUsages::MAIN_WORLD,
     );
-    image.texture_descriptor.label = Some("besfa_preview_surface");
+    image.texture_descriptor.label = Some(label);
     image.texture_descriptor.usage =
         TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC;
 
     let image_handle = images.add(image);
-    let target = PreviewSurfaceTarget {
+    let info = SharedPreviewSurfaceTargetInfo {
         image: image_handle.clone(),
-        shared_handle_name: format!("Local\\BesfaPreviewSurface-{}", std::process::id()),
-        width: PREVIEW_SURFACE_WIDTH,
-        height: PREVIEW_SURFACE_HEIGHT,
+        shared_handle_name: format!("Local\\{handle_prefix}-{}", std::process::id()),
+        width,
+        height,
         format: PREVIEW_SURFACE_FORMAT.to_string(),
     };
 
-    (image_handle, target)
+    (image_handle, info)
 }
 
 #[derive(Clone, Resource, ExtractResource)]
 pub(crate) struct PreviewSurfaceTarget {
+    info: SharedPreviewSurfaceTargetInfo,
+}
+
+#[derive(Clone, Resource, ExtractResource)]
+pub(crate) struct CameraPreviewSurfaceTarget {
+    info: SharedPreviewSurfaceTargetInfo,
+}
+
+#[derive(Clone)]
+struct SharedPreviewSurfaceTargetInfo {
     image: Handle<Image>,
     shared_handle_name: String,
     width: u32,
@@ -95,8 +159,17 @@ pub(crate) struct PreviewSurfaceTarget {
 #[derive(Resource)]
 struct PreviewSurfaceEventReceiver(Mutex<Receiver<PreviewSurfacePayload>>);
 
+#[derive(Resource)]
+struct CameraPreviewSurfaceEventReceiver(Mutex<Receiver<PreviewSurfacePayload>>);
+
 #[derive(Default, Resource)]
 struct PreviewSurfaceEventState {
+    latest: Option<PreviewSurfacePayload>,
+    rebroadcast_elapsed_secs: f32,
+}
+
+#[derive(Default, Resource)]
+struct CameraPreviewSurfaceEventState {
     latest: Option<PreviewSurfacePayload>,
     rebroadcast_elapsed_secs: f32,
 }
@@ -104,8 +177,17 @@ struct PreviewSurfaceEventState {
 #[derive(Resource)]
 struct PreviewSurfaceEventSender(Sender<PreviewSurfacePayload>);
 
+#[derive(Resource)]
+struct CameraPreviewSurfaceEventSender(Sender<PreviewSurfacePayload>);
+
 #[derive(Default, Resource)]
 struct PreviewSurfaceGpuState {
+    published_handle_name: Option<String>,
+    _shared_handle: Option<SharedPreviewHandle>,
+}
+
+#[derive(Default, Resource)]
+struct CameraPreviewSurfaceGpuState {
     published_handle_name: Option<String>,
     _shared_handle: Option<SharedPreviewHandle>,
 }
@@ -147,6 +229,43 @@ fn broadcast_preview_surface_events(
     }
 }
 
+fn broadcast_camera_preview_surface_events(
+    receiver: Res<CameraPreviewSurfaceEventReceiver>,
+    mut state: ResMut<CameraPreviewSurfaceEventState>,
+    time: Res<Time>,
+    server: Option<Res<RuntimeIpcServer>>,
+) {
+    let Ok(receiver) = receiver.0.lock() else {
+        return;
+    };
+
+    let mut changed = false;
+    loop {
+        match receiver.try_recv() {
+            Ok(payload) => {
+                state.latest = Some(payload);
+                state.rebroadcast_elapsed_secs = 0.0;
+                changed = true;
+            }
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => break,
+        }
+    }
+
+    let Some(server) = server else {
+        return;
+    };
+    let Some(payload) = state.latest.clone() else {
+        return;
+    };
+
+    state.rebroadcast_elapsed_secs += time.delta_secs();
+    if changed || state.rebroadcast_elapsed_secs >= 1.0 {
+        server.broadcast(camera_preview_surface_ready_message(payload));
+        state.rebroadcast_elapsed_secs = 0.0;
+    }
+}
+
 fn prepare_shared_preview_surface(
     target: Option<Res<PreviewSurfaceTarget>>,
     render_device: Res<RenderDevice>,
@@ -158,6 +277,7 @@ fn prepare_shared_preview_surface(
     let Some(target) = target else {
         return;
     };
+    let target = &target.info;
     if state.published_handle_name.as_deref() == Some(target.shared_handle_name.as_str()) {
         return;
     }
@@ -180,11 +300,45 @@ fn prepare_shared_preview_surface(
     }
 }
 
+fn prepare_shared_camera_preview_surface(
+    target: Option<Res<CameraPreviewSurfaceTarget>>,
+    render_device: Res<RenderDevice>,
+    default_sampler: Res<DefaultImageSampler>,
+    mut gpu_images: ResMut<RenderAssets<GpuImage>>,
+    mut state: ResMut<CameraPreviewSurfaceGpuState>,
+    sender: Res<CameraPreviewSurfaceEventSender>,
+) {
+    let Some(target) = target else {
+        return;
+    };
+    let target = &target.info;
+    if state.published_handle_name.as_deref() == Some(target.shared_handle_name.as_str()) {
+        return;
+    }
+
+    match create_shared_gpu_image(&render_device, &default_sampler, target) {
+        Ok((gpu_image, shared_handle)) => {
+            gpu_images.insert(target.image.id(), gpu_image);
+            state.published_handle_name = Some(target.shared_handle_name.clone());
+            state._shared_handle = Some(shared_handle);
+            let _ = sender.0.send(PreviewSurfacePayload {
+                shared_handle_name: target.shared_handle_name.clone(),
+                width: target.width,
+                height: target.height,
+                format: target.format.clone(),
+            });
+        }
+        Err(error) => {
+            bevy::log::warn!("Camera preview shared surface could not be prepared: {error}");
+        }
+    }
+}
+
 #[cfg(windows)]
 fn create_shared_gpu_image(
     render_device: &RenderDevice,
     default_sampler: &DefaultImageSampler,
-    target: &PreviewSurfaceTarget,
+    target: &SharedPreviewSurfaceTargetInfo,
 ) -> Result<(GpuImage, SharedPreviewHandle), String> {
     use windows::{
         Win32::{
@@ -310,7 +464,7 @@ fn create_shared_gpu_image(
 fn create_shared_gpu_image(
     _render_device: &RenderDevice,
     _default_sampler: &DefaultImageSampler,
-    _target: &PreviewSurfaceTarget,
+    _target: &SharedPreviewSurfaceTargetInfo,
 ) -> Result<(GpuImage, SharedPreviewHandle), String> {
     Err("shared preview surfaces are only implemented on Windows".to_string())
 }

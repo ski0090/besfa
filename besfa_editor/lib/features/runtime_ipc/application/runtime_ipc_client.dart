@@ -9,6 +9,17 @@ const int runtimeIpcProtocolVersion = 1;
 const String runtimeIpcOpenProjectMethod = 'open_project';
 const String runtimeIpcReloadSceneMethod = 'reload_scene';
 const String runtimeIpcSelectEntityMethod = 'select_entity';
+const String runtimeIpcPickEntityMethod = 'pick_entity';
+const String runtimeIpcCreateEntityMethod = 'create_entity';
+const String runtimeIpcSetTransformMethod = 'set_transform';
+const String runtimeIpcEditorCameraInputMethod = 'editor_camera_input';
+const String runtimeIpcAlignSelectedCameraToEditorMethod =
+    'align_selected_camera_to_editor';
+const String runtimeIpcBeginTransformAxisDragMethod =
+    'begin_transform_axis_drag';
+const String runtimeIpcUpdateTransformAxisDragMethod =
+    'update_transform_axis_drag';
+const String runtimeIpcEndTransformAxisDragMethod = 'end_transform_axis_drag';
 
 /// Port and token reserved by the editor before launching the runtime.
 class RuntimeIpcHandshake {
@@ -46,7 +57,7 @@ class RuntimeIpcClient {
   /// Connects to the launched runtime and waits for `runtime_ready`.
   Future<void> connectAndWaitReady(
     RuntimeIpcHandshake handshake, {
-    Duration timeout = const Duration(seconds: 5),
+    Duration timeout = const Duration(seconds: 20),
   }) async {
     await disconnect();
 
@@ -143,6 +154,113 @@ class RuntimeIpcClient {
       runtimeIpcSelectEntityMethod,
       params: {'entity_id': entityId},
     );
+  }
+
+  /// Sends `pick_entity` using normalized preview viewport coordinates.
+  Future<String?> pickEntity({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    final response = await sendCommand(
+      runtimeIpcPickEntityMethod,
+      params: {'viewport_x': viewportX, 'viewport_y': viewportY},
+    );
+    return response.result['entity_id'] as String?;
+  }
+
+  /// Sends `create_entity` to the runtime and returns the new entity id.
+  Future<String?> createEntity({
+    required String kind,
+    String? name,
+    String? parentEntityId,
+  }) async {
+    final params = <String, Object?>{'kind': kind};
+    if (name != null) {
+      params['name'] = name;
+    }
+    if (parentEntityId != null) {
+      params['parent_entity_id'] = parentEntityId;
+    }
+
+    final response = await sendCommand(
+      runtimeIpcCreateEntityMethod,
+      params: params,
+    );
+    return response.result['entity_id'] as String?;
+  }
+
+  /// Sends `set_transform` to update a runtime entity translation.
+  Future<void> setTransform({
+    required String entityId,
+    required RuntimeVector3 translation,
+  }) async {
+    await sendCommand(
+      runtimeIpcSetTransformMethod,
+      params: {'entity_id': entityId, 'translation': translation.toPayload()},
+    );
+  }
+
+  /// Sends editor-only Scene View camera navigation input to the runtime.
+  Future<void> editorCameraInput({
+    double rotateDeltaX = 0,
+    double rotateDeltaY = 0,
+    double moveForward = 0,
+    double moveRight = 0,
+    double moveUp = 0,
+    double speedMultiplier = 1,
+    double deltaSeconds = 0,
+  }) async {
+    await sendCommand(
+      runtimeIpcEditorCameraInputMethod,
+      params: {
+        'rotate_delta_x': rotateDeltaX,
+        'rotate_delta_y': rotateDeltaY,
+        'move_forward': moveForward,
+        'move_right': moveRight,
+        'move_up': moveUp,
+        'speed_multiplier': speedMultiplier,
+        'delta_seconds': deltaSeconds,
+      },
+    );
+  }
+
+  /// Sends `align_selected_camera_to_editor` to copy the editor camera transform.
+  Future<void> alignSelectedCameraToEditor() async {
+    await sendCommand(runtimeIpcAlignSelectedCameraToEditorMethod);
+  }
+
+  /// Sends `begin_transform_axis_drag` and returns the hit axis, if any.
+  Future<RuntimeTransformAxis?> beginTransformAxisDrag({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    final response = await sendCommand(
+      runtimeIpcBeginTransformAxisDragMethod,
+      params: {'viewport_x': viewportX, 'viewport_y': viewportY},
+    );
+    return RuntimeTransformAxis.fromWireName(response.result['axis']);
+  }
+
+  /// Sends `update_transform_axis_drag` and returns the updated translation.
+  Future<RuntimeVector3?> updateTransformAxisDrag({
+    required double viewportX,
+    required double viewportY,
+  }) async {
+    final response = await sendCommand(
+      runtimeIpcUpdateTransformAxisDragMethod,
+      params: {'viewport_x': viewportX, 'viewport_y': viewportY},
+    );
+    final translation = _asJsonMap(response.result['translation']);
+    if (translation.isEmpty) {
+      return null;
+    }
+
+    return RuntimeVector3.fromPayload(translation);
+  }
+
+  /// Sends `end_transform_axis_drag` to clear the runtime drag session.
+  Future<void> endTransformAxisDrag() async {
+    await sendCommand(runtimeIpcEndTransformAxisDragMethod);
   }
 
   void _sendHello(Socket socket, RuntimeIpcHandshake handshake) {

@@ -15,6 +15,12 @@ enum RuntimeIpcEventKind {
   /// Runtime preview surface descriptor.
   previewSurfaceReady('preview_surface_ready'),
 
+  /// Runtime selected camera preview surface descriptor.
+  cameraPreviewSurfaceReady('camera_preview_surface_ready'),
+
+  /// Editor Scene View camera orientation.
+  editorCameraState('editor_camera_state'),
+
   /// Unknown or unsupported event name.
   unknown('');
 
@@ -139,6 +145,21 @@ class RuntimeSceneSnapshot {
 
   /// Currently selected entity id, if any.
   final String? selectedEntityId;
+
+  /// Returns this snapshot with a different selected entity id.
+  RuntimeSceneSnapshot withSelectedEntityId(String? selectedEntityId) {
+    return RuntimeSceneSnapshot(root: root, selectedEntityId: selectedEntityId);
+  }
+
+  /// Currently selected entity node, if it exists in this snapshot.
+  RuntimeSceneEntity? get selectedEntity {
+    final selectedEntityId = this.selectedEntityId;
+    if (selectedEntityId == null) {
+      return null;
+    }
+
+    return root.findById(selectedEntityId);
+  }
 }
 
 /// Entity node inside a runtime scene snapshot.
@@ -147,6 +168,7 @@ class RuntimeSceneEntity {
     required this.id,
     required this.name,
     required this.kind,
+    required this.transform,
     required this.children,
   });
 
@@ -166,6 +188,9 @@ class RuntimeSceneEntity {
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? 'Entity',
       kind: json['kind'] as String? ?? 'entity',
+      transform: RuntimeSceneTransform.fromPayloadOrNull(
+        _asMap(json['transform']),
+      ),
       children: children,
     );
   }
@@ -179,8 +204,111 @@ class RuntimeSceneEntity {
   /// Lightweight type hint for editor UI.
   final String kind;
 
+  /// Optional runtime transform metadata for placement editing.
+  final RuntimeSceneTransform? transform;
+
   /// Child entities.
   final List<RuntimeSceneEntity> children;
+
+  /// Finds this entity or a descendant by stable runtime id.
+  RuntimeSceneEntity? findById(String entityId) {
+    if (id == entityId) {
+      return this;
+    }
+
+    for (final child in children) {
+      final found = child.findById(entityId);
+      if (found != null) {
+        return found;
+      }
+    }
+
+    return null;
+  }
+}
+
+/// Runtime transform metadata for a scene entity.
+class RuntimeSceneTransform {
+  const RuntimeSceneTransform({required this.translation});
+
+  /// Parses transform payload, returning null when the payload is absent.
+  factory RuntimeSceneTransform.fromPayload(Map<String, Object?> payload) {
+    return RuntimeSceneTransform(
+      translation: RuntimeVector3.fromPayload(_asMap(payload['translation'])),
+    );
+  }
+
+  /// Parses transform payload only when it is present.
+  static RuntimeSceneTransform? fromPayloadOrNull(
+    Map<String, Object?> payload,
+  ) {
+    if (payload.isEmpty) {
+      return null;
+    }
+
+    return RuntimeSceneTransform.fromPayload(payload);
+  }
+
+  /// Local translation in runtime world units.
+  final RuntimeVector3 translation;
+}
+
+/// Three-dimensional runtime vector.
+class RuntimeVector3 {
+  const RuntimeVector3({required this.x, required this.y, required this.z});
+
+  /// Parses a vector payload.
+  factory RuntimeVector3.fromPayload(Map<String, Object?> payload) {
+    return RuntimeVector3(
+      x: (payload['x'] as num?)?.toDouble() ?? 0,
+      y: (payload['y'] as num?)?.toDouble() ?? 0,
+      z: (payload['z'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  /// X axis component.
+  final double x;
+
+  /// Y axis component.
+  final double y;
+
+  /// Z axis component.
+  final double z;
+
+  /// Converts this vector into the runtime IPC wire shape.
+  Map<String, Object?> toPayload() => {'x': x, 'y': y, 'z': z};
+}
+
+/// Local transform axis used by runtime viewport gizmo dragging.
+enum RuntimeTransformAxis {
+  /// Local X axis.
+  x('x'),
+
+  /// Local Y axis.
+  y('y'),
+
+  /// Local Z axis.
+  z('z');
+
+  const RuntimeTransformAxis(this.wireName);
+
+  /// Wire value used by runtime IPC.
+  final String wireName;
+
+  /// Converts a wire axis name into an editor enum value.
+  static RuntimeTransformAxis? fromWireName(Object? value) {
+    if (value is! String) {
+      return null;
+    }
+
+    for (final axis in RuntimeTransformAxis.values) {
+      if (axis.wireName == value) {
+        return axis;
+      }
+    }
+
+    return null;
+  }
 }
 
 /// Runtime frame timing telemetry.
@@ -200,6 +328,33 @@ class RuntimeFrameStats {
 
   /// Average frame time in milliseconds.
   final double frameTimeMs;
+}
+
+/// Editor-only Scene View camera orientation.
+class RuntimeEditorCameraState {
+  const RuntimeEditorCameraState({
+    required this.right,
+    required this.up,
+    required this.forward,
+  });
+
+  /// Parses an editor camera state event payload.
+  factory RuntimeEditorCameraState.fromPayload(Map<String, Object?> payload) {
+    return RuntimeEditorCameraState(
+      right: RuntimeVector3.fromPayload(_asMap(payload['right'])),
+      up: RuntimeVector3.fromPayload(_asMap(payload['up'])),
+      forward: RuntimeVector3.fromPayload(_asMap(payload['forward'])),
+    );
+  }
+
+  /// Camera-local right direction in world space.
+  final RuntimeVector3 right;
+
+  /// Camera-local up direction in world space.
+  final RuntimeVector3 up;
+
+  /// Camera-local forward/view direction in world space.
+  final RuntimeVector3 forward;
 }
 
 /// Runtime log message shown by editor status surfaces.

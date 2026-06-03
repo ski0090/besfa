@@ -29,3 +29,6 @@ external int besfaRuntimeStatus();
 
 @Native<Int32 Function()>(symbol: 'besfa_runtime_last_error_code')
 external int besfaRuntimeLastErrorCode();
+
+@Native<Pointer<Char> Function()>(symbol: 'besfa_runtime_log_path')
+external Pointer<Char> besfaRuntimeLogPath();

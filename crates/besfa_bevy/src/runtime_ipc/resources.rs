@@ -1,4 +1,4 @@
-use besfa_ipc::{RuntimeCommand, RuntimeIpcConfig, RuntimeMessage};
+use besfa_ipc::{RuntimeCommand, RuntimeIpcConfig, RuntimeMessage, TransformAxis};
 use bevy::prelude::*;
 use std::sync::{
     Arc, Mutex,
@@ -149,4 +149,25 @@ pub(super) struct RuntimeIpcSnapshotCursor {
 pub(super) struct RuntimeIpcFrameStats {
     pub(super) elapsed_secs: f32,
     pub(super) frames: u32,
+}
+
+#[derive(Resource, Default)]
+pub(super) struct RuntimeIpcEditorCameraState {
+    pub(super) elapsed_secs: f32,
+    pub(super) last: Option<besfa_ipc::EditorCameraStatePayload>,
+}
+
+#[derive(Resource, Default)]
+pub(super) struct RuntimeIpcTransformAxisDrag {
+    pub(super) active: Option<RuntimeIpcTransformAxisDragState>,
+}
+
+#[derive(Clone)]
+pub(super) struct RuntimeIpcTransformAxisDragState {
+    pub(super) entity_id: String,
+    pub(super) axis: TransformAxis,
+    pub(super) start_translation: Vec3,
+    pub(super) axis_world: Vec3,
+    pub(super) start_viewport_position: Vec2,
+    pub(super) screen_axis: Vec2,
 }

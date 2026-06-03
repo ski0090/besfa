@@ -12,6 +12,7 @@ metadata and launch, stop, and inspect the standalone preview runtime process.
 - Keep a small FFI smoke path for bridge health checks.
 - Launch `besfa_runtime` as a child process.
 - Launch `besfa_runtime` with IPC arguments for editor/runtime communication.
+- Redirect runtime stdout/stderr to a log file and expose the path to Dart.
 - Create, attach, refresh, and dispose Windows preview textures for the editor
   viewport.
 - Report runtime process state and the last runtime bridge error.
@@ -20,6 +21,13 @@ metadata and launch, stop, and inspect the standalone preview runtime process.
 
 Runtime launch looks for `besfa_runtime.exe` beside the editor executable and
 under the workspace `target/debug` or `target/release` directories.
+When a runtime process is launched, stdout and stderr are written to
+`target/besfa_runtime.log` in the workspace when possible, or to
+`besfa_runtime.log` in the runtime working directory.
+IPC runtime launch is a fresh editor session launch: before starting the new
+runtime, the bridge stops its tracked child process and, on Windows, terminates
+stale `besfa_runtime.exe` processes whose executable path matches the runtime
+that will be launched.
 
 Development overrides:
 

@@ -1,9 +1,9 @@
 use crate::preview::PreviewSceneNode;
-use besfa_ipc::{SceneEntityPayload, SceneSnapshotPayload};
+use besfa_ipc::{SceneEntityPayload, SceneSnapshotPayload, SceneTransformPayload, Vec3Payload};
 use bevy::prelude::*;
 
 pub(super) fn build_scene_snapshot(
-    scene_nodes: &Query<&PreviewSceneNode>,
+    scene_nodes: &Query<(&PreviewSceneNode, Option<&Transform>)>,
     selected_entity_id: Option<&str>,
 ) -> Option<SceneSnapshotPayload> {
     let mut records = scene_nodes
@@ -38,6 +38,7 @@ fn build_scene_entity(
         id: record.id.clone(),
         name: record.name.clone(),
         kind: record.kind.clone(),
+        transform: record.transform.clone(),
         children,
     }
 }
@@ -47,15 +48,23 @@ struct PreviewSceneRecord {
     name: String,
     kind: String,
     parent_id: Option<String>,
+    transform: Option<SceneTransformPayload>,
 }
 
-impl From<&PreviewSceneNode> for PreviewSceneRecord {
-    fn from(node: &PreviewSceneNode) -> Self {
+impl From<(&PreviewSceneNode, Option<&Transform>)> for PreviewSceneRecord {
+    fn from((node, transform): (&PreviewSceneNode, Option<&Transform>)) -> Self {
         Self {
-            id: node.id.to_string(),
-            name: node.name.to_string(),
-            kind: node.kind.to_string(),
-            parent_id: node.parent_id.map(str::to_string),
+            id: node.id.clone(),
+            name: node.name.clone(),
+            kind: node.kind.clone(),
+            parent_id: node.parent_id.clone(),
+            transform: transform.map(|transform| SceneTransformPayload {
+                translation: Vec3Payload {
+                    x: transform.translation.x,
+                    y: transform.translation.y,
+                    z: transform.translation.z,
+                },
+            }),
         }
     }
 }

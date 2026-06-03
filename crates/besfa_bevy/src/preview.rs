@@ -1,6 +1,9 @@
 use crate::{
     BesfaRuntimeIpcPlugin, PreviewRuntimeOptions,
-    external_preview::{BesfaExternalPreviewPlugin, create_preview_surface_image},
+    external_preview::{
+        BesfaExternalPreviewPlugin, create_camera_preview_surface_image,
+        create_preview_surface_image,
+    },
 };
 use bevy::{
     asset::Assets,
@@ -55,37 +58,83 @@ pub struct BesfaPreviewPlugin;
 impl Plugin for BesfaPreviewPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(Color::srgb(0.06, 0.07, 0.08)))
+            .init_resource::<PreviewSceneObjects>()
             .add_systems(Startup, setup_scene)
             .add_systems(Update, (draw_grid, rotate_preview_cube));
     }
 }
 
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Resource, Default)]
+pub(crate) struct PreviewSceneObjects {
+    next_cube_index: u64,
+}
+
+impl PreviewSceneObjects {
+    pub(crate) fn next_cube(&mut self) -> (String, String, Vec3) {
+        self.next_cube_index += 1;
+        let index = self.next_cube_index;
+        let row = ((index - 1) / 5) as f32;
+        let column = ((index - 1) % 5) as f32;
+        let position = Vec3::new(column * 1.8 - 3.6, 0.5, row * 1.8 - 1.8);
+
+        (format!("cube_{index}"), format!("Cube {index}"), position)
+    }
+}
+
+#[derive(Component, Debug, Clone)]
 pub(crate) struct PreviewSceneNode {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub kind: &'static str,
-    pub parent_id: Option<&'static str>,
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub parent_id: Option<String>,
 }
 
 impl PreviewSceneNode {
-    pub const fn new(
-        id: &'static str,
-        name: &'static str,
-        kind: &'static str,
-        parent_id: Option<&'static str>,
+    pub(crate) fn root(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        kind: impl Into<String>,
     ) -> Self {
         Self {
-            id,
-            name,
-            kind,
-            parent_id,
+            id: id.into(),
+            name: name.into(),
+            kind: kind.into(),
+            parent_id: None,
+        }
+    }
+
+    pub(crate) fn child(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        kind: impl Into<String>,
+        parent_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            kind: kind.into(),
+            parent_id: Some(parent_id.into()),
         }
     }
 }
 
 #[derive(Component)]
 struct PreviewCube;
+
+/// Runtime-only camera used to render the editor Scene View.
+#[derive(Component)]
+pub(crate) struct EditorPreviewCamera;
+
+/// Runtime-only camera used to render the selected scene camera preview.
+#[derive(Component)]
+pub(crate) struct SelectedCameraPreviewCamera;
+
+/// Runtime-side pick bounds for a scene object.
+#[derive(Component)]
+pub(crate) struct PreviewPickTarget {
+    /// Local axis-aligned half extents used for initial viewport ray picking.
+    pub(crate) half_extents: Vec3,
+}
 
 fn setup_scene(
     mut commands: Commands,
@@ -94,11 +143,14 @@ fn setup_scene(
     mut images: ResMut<Assets<Image>>,
 ) {
     let (preview_surface_image, preview_surface_target) = create_preview_surface_image(&mut images);
+    let (camera_preview_surface_image, camera_preview_surface_target) =
+        create_camera_preview_surface_image(&mut images);
     commands.insert_resource(preview_surface_target);
+    commands.insert_resource(camera_preview_surface_target);
 
     commands.spawn((
         Name::new("World"),
-        PreviewSceneNode::new("world", "World", "world", None),
+        PreviewSceneNode::root("world", "World", "world"),
     ));
 
     commands.spawn((
@@ -108,8 +160,11 @@ fn setup_scene(
             perceptual_roughness: 0.9,
             ..default()
         })),
+        PreviewPickTarget {
+            half_extents: Vec3::new(10.0, 0.02, 10.0),
+        },
         Name::new("Ground"),
-        PreviewSceneNode::new("ground", "Ground", "mesh", Some("world")),
+        PreviewSceneNode::child("ground", "Ground", "mesh", "world"),
     ));
 
     commands.spawn((
@@ -122,8 +177,11 @@ fn setup_scene(
         })),
         Transform::from_xyz(0.0, 0.7, 0.0).with_rotation(Quat::from_rotation_y(PI / 4.0)),
         PreviewCube,
+        PreviewPickTarget {
+            half_extents: Vec3::splat(0.7),
+        },
         Name::new("Preview Cube"),
-        PreviewSceneNode::new("preview_cube", "Preview Cube", "mesh", Some("world")),
+        PreviewSceneNode::child("preview_cube", "Preview Cube", "mesh", "world"),
     ));
 
     commands.spawn((
@@ -135,15 +193,40 @@ fn setup_scene(
         },
         Transform::from_xyz(4.0, 7.0, 5.0),
         Name::new("Key Light"),
-        PreviewSceneNode::new("key_light", "Key Light", "light", Some("world")),
+        PreviewSceneNode::child("key_light", "Key Light", "light", "world"),
+    ));
+
+    let camera_transform =
+        Transform::from_xyz(-4.5, 4.2, 7.5).looking_at(Vec3::new(0.0, 0.6, 0.0), Vec3::Y);
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            is_active: false,
+            ..default()
+        },
+        camera_transform,
+        Name::new("Camera3d"),
+        PreviewSceneNode::child("camera_3d", "Camera3d", "camera", "world"),
     ));
 
     commands.spawn((
         Camera3d::default(),
         RenderTarget::from(preview_surface_image),
-        Transform::from_xyz(-4.5, 4.2, 7.5).looking_at(Vec3::new(0.0, 0.6, 0.0), Vec3::Y),
-        Name::new("Camera3d"),
-        PreviewSceneNode::new("camera_3d", "Camera3d", "camera", Some("world")),
+        camera_transform,
+        EditorPreviewCamera,
+        Name::new("Editor Preview Camera"),
+    ));
+
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            is_active: false,
+            ..default()
+        },
+        RenderTarget::from(camera_preview_surface_image),
+        camera_transform,
+        SelectedCameraPreviewCamera,
+        Name::new("Selected Camera Preview"),
     ));
 }
 

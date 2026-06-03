@@ -1,22 +1,52 @@
 use super::{
     resources::{
-        RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection, RuntimeIpcServer,
-        RuntimeIpcSnapshotCursor,
+        RuntimeIpcEditorCameraState, RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection,
+        RuntimeIpcServer, RuntimeIpcSnapshotCursor, RuntimeIpcTransformAxisDrag,
+        RuntimeIpcTransformAxisDragState,
     },
     snapshot::build_scene_snapshot,
 };
-use crate::preview::PreviewSceneNode;
-use besfa_ipc::{
-    FrameStatsPayload, IpcError, RuntimeCommand, empty_ok_response, error_response,
-    frame_stats_message, log_message, scene_snapshot_message,
+use crate::{
+    external_preview::{PREVIEW_SURFACE_HEIGHT, PREVIEW_SURFACE_WIDTH},
+    preview::{
+        EditorPreviewCamera, PreviewPickTarget, PreviewSceneNode, PreviewSceneObjects,
+        SelectedCameraPreviewCamera,
+    },
 };
+use besfa_ipc::{
+    CreateEntityResult, EditorCameraInputParams, FrameStatsPayload, IpcError, PickEntityParams,
+    PickEntityResult, RuntimeCommand, TransformAxis, TransformAxisDragStartResult,
+    TransformAxisDragUpdateResult, TransformAxisDragViewportParams, empty_ok_response,
+    error_response, frame_stats_message, log_message, ok_response, scene_snapshot_message,
+};
+use besfa_ipc::{EditorCameraStatePayload, Vec3Payload, editor_camera_state_message};
+use bevy::math::bounding::{Aabb3d, RayCast3d};
 use bevy::prelude::*;
+use serde_json::json;
+
+const LOCAL_AXIS_LENGTH: f32 = 1.5;
+const LOCAL_AXIS_TIP_LENGTH: f32 = 0.18;
+const LOCAL_AXIS_SCREEN_HIT_THRESHOLD: f32 = 14.0;
+const LOCAL_AXIS_MIN_SCREEN_LENGTH: f32 = 8.0;
+const EDITOR_CAMERA_ROTATE_SENSITIVITY: f32 = 0.006;
+const EDITOR_CAMERA_BASE_SPEED: f32 = 5.0;
+const EDITOR_CAMERA_MAX_DELTA_SECONDS: f32 = 0.1;
+const EDITOR_CAMERA_STATE_REBROADCAST_SECS: f32 = 1.0;
 
 pub(super) fn process_runtime_ipc_commands(
     server: Res<RuntimeIpcServer>,
+    mut commands: Commands,
     mut project: ResMut<RuntimeIpcProject>,
     mut selection: ResMut<RuntimeIpcSelection>,
+    mut axis_drag: ResMut<RuntimeIpcTransformAxisDrag>,
+    mut scene_objects: ResMut<PreviewSceneObjects>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     scene_nodes: Query<&PreviewSceneNode>,
+    mut transforms: Query<(&PreviewSceneNode, &mut Transform), Without<EditorPreviewCamera>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<EditorPreviewCamera>>,
+    mut editor_cameras: Query<&mut Transform, With<EditorPreviewCamera>>,
+    pick_targets: Query<(&PreviewSceneNode, &GlobalTransform, &PreviewPickTarget)>,
 ) {
     for request in server.drain_commands() {
         match request.command {
@@ -30,12 +60,17 @@ pub(super) fn process_runtime_ipc_commands(
                 server.request_snapshot();
             }
             RuntimeCommand::ReloadScene => {
+                axis_drag.active = None;
                 let _ = request.response_tx.send(empty_ok_response(request.id));
                 server.broadcast(log_message("info", "Reloaded preview scene"));
                 server.request_snapshot();
             }
             RuntimeCommand::SelectEntity(params) => {
-                if scene_nodes.iter().any(|node| node.id == params.entity_id) {
+                if scene_nodes
+                    .iter()
+                    .any(|node| node.id.as_str() == params.entity_id)
+                {
+                    axis_drag.active = None;
                     selection.selected_entity_id = Some(params.entity_id.clone());
                     let _ = request.response_tx.send(empty_ok_response(request.id));
                     server.request_snapshot();
@@ -49,15 +84,580 @@ pub(super) fn process_runtime_ipc_commands(
                     ));
                 }
             }
+            RuntimeCommand::PickEntity(params) => {
+                match pick_entity_from_viewport(&params, &cameras, &pick_targets) {
+                    Ok(entity_id) => {
+                        axis_drag.active = None;
+                        selection.selected_entity_id = entity_id.clone();
+                        let _ = request.response_tx.send(ok_response(
+                            request.id,
+                            json!(PickEntityResult { entity_id }),
+                        ));
+                        server.request_snapshot();
+                    }
+                    Err(error) => {
+                        let _ = request.response_tx.send(error_response(request.id, error));
+                    }
+                }
+            }
+            RuntimeCommand::CreateEntity(params) => {
+                if params.kind != "cube" {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "unsupported_entity_kind",
+                            format!("Runtime cannot create entity kind: {}", params.kind),
+                        ),
+                    ));
+                    continue;
+                }
+
+                let parent_entity_id = params
+                    .parent_entity_id
+                    .clone()
+                    .unwrap_or_else(|| "world".to_string());
+                if !scene_nodes
+                    .iter()
+                    .any(|node| node.id.as_str() == parent_entity_id)
+                {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "parent_entity_not_found",
+                            format!("Parent runtime entity was not found: {parent_entity_id}"),
+                        ),
+                    ));
+                    continue;
+                }
+
+                let (entity_id, default_name, position) = scene_objects.next_cube();
+                let name = params.name.clone().unwrap_or(default_name);
+                commands.spawn((
+                    Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+                    MeshMaterial3d(materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.35, 0.47, 0.95),
+                        metallic: 0.05,
+                        perceptual_roughness: 0.6,
+                        ..default()
+                    })),
+                    Transform::from_translation(position),
+                    PreviewPickTarget {
+                        half_extents: Vec3::splat(0.5),
+                    },
+                    Name::new(name.clone()),
+                    PreviewSceneNode::child(
+                        entity_id.clone(),
+                        name.clone(),
+                        "mesh",
+                        parent_entity_id,
+                    ),
+                ));
+
+                selection.selected_entity_id = Some(entity_id.clone());
+                axis_drag.active = None;
+                let _ = request.response_tx.send(ok_response(
+                    request.id,
+                    json!(CreateEntityResult {
+                        entity_id: entity_id.clone(),
+                    }),
+                ));
+                server.broadcast(log_message("info", format!("Created {name}")));
+                server.request_snapshot();
+            }
+            RuntimeCommand::SetTransform(params) => {
+                if let Some((_, mut transform)) = transforms
+                    .iter_mut()
+                    .find(|(node, _)| node.id.as_str() == params.entity_id)
+                {
+                    axis_drag.active = None;
+                    transform.translation = Vec3::new(
+                        params.translation.x,
+                        params.translation.y,
+                        params.translation.z,
+                    );
+                    selection.selected_entity_id = Some(params.entity_id.clone());
+                    let _ = request.response_tx.send(empty_ok_response(request.id));
+                    server.request_snapshot();
+                } else {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "transform_not_found",
+                            format!(
+                                "Runtime entity transform was not found: {}",
+                                params.entity_id
+                            ),
+                        ),
+                    ));
+                }
+            }
+            RuntimeCommand::EditorCameraInput(params) => {
+                if let Some(mut transform) = editor_cameras.iter_mut().next() {
+                    apply_editor_camera_input(&params, &mut transform);
+                    let _ = request.response_tx.send(empty_ok_response(request.id));
+                } else {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "editor_camera_not_found",
+                            "Runtime editor preview camera was not found.",
+                        ),
+                    ));
+                }
+            }
+            RuntimeCommand::AlignSelectedCameraToEditor => {
+                let Some(selected_entity_id) = selection.selected_entity_id.as_deref() else {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new("no_selected_entity", "No runtime entity is selected."),
+                    ));
+                    continue;
+                };
+                let Some(editor_transform) =
+                    editor_cameras.iter_mut().next().map(|transform| *transform)
+                else {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "editor_camera_not_found",
+                            "Runtime editor preview camera was not found.",
+                        ),
+                    ));
+                    continue;
+                };
+                if let Some((node, mut transform)) = transforms
+                    .iter_mut()
+                    .find(|(node, _)| node.id.as_str() == selected_entity_id)
+                {
+                    if node.kind != "camera" {
+                        let _ = request.response_tx.send(error_response(
+                            request.id,
+                            IpcError::new(
+                                "selected_entity_not_camera",
+                                format!("Selected runtime entity is not a camera: {}", node.id),
+                            ),
+                        ));
+                        continue;
+                    }
+
+                    *transform = editor_transform;
+                    let _ = request.response_tx.send(empty_ok_response(request.id));
+                    server.request_snapshot();
+                } else {
+                    let _ = request.response_tx.send(error_response(
+                        request.id,
+                        IpcError::new(
+                            "transform_not_found",
+                            format!("Runtime entity transform was not found: {selected_entity_id}"),
+                        ),
+                    ));
+                }
+            }
+            RuntimeCommand::BeginTransformAxisDrag(params) => {
+                match begin_transform_axis_drag(
+                    &params,
+                    &selection,
+                    &mut axis_drag,
+                    &mut transforms,
+                    &cameras,
+                ) {
+                    Ok(axis) => {
+                        let _ = request.response_tx.send(ok_response(
+                            request.id,
+                            json!(TransformAxisDragStartResult { axis }),
+                        ));
+                    }
+                    Err(error) => {
+                        let _ = request.response_tx.send(error_response(request.id, error));
+                    }
+                }
+            }
+            RuntimeCommand::UpdateTransformAxisDrag(params) => {
+                match update_transform_axis_drag(&params, &mut axis_drag, &mut transforms) {
+                    Ok(translation) => {
+                        let _ = request.response_tx.send(ok_response(
+                            request.id,
+                            json!(TransformAxisDragUpdateResult {
+                                translation: vec3_payload(translation),
+                            }),
+                        ));
+                        server.request_snapshot();
+                    }
+                    Err(error) => {
+                        let _ = request.response_tx.send(error_response(request.id, error));
+                    }
+                }
+            }
+            RuntimeCommand::EndTransformAxisDrag => {
+                axis_drag.active = None;
+                let _ = request.response_tx.send(empty_ok_response(request.id));
+            }
         }
     }
+}
+
+pub(super) fn draw_selected_local_axes(
+    mut gizmos: Gizmos,
+    selection: Res<RuntimeIpcSelection>,
+    scene_nodes: Query<(&PreviewSceneNode, &Transform)>,
+) {
+    let Some(selected_entity_id) = selection.selected_entity_id.as_deref() else {
+        return;
+    };
+    let Some((_, transform)) = scene_nodes
+        .iter()
+        .find(|(node, _)| node.id.as_str() == selected_entity_id)
+    else {
+        return;
+    };
+
+    let origin = transform.translation;
+    draw_local_axis(
+        &mut gizmos,
+        origin,
+        transform.rotation * Vec3::X,
+        Color::srgb(0.95, 0.16, 0.12),
+    );
+    draw_local_axis(
+        &mut gizmos,
+        origin,
+        transform.rotation * Vec3::Y,
+        Color::srgb(0.25, 0.86, 0.32),
+    );
+    draw_local_axis(
+        &mut gizmos,
+        origin,
+        transform.rotation * Vec3::Z,
+        Color::srgb(0.22, 0.48, 1.0),
+    );
+}
+
+fn draw_local_axis(gizmos: &mut Gizmos, origin: Vec3, axis: Vec3, color: Color) {
+    gizmos
+        .arrow(
+            origin,
+            origin + axis.normalize_or_zero() * LOCAL_AXIS_LENGTH,
+            color,
+        )
+        .with_tip_length(LOCAL_AXIS_TIP_LENGTH);
+}
+
+fn begin_transform_axis_drag(
+    params: &TransformAxisDragViewportParams,
+    selection: &RuntimeIpcSelection,
+    axis_drag: &mut RuntimeIpcTransformAxisDrag,
+    transforms: &mut Query<(&PreviewSceneNode, &mut Transform), Without<EditorPreviewCamera>>,
+    cameras: &Query<(&Camera, &GlobalTransform), With<EditorPreviewCamera>>,
+) -> Result<Option<TransformAxis>, IpcError> {
+    axis_drag.active = None;
+    if !valid_viewport_coords(params.viewport_x, params.viewport_y) {
+        return Err(IpcError::new(
+            "invalid_drag_coordinates",
+            "Transform axis drag coordinates must be finite.",
+        ));
+    }
+
+    let Some(selected_entity_id) = selection.selected_entity_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some((_, transform)) = transforms
+        .iter_mut()
+        .find(|(node, _)| node.id.as_str() == selected_entity_id)
+    else {
+        return Ok(None);
+    };
+    let Some((camera, camera_transform)) = cameras.iter().next() else {
+        return Err(IpcError::new(
+            "camera_not_found",
+            "Runtime preview camera was not found.",
+        ));
+    };
+
+    let pointer = viewport_position(params.viewport_x, params.viewport_y);
+    let origin = transform.translation;
+    let Ok(origin_screen) = camera.world_to_viewport(camera_transform, origin) else {
+        return Ok(None);
+    };
+
+    let mut nearest_axis: Option<(TransformAxis, f32, Vec3, Vec2)> = None;
+    for axis in [TransformAxis::X, TransformAxis::Y, TransformAxis::Z] {
+        let axis_world = (transform.rotation * axis_direction(axis)).normalize_or_zero();
+        if axis_world == Vec3::ZERO {
+            continue;
+        }
+
+        let Ok(end_screen) =
+            camera.world_to_viewport(camera_transform, origin + axis_world * LOCAL_AXIS_LENGTH)
+        else {
+            continue;
+        };
+        let screen_axis = end_screen - origin_screen;
+        if screen_axis.length() < LOCAL_AXIS_MIN_SCREEN_LENGTH {
+            continue;
+        }
+
+        let distance = distance_to_screen_segment(pointer, origin_screen, end_screen);
+        if distance <= LOCAL_AXIS_SCREEN_HIT_THRESHOLD
+            && nearest_axis
+                .as_ref()
+                .is_none_or(|(_, nearest_distance, _, _)| distance < *nearest_distance)
+        {
+            nearest_axis = Some((axis, distance, axis_world, screen_axis));
+        }
+    }
+
+    let Some((axis, _, axis_world, screen_axis)) = nearest_axis else {
+        return Ok(None);
+    };
+    axis_drag.active = Some(RuntimeIpcTransformAxisDragState {
+        entity_id: selected_entity_id.to_string(),
+        axis,
+        start_translation: transform.translation,
+        axis_world,
+        start_viewport_position: pointer,
+        screen_axis,
+    });
+
+    Ok(Some(axis))
+}
+
+fn update_transform_axis_drag(
+    params: &TransformAxisDragViewportParams,
+    axis_drag: &mut RuntimeIpcTransformAxisDrag,
+    transforms: &mut Query<(&PreviewSceneNode, &mut Transform), Without<EditorPreviewCamera>>,
+) -> Result<Vec3, IpcError> {
+    if !valid_viewport_coords(params.viewport_x, params.viewport_y) {
+        return Err(IpcError::new(
+            "invalid_drag_coordinates",
+            "Transform axis drag coordinates must be finite.",
+        ));
+    }
+
+    let Some(drag) = axis_drag.active.clone() else {
+        return Err(IpcError::new(
+            "axis_drag_not_active",
+            "No transform axis drag is active.",
+        ));
+    };
+    let Some((_, mut transform)) = transforms
+        .iter_mut()
+        .find(|(node, _)| node.id.as_str() == drag.entity_id)
+    else {
+        axis_drag.active = None;
+        return Err(IpcError::new(
+            "transform_not_found",
+            format!("Runtime entity transform was not found: {}", drag.entity_id),
+        ));
+    };
+
+    let screen_axis_length_squared = drag.screen_axis.length_squared();
+    if screen_axis_length_squared <= f32::EPSILON {
+        axis_drag.active = None;
+        return Err(IpcError::new(
+            "axis_drag_invalid",
+            format!("Transform axis drag became invalid: {:?}", drag.axis),
+        ));
+    }
+
+    let pointer = viewport_position(params.viewport_x, params.viewport_y);
+    let screen_delta = pointer - drag.start_viewport_position;
+    let world_units =
+        screen_delta.dot(drag.screen_axis) / screen_axis_length_squared * LOCAL_AXIS_LENGTH;
+    let translation = drag.start_translation + drag.axis_world * world_units;
+    transform.translation = translation;
+
+    Ok(translation)
+}
+
+fn valid_viewport_coords(viewport_x: f32, viewport_y: f32) -> bool {
+    viewport_x.is_finite() && viewport_y.is_finite()
+}
+
+fn viewport_position(viewport_x: f32, viewport_y: f32) -> Vec2 {
+    Vec2::new(
+        viewport_x.clamp(0.0, 1.0) * PREVIEW_SURFACE_WIDTH as f32,
+        viewport_y.clamp(0.0, 1.0) * PREVIEW_SURFACE_HEIGHT as f32,
+    )
+}
+
+fn axis_direction(axis: TransformAxis) -> Vec3 {
+    match axis {
+        TransformAxis::X => Vec3::X,
+        TransformAxis::Y => Vec3::Y,
+        TransformAxis::Z => Vec3::Z,
+    }
+}
+
+fn distance_to_screen_segment(point: Vec2, start: Vec2, end: Vec2) -> f32 {
+    let segment = end - start;
+    let length_squared = segment.length_squared();
+    if length_squared <= f32::EPSILON {
+        return point.distance(start);
+    }
+
+    let t = ((point - start).dot(segment) / length_squared).clamp(0.0, 1.0);
+    point.distance(start + segment * t)
+}
+
+fn apply_editor_camera_input(params: &EditorCameraInputParams, transform: &mut Transform) {
+    let rotate_delta_x = finite_or_zero(params.rotate_delta_x).clamp(-500.0, 500.0);
+    let rotate_delta_y = finite_or_zero(params.rotate_delta_y).clamp(-500.0, 500.0);
+
+    if rotate_delta_x != 0.0 {
+        transform.rotate_y(-rotate_delta_x * EDITOR_CAMERA_ROTATE_SENSITIVITY);
+    }
+    if rotate_delta_y != 0.0 {
+        transform.rotate_local_x(-rotate_delta_y * EDITOR_CAMERA_ROTATE_SENSITIVITY);
+    }
+    transform.rotation = transform.rotation.normalize();
+
+    let movement = *transform.forward() * finite_or_zero(params.move_forward).clamp(-1.0, 1.0)
+        + *transform.right() * finite_or_zero(params.move_right).clamp(-1.0, 1.0)
+        + Vec3::Y * finite_or_zero(params.move_up).clamp(-1.0, 1.0);
+    if movement == Vec3::ZERO {
+        return;
+    }
+
+    let delta_seconds = finite_or_zero(params.delta_seconds)
+        .max(0.0)
+        .min(EDITOR_CAMERA_MAX_DELTA_SECONDS);
+    let speed_multiplier = finite_or_zero(params.speed_multiplier).max(0.1).min(8.0);
+    transform.translation +=
+        movement.normalize() * EDITOR_CAMERA_BASE_SPEED * speed_multiplier * delta_seconds;
+}
+
+fn finite_or_zero(value: f32) -> f32 {
+    if value.is_finite() { value } else { 0.0 }
+}
+
+pub(super) fn emit_editor_camera_state(
+    server: Res<RuntimeIpcServer>,
+    mut state: ResMut<RuntimeIpcEditorCameraState>,
+    time: Res<Time>,
+    cameras: Query<&Transform, With<EditorPreviewCamera>>,
+) {
+    let Some(transform) = cameras.iter().next() else {
+        return;
+    };
+    let payload = build_editor_camera_state_payload(transform);
+
+    state.elapsed_secs += time.delta_secs();
+    if state.last.as_ref() == Some(&payload)
+        && state.elapsed_secs < EDITOR_CAMERA_STATE_REBROADCAST_SECS
+    {
+        return;
+    }
+
+    server.broadcast(editor_camera_state_message(payload.clone()));
+    state.last = Some(payload);
+    state.elapsed_secs = 0.0;
+}
+
+pub(super) fn sync_selected_camera_preview(
+    selection: Res<RuntimeIpcSelection>,
+    scene_nodes: Query<(&PreviewSceneNode, &Transform)>,
+    mut preview_cameras: Query<
+        (&mut Camera, &mut Transform),
+        (With<SelectedCameraPreviewCamera>, Without<PreviewSceneNode>),
+    >,
+) {
+    let Some((mut preview_camera, mut preview_transform)) = preview_cameras.iter_mut().next()
+    else {
+        return;
+    };
+    let Some(selected_entity_id) = selection.selected_entity_id.as_deref() else {
+        preview_camera.is_active = false;
+        return;
+    };
+    let Some((node, transform)) = scene_nodes
+        .iter()
+        .find(|(node, _)| node.id.as_str() == selected_entity_id)
+    else {
+        preview_camera.is_active = false;
+        return;
+    };
+
+    if node.kind != "camera" {
+        preview_camera.is_active = false;
+        return;
+    }
+
+    *preview_transform = *transform;
+    preview_camera.is_active = true;
+}
+
+fn build_editor_camera_state_payload(transform: &Transform) -> EditorCameraStatePayload {
+    EditorCameraStatePayload {
+        right: vec3_payload(*transform.right()),
+        up: vec3_payload(*transform.up()),
+        forward: vec3_payload(*transform.forward()),
+    }
+}
+
+fn vec3_payload(value: Vec3) -> Vec3Payload {
+    Vec3Payload {
+        x: value.x,
+        y: value.y,
+        z: value.z,
+    }
+}
+
+fn pick_entity_from_viewport(
+    params: &PickEntityParams,
+    cameras: &Query<(&Camera, &GlobalTransform), With<EditorPreviewCamera>>,
+    pick_targets: &Query<(&PreviewSceneNode, &GlobalTransform, &PreviewPickTarget)>,
+) -> Result<Option<String>, IpcError> {
+    if !params.viewport_x.is_finite() || !params.viewport_y.is_finite() {
+        return Err(IpcError::new(
+            "invalid_pick_coordinates",
+            "Viewport pick coordinates must be finite.",
+        ));
+    }
+
+    let Some((camera, camera_transform)) = cameras.iter().next() else {
+        return Err(IpcError::new(
+            "camera_not_found",
+            "Runtime preview camera was not found.",
+        ));
+    };
+
+    let viewport_position = Vec2::new(
+        params.viewport_x.clamp(0.0, 1.0) * PREVIEW_SURFACE_WIDTH as f32,
+        params.viewport_y.clamp(0.0, 1.0) * PREVIEW_SURFACE_HEIGHT as f32,
+    );
+    let ray = camera
+        .viewport_to_world(camera_transform, viewport_position)
+        .map_err(|_| {
+            IpcError::new(
+                "pick_ray_failed",
+                "Viewport pick ray could not be computed.",
+            )
+        })?;
+    let raycast = RayCast3d::from_ray(ray, 10_000.0);
+
+    let mut nearest_hit: Option<(f32, String)> = None;
+    for (node, transform, pick_target) in pick_targets.iter() {
+        let bounds = Aabb3d::new(transform.translation(), pick_target.half_extents);
+        let Some(distance) = raycast.aabb_intersection_at(&bounds) else {
+            continue;
+        };
+
+        if nearest_hit
+            .as_ref()
+            .is_none_or(|(nearest_distance, _)| distance < *nearest_distance)
+        {
+            nearest_hit = Some((distance, node.id.clone()));
+        }
+    }
+
+    Ok(nearest_hit.map(|(_, entity_id)| entity_id))
 }
 
 pub(super) fn emit_requested_scene_snapshot(
     server: Res<RuntimeIpcServer>,
     mut cursor: ResMut<RuntimeIpcSnapshotCursor>,
     selection: Res<RuntimeIpcSelection>,
-    scene_nodes: Query<&PreviewSceneNode>,
+    scene_nodes: Query<(&PreviewSceneNode, Option<&Transform>)>,
 ) {
     let requested = server.snapshot_request_count();
     if cursor.last_seen == requested {

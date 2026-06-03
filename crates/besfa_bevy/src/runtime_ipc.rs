@@ -6,10 +6,13 @@ mod transport;
 use besfa_ipc::RuntimeIpcConfig;
 use bevy::prelude::*;
 use resources::{
-    RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection, RuntimeIpcServerConfig,
-    RuntimeIpcSnapshotCursor,
+    RuntimeIpcEditorCameraState, RuntimeIpcFrameStats, RuntimeIpcProject, RuntimeIpcSelection,
+    RuntimeIpcServerConfig, RuntimeIpcSnapshotCursor, RuntimeIpcTransformAxisDrag,
 };
-use systems::{emit_frame_stats, emit_requested_scene_snapshot, process_runtime_ipc_commands};
+use systems::{
+    draw_selected_local_axes, emit_editor_camera_state, emit_frame_stats,
+    emit_requested_scene_snapshot, process_runtime_ipc_commands, sync_selected_camera_preview,
+};
 use transport::start_runtime_ipc_server;
 
 pub(crate) use resources::RuntimeIpcServer;
@@ -34,14 +37,20 @@ impl Plugin for BesfaRuntimeIpcPlugin {
             .init_resource::<RuntimeIpcSelection>()
             .init_resource::<RuntimeIpcSnapshotCursor>()
             .init_resource::<RuntimeIpcFrameStats>()
+            .init_resource::<RuntimeIpcEditorCameraState>()
+            .init_resource::<RuntimeIpcTransformAxisDrag>()
             .add_systems(Startup, start_runtime_ipc_server)
             .add_systems(
                 Update,
                 (
                     process_runtime_ipc_commands,
                     emit_requested_scene_snapshot,
+                    draw_selected_local_axes,
+                    sync_selected_camera_preview,
+                    emit_editor_camera_state,
                     emit_frame_stats,
-                ),
+                )
+                    .chain(),
             );
     }
 }

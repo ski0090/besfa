@@ -94,6 +94,307 @@ void main() {
     expect((await command.future)['method'], runtimeIpcReloadSceneMethod);
     expect((await snapshotEvent).payload['root'], isA<Map<String, Object?>>());
   });
+
+  test('sends create_entity and returns the runtime entity id', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final command = Completer<Map<String, Object?>>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              command.complete(decoded);
+              socket.write(
+                '${jsonEncode({
+                  'type': 'response',
+                  'id': decoded['id'],
+                  'ok': true,
+                  'result': {'entity_id': 'cube_1'},
+                })}\n',
+              );
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+
+    final entityId = await client.createEntity(kind: 'cube', name: 'Cube');
+
+    expect((await command.future)['method'], runtimeIpcCreateEntityMethod);
+    expect(entityId, 'cube_1');
+  });
+
+  test('sends pick_entity with normalized viewport coordinates', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final command = Completer<Map<String, Object?>>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              command.complete(decoded);
+              socket.write(
+                '${jsonEncode({
+                  'type': 'response',
+                  'id': decoded['id'],
+                  'ok': true,
+                  'result': {'entity_id': 'preview_cube'},
+                })}\n',
+              );
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+
+    final entityId = await client.pickEntity(viewportX: 0.5, viewportY: 0.25);
+
+    final sent = await command.future;
+    expect(sent['method'], runtimeIpcPickEntityMethod);
+    expect(_asMap(sent['params'])['viewport_x'], 0.5);
+    expect(_asMap(sent['params'])['viewport_y'], 0.25);
+    expect(entityId, 'preview_cube');
+  });
+
+  test('sends set_transform with a translation payload', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final command = Completer<Map<String, Object?>>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              command.complete(decoded);
+              socket.write(
+                '${jsonEncode({'type': 'response', 'id': decoded['id'], 'ok': true, 'result': <String, Object?>{}})}\n',
+              );
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+    await client.setTransform(
+      entityId: 'cube_1',
+      translation: const RuntimeVector3(x: 1, y: 2, z: 3),
+    );
+
+    final sent = await command.future;
+    expect(sent['method'], runtimeIpcSetTransformMethod);
+    expect(_asMap(sent['params'])['entity_id'], 'cube_1');
+    expect(_asMap(_asMap(sent['params'])['translation'])['z'], 3);
+  });
+
+  test('sends editor_camera_input with navigation payload', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final command = Completer<Map<String, Object?>>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              command.complete(decoded);
+              socket.write(
+                '${jsonEncode({'type': 'response', 'id': decoded['id'], 'ok': true, 'result': <String, Object?>{}})}\n',
+              );
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+    await client.editorCameraInput(
+      rotateDeltaX: 12,
+      rotateDeltaY: -4,
+      moveForward: 1,
+      moveRight: -1,
+      moveUp: 0,
+      speedMultiplier: 4,
+      deltaSeconds: 0.016,
+    );
+
+    final sent = await command.future;
+    final params = _asMap(sent['params']);
+    expect(sent['method'], runtimeIpcEditorCameraInputMethod);
+    expect(params['rotate_delta_x'], 12);
+    expect(params['rotate_delta_y'], -4);
+    expect(params['move_forward'], 1);
+    expect(params['move_right'], -1);
+    expect(params['speed_multiplier'], 4);
+    expect(params['delta_seconds'], 0.016);
+  });
+
+  test('sends align_selected_camera_to_editor', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final command = Completer<Map<String, Object?>>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              command.complete(decoded);
+              socket.write(
+                '${jsonEncode({'type': 'response', 'id': decoded['id'], 'ok': true, 'result': <String, Object?>{}})}\n',
+              );
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+    await client.alignSelectedCameraToEditor();
+
+    final sent = await command.future;
+    expect(sent['method'], runtimeIpcAlignSelectedCameraToEditorMethod);
+    expect(_asMap(sent['params']), isEmpty);
+  });
+
+  test('sends transform axis drag commands', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final commands = <Map<String, Object?>>[];
+    final receivedCommands = Completer<void>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              commands.add(decoded);
+              final method = decoded['method'];
+              final result = switch (method) {
+                runtimeIpcBeginTransformAxisDragMethod => {'axis': 'x'},
+                runtimeIpcUpdateTransformAxisDragMethod => {
+                  'translation': {'x': 1, 'y': 2, 'z': 3},
+                },
+                _ => <String, Object?>{},
+              };
+              socket.write(
+                '${jsonEncode({'type': 'response', 'id': decoded['id'], 'ok': true, 'result': result})}\n',
+              );
+              if (commands.length == 3 && !receivedCommands.isCompleted) {
+                receivedCommands.complete();
+              }
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+    final axis = await client.beginTransformAxisDrag(
+      viewportX: 0.25,
+      viewportY: 0.75,
+    );
+    final translation = await client.updateTransformAxisDrag(
+      viewportX: 0.3,
+      viewportY: 0.7,
+    );
+    await client.endTransformAxisDrag();
+    await receivedCommands.future;
+
+    expect(axis, RuntimeTransformAxis.x);
+    expect(translation?.z, 3);
+    expect(commands[0]['method'], runtimeIpcBeginTransformAxisDragMethod);
+    expect(_asMap(commands[0]['params'])['viewport_y'], 0.75);
+    expect(commands[1]['method'], runtimeIpcUpdateTransformAxisDragMethod);
+    expect(commands[2]['method'], runtimeIpcEndTransformAxisDragMethod);
+  });
 }
 
 Map<String, Object?> _asMap(Object? value) {

@@ -1,23 +1,30 @@
 import 'package:besfa_editor/features/runtime_preview/domain/runtime_preview_status.dart';
 import 'package:flutter/material.dart';
 
+/// Toolbar for project actions and resident scene runtime controls.
 class EditorTopBar extends StatelessWidget {
   const EditorTopBar({
     required this.runtimeStatus,
     required this.runtimeMessage,
     required this.isRuntimeBusy,
-    required this.onRunPreview,
-    required this.onStopPreview,
+    required this.onCreateCube,
     required this.onReloadRuntime,
+    required this.onRestartRuntime,
     super.key,
   });
 
   final RuntimePreviewStatus runtimeStatus;
   final String? runtimeMessage;
   final bool isRuntimeBusy;
-  final VoidCallback onRunPreview;
-  final VoidCallback onStopPreview;
+
+  /// Creates a cube in the active runtime scene.
+  final VoidCallback onCreateCube;
+
+  /// Reloads the currently running scene, starting the runtime if needed.
   final VoidCallback onReloadRuntime;
+
+  /// Restarts the editor-owned scene runtime process.
+  final VoidCallback onRestartRuntime;
 
   @override
   Widget build(BuildContext context) {
@@ -69,25 +76,22 @@ class EditorTopBar extends StatelessWidget {
             icon: const Icon(Icons.folder_open),
           ),
           IconButton(
-            tooltip: 'Run preview',
-            onPressed:
-                isRuntimeBusy || runtimeStatus == RuntimePreviewStatus.running
-                ? null
-                : onRunPreview,
-            icon: const Icon(Icons.play_arrow),
-          ),
-          IconButton(
-            tooltip: 'Stop preview',
+            tooltip: 'Add cube',
             onPressed:
                 isRuntimeBusy || runtimeStatus != RuntimePreviewStatus.running
                 ? null
-                : onStopPreview,
-            icon: const Icon(Icons.stop),
+                : onCreateCube,
+            icon: const Icon(Icons.add_box),
           ),
           IconButton(
-            tooltip: 'Reload runtime',
+            tooltip: 'Reload scene',
             onPressed: isRuntimeBusy ? null : onReloadRuntime,
             icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            tooltip: 'Restart scene runtime',
+            onPressed: isRuntimeBusy ? null : onRestartRuntime,
+            icon: const Icon(Icons.restart_alt),
           ),
         ],
       ),
@@ -99,6 +103,7 @@ extension on RuntimePreviewStatus {
   Color color(ColorScheme colorScheme) {
     return switch (this) {
       RuntimePreviewStatus.stopped => colorScheme.outline,
+      RuntimePreviewStatus.starting => colorScheme.tertiary,
       RuntimePreviewStatus.running => colorScheme.primary,
       RuntimePreviewStatus.failed => colorScheme.error,
     };

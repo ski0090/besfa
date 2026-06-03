@@ -103,5 +103,6 @@ void main() {
 
     expect(besfaFlutterPlugin.runtimeState, BesfaRuntimeState.stopped);
     expect(besfaFlutterPlugin.runtimeLastError, BesfaRuntimeErrorCode.none);
+    expect(besfaFlutterPlugin.runtimeLogPath, isNull);
   });
 }
