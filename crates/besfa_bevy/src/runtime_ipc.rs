@@ -44,13 +44,13 @@ impl Plugin for BesfaRuntimeIpcPlugin {
                 Update,
                 (
                     process_runtime_ipc_commands,
-                    emit_requested_scene_snapshot,
                     draw_selected_local_axes,
                     sync_selected_camera_preview,
                     emit_editor_camera_state,
                     emit_frame_stats,
                 )
                     .chain(),
-            );
+            )
+            .add_systems(PostUpdate, emit_requested_scene_snapshot);
     }
 }

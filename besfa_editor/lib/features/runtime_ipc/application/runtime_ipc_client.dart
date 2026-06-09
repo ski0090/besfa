@@ -8,6 +8,8 @@ import 'package:besfa_editor/features/runtime_ipc/domain/runtime_ipc_models.dart
 const int runtimeIpcProtocolVersion = 1;
 const String runtimeIpcOpenProjectMethod = 'open_project';
 const String runtimeIpcReloadSceneMethod = 'reload_scene';
+const String runtimeIpcPlaySceneMethod = 'play_scene';
+const String runtimeIpcStopSceneMethod = 'stop_scene';
 const String runtimeIpcSelectEntityMethod = 'select_entity';
 const String runtimeIpcPickEntityMethod = 'pick_entity';
 const String runtimeIpcCreateEntityMethod = 'create_entity';
@@ -146,6 +148,16 @@ class RuntimeIpcClient {
   /// Sends `reload_scene` to the runtime.
   Future<void> reloadScene() async {
     await sendCommand(runtimeIpcReloadSceneMethod);
+  }
+
+  /// Sends `play_scene` to resume runtime game time.
+  Future<void> playScene() async {
+    await sendCommand(runtimeIpcPlaySceneMethod);
+  }
+
+  /// Sends `stop_scene` to pause runtime game time and reset the scene.
+  Future<void> stopScene() async {
+    await sendCommand(runtimeIpcStopSceneMethod);
   }
 
   /// Sends `select_entity` to the runtime.

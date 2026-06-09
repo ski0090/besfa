@@ -22,3 +22,20 @@ enum RuntimePreviewStatus {
     };
   }
 }
+
+/// Editor-facing scene playback state inside the running preview runtime.
+enum RuntimeScenePlaybackState {
+  /// Runtime game time is paused and the scene is in edit mode.
+  stopped,
+
+  /// Runtime game time is advancing.
+  playing;
+
+  /// Human-readable label for editor controls.
+  String get label {
+    return switch (this) {
+      RuntimeScenePlaybackState.stopped => 'Stopped',
+      RuntimeScenePlaybackState.playing => 'Playing',
+    };
+  }
+}

@@ -14,6 +14,9 @@ The editor follows a lightweight Feature-Sliced Design layout:
 
 - Boot an editor-owned Scene Runtime automatically when the editor opens.
 - Restart the Scene Runtime and reload the active scene from the top bar.
+- Play the active scene from the top bar, which resumes runtime game time.
+- Stop scene playback from the top bar, which pauses game time and asks the
+  runtime to reload the Scene file back to its initial state.
 - Add cube entities to the live runtime scene through IPC.
 - Attach the runtime-owned Windows shared preview surface in the viewport when
   available.
@@ -56,8 +59,11 @@ The runtime binary is discovered by the native plugin under the workspace
 The editor treats the runtime as a resident Scene View backend rather than a
 manual preview window. On startup it launches the runtime with IPC arguments,
 waits up to 20 seconds for `runtime_ready`, and keeps the viewport available
-for scene editing.
+for scene editing with runtime game time paused.
 Scene editing commands, such as adding a cube, are sent to the runtime over IPC
 and reflected back through `scene_snapshot`. Position edits use `set_transform`
 and viewport clicks use `pick_entity`; both are confirmed by the next runtime
 snapshot.
+Scene playback is controlled separately from process lifetime: `play_scene`
+resumes game time in the running runtime, while `stop_scene` pauses game time
+and resets the scene from `Scene.besfa.json`.

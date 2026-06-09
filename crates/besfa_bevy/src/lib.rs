@@ -6,6 +6,11 @@ mod external_preview;
 mod preview;
 #[cfg(feature = "runtime")]
 mod runtime_ipc;
+#[cfg(feature = "runtime")]
+mod scene_file;
+
+#[cfg(feature = "runtime")]
+use std::path::PathBuf;
 
 #[cfg(feature = "runtime")]
 pub use besfa_ipc::RuntimeIpcConfig;
@@ -34,10 +39,16 @@ pub fn run_preview_runtime_with_options(options: PreviewRuntimeOptions) {
 
 #[cfg(feature = "runtime")]
 /// Options used when launching the preview runtime Bevy app.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PreviewRuntimeOptions {
     /// Optional IPC configuration used to accept editor connections.
     pub ipc: Option<RuntimeIpcConfig>,
+    /// Optional Scene file path loaded by the preview runtime.
+    ///
+    /// When absent, the runtime reads `Scene.besfa.json` from its working
+    /// directory and falls back to the built-in preview scene if that file is
+    /// missing or invalid.
+    pub scene_path: Option<PathBuf>,
 }
 
 #[cfg(test)]

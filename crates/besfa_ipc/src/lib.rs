@@ -15,10 +15,11 @@ pub use command::{
     CreateEntityParams, CreateEntityResult, EditorCameraInputParams,
     METHOD_ALIGN_SELECTED_CAMERA_TO_EDITOR, METHOD_BEGIN_TRANSFORM_AXIS_DRAG, METHOD_CREATE_ENTITY,
     METHOD_EDITOR_CAMERA_INPUT, METHOD_END_TRANSFORM_AXIS_DRAG, METHOD_OPEN_PROJECT,
-    METHOD_PICK_ENTITY, METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY, METHOD_SET_TRANSFORM,
-    METHOD_UPDATE_TRANSFORM_AXIS_DRAG, OpenProjectParams, PickEntityParams, PickEntityResult,
-    RuntimeCommand, SelectEntityParams, SetTransformParams, TransformAxis,
-    TransformAxisDragStartResult, TransformAxisDragUpdateResult, TransformAxisDragViewportParams,
+    METHOD_PICK_ENTITY, METHOD_PLAY_SCENE, METHOD_RELOAD_SCENE, METHOD_SELECT_ENTITY,
+    METHOD_SET_TRANSFORM, METHOD_STOP_SCENE, METHOD_UPDATE_TRANSFORM_AXIS_DRAG, OpenProjectParams,
+    PickEntityParams, PickEntityResult, RuntimeCommand, SelectEntityParams, SetTransformParams,
+    TransformAxis, TransformAxisDragStartResult, TransformAxisDragUpdateResult,
+    TransformAxisDragViewportParams,
 };
 pub use config::RuntimeIpcConfig;
 pub use error::IpcError;
@@ -101,6 +102,15 @@ mod tests {
         assert!(line.contains("\"method\":\"create_entity\""));
         assert!(line.contains("\"kind\":\"cube\""));
         assert!(line.contains("\"parent_entity_id\":\"world\""));
+    }
+
+    #[test]
+    fn encodes_scene_playback_commands() {
+        let play_line = encode_line(&command_message(10, RuntimeCommand::PlayScene)).unwrap();
+        let stop_line = encode_line(&command_message(11, RuntimeCommand::StopScene)).unwrap();
+
+        assert!(play_line.contains("\"method\":\"play_scene\""));
+        assert!(stop_line.contains("\"method\":\"stop_scene\""));
     }
 
     #[test]
@@ -196,6 +206,17 @@ mod tests {
                 path: "C:/codes/besfa".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn decodes_scene_playback_commands() {
+        let play_command =
+            RuntimeCommand::from_method_params(METHOD_PLAY_SCENE, json!({})).unwrap();
+        let stop_command =
+            RuntimeCommand::from_method_params(METHOD_STOP_SCENE, json!({})).unwrap();
+
+        assert_eq!(play_command, RuntimeCommand::PlayScene);
+        assert_eq!(stop_command, RuntimeCommand::StopScene);
     }
 
     #[test]

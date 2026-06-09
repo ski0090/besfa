@@ -100,6 +100,8 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
   final StreamController<RuntimeIpcEvent> _events =
       StreamController<RuntimeIpcEvent>.broadcast();
   int createEntityCalls = 0;
+  int playSceneCalls = 0;
+  int stopSceneCalls = 0;
   int alignSelectedCameraToEditorCalls = 0;
   int beginTransformAxisDragCalls = 0;
   int updateTransformAxisDragCalls = 0;
@@ -154,6 +156,16 @@ class FakeRuntimeIpcClient extends RuntimeIpcClient {
 
   @override
   Future<void> reloadScene() async {}
+
+  @override
+  Future<void> playScene() async {
+    playSceneCalls += 1;
+  }
+
+  @override
+  Future<void> stopScene() async {
+    stopSceneCalls += 1;
+  }
 
   @override
   Future<void> selectEntity(String entityId) async {}

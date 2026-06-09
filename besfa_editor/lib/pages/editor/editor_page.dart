@@ -57,8 +57,11 @@ class _EditorPageState extends State<EditorPage> {
               children: [
                 EditorTopBar(
                   runtimeStatus: runtimePreview.status,
+                  playbackState: runtimePreview.playbackState,
                   runtimeMessage: runtimePreview.message,
                   isRuntimeBusy: runtimePreview.isBusy,
+                  onPlayScene: runtimePreview.playScene,
+                  onStopScene: runtimePreview.stopScene,
                   onCreateCube: runtimePreview.createCube,
                   onReloadRuntime: runtimePreview.reloadRuntime,
                   onRestartRuntime: runtimePreview.restartRuntime,

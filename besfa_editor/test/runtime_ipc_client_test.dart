@@ -141,6 +141,52 @@ void main() {
     expect(entityId, 'cube_1');
   });
 
+  test('sends scene playback commands', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final client = RuntimeIpcClient();
+    addTearDown(client.disconnect);
+    addTearDown(server.close);
+
+    final commands = <Map<String, Object?>>[];
+    final receivedCommands = Completer<void>();
+    server.listen((socket) {
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+            final decoded = _asMap(jsonDecode(line));
+            if (decoded['type'] == 'hello') {
+              socket.write(
+                '${jsonEncode({
+                  'type': 'event',
+                  'event': 'runtime_ready',
+                  'payload': {'protocol_version': runtimeIpcProtocolVersion},
+                })}\n',
+              );
+            } else if (decoded['type'] == 'command') {
+              commands.add(decoded);
+              socket.write(
+                '${jsonEncode({'type': 'response', 'id': decoded['id'], 'ok': true, 'result': <String, Object?>{}})}\n',
+              );
+              if (commands.length == 2 && !receivedCommands.isCompleted) {
+                receivedCommands.complete();
+              }
+            }
+          });
+    });
+
+    await client.connectAndWaitReady(
+      RuntimeIpcHandshake(port: server.port, token: 42),
+    );
+    await client.playScene();
+    await client.stopScene();
+    await receivedCommands.future;
+
+    expect(commands[0]['method'], runtimeIpcPlaySceneMethod);
+    expect(commands[1]['method'], runtimeIpcStopSceneMethod);
+  });
+
   test('sends pick_entity with normalized viewport coordinates', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final client = RuntimeIpcClient();

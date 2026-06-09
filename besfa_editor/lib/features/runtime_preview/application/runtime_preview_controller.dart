@@ -44,6 +44,9 @@ class RuntimePreviewController extends ChangeNotifier {
   /// Current preview runtime status shown by the editor.
   RuntimePreviewStatus status = RuntimePreviewStatus.stopped;
 
+  /// Current game-time playback state inside the preview runtime.
+  RuntimeScenePlaybackState playbackState = RuntimeScenePlaybackState.stopped;
+
   /// Whether a preview command is in progress.
   bool isBusy = false;
 
@@ -85,6 +88,42 @@ class RuntimePreviewController extends ChangeNotifier {
     await ensureRuntimeReady();
   }
 
+  /// Starts advancing game time in the running scene runtime.
+  Future<void> playScene() async {
+    if (isBusy ||
+        status != RuntimePreviewStatus.running ||
+        !_isRuntimeIpcReady ||
+        playbackState == RuntimeScenePlaybackState.playing) {
+      return;
+    }
+
+    _apply(isBusy: true);
+    try {
+      await _ipcClient.playScene();
+      _apply(playbackState: RuntimeScenePlaybackState.playing, isBusy: false);
+    } on Object {
+      _apply(message: 'Runtime scene playback could not start.', isBusy: false);
+    }
+  }
+
+  /// Stops game time and resets the running scene from its Scene file.
+  Future<void> stopScene() async {
+    if (isBusy ||
+        status != RuntimePreviewStatus.running ||
+        !_isRuntimeIpcReady ||
+        playbackState == RuntimeScenePlaybackState.stopped) {
+      return;
+    }
+
+    _apply(isBusy: true);
+    try {
+      await _ipcClient.stopScene();
+      _apply(playbackState: RuntimeScenePlaybackState.stopped, isBusy: false);
+    } on Object {
+      _apply(message: 'Runtime scene could not stop.', isBusy: false);
+    }
+  }
+
   /// Stops the preview runtime process and clears runtime data.
   Future<void> stopPreview() async {
     if (isBusy) {
@@ -98,6 +137,7 @@ class RuntimePreviewController extends ChangeNotifier {
     _clearRuntimeData();
     _apply(
       status: _statusForStopResult(result),
+      playbackState: RuntimeScenePlaybackState.stopped,
       message: _messageForStopResult(result),
       isBusy: false,
     );
@@ -143,10 +183,11 @@ class RuntimePreviewController extends ChangeNotifier {
       _apply(isBusy: true);
       try {
         await _ipcClient.reloadScene();
-        _apply(isBusy: false);
+        _apply(playbackState: RuntimeScenePlaybackState.stopped, isBusy: false);
       } on Object {
         _apply(
           status: RuntimePreviewStatus.failed,
+          playbackState: RuntimeScenePlaybackState.stopped,
           message: 'Runtime scene could not reload.',
           isBusy: false,
         );
@@ -178,6 +219,7 @@ class RuntimePreviewController extends ChangeNotifier {
         _clearRuntimeData();
         _apply(
           status: RuntimePreviewStatus.failed,
+          playbackState: RuntimeScenePlaybackState.stopped,
           message: _errorMessage('Could not read runtime status.'),
         );
     }
@@ -423,7 +465,11 @@ class RuntimePreviewController extends ChangeNotifier {
       }
 
       _isRuntimeIpcReady = true;
-      _apply(status: RuntimePreviewStatus.running, isBusy: false);
+      _apply(
+        status: RuntimePreviewStatus.running,
+        playbackState: RuntimeScenePlaybackState.stopped,
+        isBusy: false,
+      );
     } on Object {
       final runtimeState = _plugin.runtimeState;
       _plugin.stopRuntime();
@@ -433,6 +479,7 @@ class RuntimePreviewController extends ChangeNotifier {
       _clearRuntimeData(clearLogs: false);
       _apply(
         status: RuntimePreviewStatus.failed,
+        playbackState: RuntimeScenePlaybackState.stopped,
         message: _runtimeReadyFailureMessage(runtimeState),
         isBusy: false,
       );
@@ -490,13 +537,24 @@ class RuntimePreviewController extends ChangeNotifier {
     };
   }
 
-  void _apply({RuntimePreviewStatus? status, bool? isBusy, String? message}) {
+  void _apply({
+    RuntimePreviewStatus? status,
+    RuntimeScenePlaybackState? playbackState,
+    bool? isBusy,
+    String? message,
+  }) {
     if (_disposed) {
       return;
     }
 
     if (status != null) {
       this.status = status;
+      if (status != RuntimePreviewStatus.running) {
+        this.playbackState = RuntimeScenePlaybackState.stopped;
+      }
+    }
+    if (playbackState != null) {
+      this.playbackState = playbackState;
     }
     if (isBusy != null) {
       this.isBusy = isBusy;
@@ -663,6 +721,7 @@ class RuntimePreviewController extends ChangeNotifier {
     sceneSnapshot = null;
     frameStats = null;
     editorCameraState = null;
+    playbackState = RuntimeScenePlaybackState.stopped;
     if (clearLogs) {
       logs = const [];
     }

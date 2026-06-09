@@ -7,6 +7,10 @@ use serde_json::{Value, json};
 pub const METHOD_OPEN_PROJECT: &str = "open_project";
 /// Runtime command method name for reloading the active scene.
 pub const METHOD_RELOAD_SCENE: &str = "reload_scene";
+/// Runtime command method name for starting game-time playback.
+pub const METHOD_PLAY_SCENE: &str = "play_scene";
+/// Runtime command method name for stopping game-time playback and resetting the scene.
+pub const METHOD_STOP_SCENE: &str = "stop_scene";
 /// Runtime command method name for selecting an entity.
 pub const METHOD_SELECT_ENTITY: &str = "select_entity";
 /// Runtime command method name for picking an entity from viewport coordinates.
@@ -33,6 +37,10 @@ pub enum RuntimeCommand {
     OpenProject(OpenProjectParams),
     /// Reload the current runtime scene.
     ReloadScene,
+    /// Start advancing runtime game time.
+    PlayScene,
+    /// Stop runtime game time and reset the active scene from its Scene file.
+    StopScene,
     /// Select one runtime entity by id.
     SelectEntity(SelectEntityParams),
     /// Pick and select a runtime entity from normalized viewport coordinates.
@@ -59,6 +67,8 @@ impl RuntimeCommand {
         match self {
             RuntimeCommand::OpenProject(_) => METHOD_OPEN_PROJECT,
             RuntimeCommand::ReloadScene => METHOD_RELOAD_SCENE,
+            RuntimeCommand::PlayScene => METHOD_PLAY_SCENE,
+            RuntimeCommand::StopScene => METHOD_STOP_SCENE,
             RuntimeCommand::SelectEntity(_) => METHOD_SELECT_ENTITY,
             RuntimeCommand::PickEntity(_) => METHOD_PICK_ENTITY,
             RuntimeCommand::CreateEntity(_) => METHOD_CREATE_ENTITY,
@@ -76,6 +86,8 @@ impl RuntimeCommand {
         match self {
             RuntimeCommand::OpenProject(params) => json!(params),
             RuntimeCommand::ReloadScene => json!({}),
+            RuntimeCommand::PlayScene => json!({}),
+            RuntimeCommand::StopScene => json!({}),
             RuntimeCommand::SelectEntity(params) => json!(params),
             RuntimeCommand::PickEntity(params) => json!(params),
             RuntimeCommand::CreateEntity(params) => json!(params),
@@ -95,6 +107,8 @@ impl RuntimeCommand {
                 .map(RuntimeCommand::OpenProject)
                 .map_err(|error| IpcError::invalid_params(method, error)),
             METHOD_RELOAD_SCENE => Ok(RuntimeCommand::ReloadScene),
+            METHOD_PLAY_SCENE => Ok(RuntimeCommand::PlayScene),
+            METHOD_STOP_SCENE => Ok(RuntimeCommand::StopScene),
             METHOD_SELECT_ENTITY => serde_json::from_value(params)
                 .map(RuntimeCommand::SelectEntity)
                 .map_err(|error| IpcError::invalid_params(method, error)),

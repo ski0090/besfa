@@ -10,6 +10,7 @@ The early architecture is intentionally split:
 - `crates/besfa_core`: editor/runtime shared domain model.
 - `crates/besfa_bevy`: Bevy integration layer.
 - `crates/besfa_runtime`: preview/runtime entry point.
+- `Scene.besfa.json`: default project Scene file loaded by the preview runtime.
 
 First milestone: keep the editor UI, native bridge, and Bevy runtime loosely
 coupled while the editor-owned Scene Runtime provides the always-on viewport
@@ -35,6 +36,12 @@ Note: Bevy 0.18 uses `wgpu`, which does not expose a native D3D11 backend. The p
 Development preview launch can be overridden with `BESFA_RUNTIME_PATH` and `BESFA_RUNTIME_WORKING_DIR` when the runtime binary is not beside the editor executable or under the workspace `target` directory.
 
 Runtime IPC starts as TCP on `127.0.0.1` with newline-delimited JSON. The editor launches the runtime with `--ipc-port` and `--ipc-token`, sends a `hello` message, and treats the Scene Runtime as ready after receiving `runtime_ready`.
+
+The runtime keeps game time paused for editor Scene View editing. `play_scene`
+over IPC resumes Bevy virtual time, while `stop_scene` pauses time and reloads
+the active Scene file so the project returns to its initial state. By default
+the runtime reads `Scene.besfa.json` from its working directory; `besfa_runtime`
+can also be launched with `--scene <path>`.
 
 ## Common Commands
 

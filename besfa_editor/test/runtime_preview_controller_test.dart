@@ -207,6 +207,31 @@ void main() {
     expect(ipcClient.createEntityCalls, 1);
   });
 
+  test('plays and stops scene playback through runtime IPC', () async {
+    final plugin = FakeBesfaFlutterPlugin();
+    final ipcClient = FakeRuntimeIpcClient();
+    final controller = RuntimePreviewController(
+      plugin: plugin,
+      ipcClient: ipcClient,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(ipcClient.close);
+
+    await controller.ensureRuntimeReady();
+
+    expect(controller.playbackState, RuntimeScenePlaybackState.stopped);
+
+    await controller.playScene();
+
+    expect(controller.playbackState, RuntimeScenePlaybackState.playing);
+    expect(ipcClient.playSceneCalls, 1);
+
+    await controller.stopScene();
+
+    expect(controller.playbackState, RuntimeScenePlaybackState.stopped);
+    expect(ipcClient.stopSceneCalls, 1);
+  });
+
   test('picks entities from normalized viewport coordinates', () async {
     final plugin = FakeBesfaFlutterPlugin();
     final ipcClient = FakeRuntimeIpcClient()..pickResult = 'cube_1';

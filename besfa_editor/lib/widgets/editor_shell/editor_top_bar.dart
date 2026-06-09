@@ -5,8 +5,11 @@ import 'package:flutter/material.dart';
 class EditorTopBar extends StatelessWidget {
   const EditorTopBar({
     required this.runtimeStatus,
+    required this.playbackState,
     required this.runtimeMessage,
     required this.isRuntimeBusy,
+    required this.onPlayScene,
+    required this.onStopScene,
     required this.onCreateCube,
     required this.onReloadRuntime,
     required this.onRestartRuntime,
@@ -14,8 +17,15 @@ class EditorTopBar extends StatelessWidget {
   });
 
   final RuntimePreviewStatus runtimeStatus;
+  final RuntimeScenePlaybackState playbackState;
   final String? runtimeMessage;
   final bool isRuntimeBusy;
+
+  /// Starts game-time playback in the active runtime scene.
+  final VoidCallback onPlayScene;
+
+  /// Stops game-time playback and resets the active runtime scene.
+  final VoidCallback onStopScene;
 
   /// Creates a cube in the active runtime scene.
   final VoidCallback onCreateCube;
@@ -30,6 +40,8 @@ class EditorTopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final statusColor = runtimeStatus.color(colorScheme);
+    final isRuntimeReady =
+        runtimeStatus == RuntimePreviewStatus.running && !isRuntimeBusy;
 
     return Container(
       height: 52,
@@ -55,6 +67,16 @@ class EditorTopBar extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
+          if (runtimeStatus == RuntimePreviewStatus.running) ...[
+            const SizedBox(width: 8),
+            Text(
+              playbackState.label,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: playbackState.color(colorScheme),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
           if (runtimeMessage case final message?) ...[
             const SizedBox(width: 8),
             ConstrainedBox(
@@ -76,11 +98,26 @@ class EditorTopBar extends StatelessWidget {
             icon: const Icon(Icons.folder_open),
           ),
           IconButton(
-            tooltip: 'Add cube',
+            tooltip: 'Play scene',
             onPressed:
-                isRuntimeBusy || runtimeStatus != RuntimePreviewStatus.running
-                ? null
-                : onCreateCube,
+                isRuntimeReady &&
+                    playbackState == RuntimeScenePlaybackState.stopped
+                ? onPlayScene
+                : null,
+            icon: const Icon(Icons.play_arrow),
+          ),
+          IconButton(
+            tooltip: 'Stop scene',
+            onPressed:
+                isRuntimeReady &&
+                    playbackState == RuntimeScenePlaybackState.playing
+                ? onStopScene
+                : null,
+            icon: const Icon(Icons.stop),
+          ),
+          IconButton(
+            tooltip: 'Add cube',
+            onPressed: isRuntimeReady ? onCreateCube : null,
             icon: const Icon(Icons.add_box),
           ),
           IconButton(
@@ -106,6 +143,15 @@ extension on RuntimePreviewStatus {
       RuntimePreviewStatus.starting => colorScheme.tertiary,
       RuntimePreviewStatus.running => colorScheme.primary,
       RuntimePreviewStatus.failed => colorScheme.error,
+    };
+  }
+}
+
+extension on RuntimeScenePlaybackState {
+  Color color(ColorScheme colorScheme) {
+    return switch (this) {
+      RuntimeScenePlaybackState.stopped => colorScheme.outline,
+      RuntimeScenePlaybackState.playing => colorScheme.secondary,
     };
   }
 }

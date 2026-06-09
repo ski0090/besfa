@@ -34,6 +34,9 @@ Development overrides:
 - `BESFA_RUNTIME_PATH`: absolute path to the runtime executable.
 - `BESFA_RUNTIME_WORKING_DIR`: working directory for the child process.
 
+The runtime reads `Scene.besfa.json` from that working directory when no
+explicit runtime `--scene` argument is supplied by a launcher.
+
 ## Preview Texture
 
 On Windows, `createPreviewTexture` registers a native Flutter GPU surface

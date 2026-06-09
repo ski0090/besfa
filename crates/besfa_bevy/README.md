@@ -9,7 +9,9 @@ plugin. It deliberately sits between the engine/editor domain and the concrete
 ## Modules
 
 - `preview.rs`: `BesfaPreviewPlugin`, preview scene setup, grid drawing,
-  runtime/editor camera setup, light, and cube animation.
+  runtime/editor camera setup, Scene file spawning, and time-driven scene
+  animation.
+- `scene_file.rs`: `Scene.besfa.json` loader and fallback scene definition.
 - `external_preview.rs`: runtime-owned D3D12 shared render target for embedded
   editor and selected camera previews.
 - `runtime_ipc.rs`: `BesfaRuntimeIpcPlugin` composition.
@@ -67,6 +69,38 @@ used by the Inspector.
 The `align_selected_camera_to_editor` command copies the editor preview
 camera's current `Transform` into the selected scene camera so the user can
 promote the Scene View framing into the runtime camera.
+
+## Scene Playback
+
+The preview runtime starts with Bevy virtual game time paused. Rendering,
+editor camera input, picking, and gizmos continue to work while game time is
+paused, but time-driven scene systems such as `PreviewSpinner` do not advance.
+The `play_scene` IPC command unpauses virtual time. The `stop_scene` command
+pauses virtual time, clears selection and drag state, and reloads the active
+Scene file so play-mode changes return to the authored initial state.
+
+The active Scene file defaults to `Scene.besfa.json` in the runtime working
+directory. If `PreviewRuntimeOptions.scene_path` is set, that path is used
+instead. Missing or invalid Scene files fall back to the built-in preview scene.
+The current file format is JSON:
+
+```json
+{
+  "version": 1,
+  "entities": [
+    {"id": "world", "name": "World", "kind": "world"},
+    {
+      "id": "preview_cube",
+      "name": "Preview Cube",
+      "kind": "mesh",
+      "parent_id": "world",
+      "mesh": {"primitive": "cube", "size": {"x": 1.4, "y": 1.4, "z": 1.4}},
+      "transform": {"translation": {"x": 0.0, "y": 0.7, "z": 0.0}},
+      "spin_y_radians_per_second": 0.6
+    }
+  ]
+}
+```
 
 ## Usage
 

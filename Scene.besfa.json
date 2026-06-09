@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "id": "world",
+      "name": "World",
+      "kind": "world"
+    },
+    {
+      "id": "ground",
+      "name": "Ground",
+      "kind": "mesh",
+      "parent_id": "world",
+      "mesh": {
+        "primitive": "plane",
+        "size": {
+          "x": 20.0,
+          "z": 20.0
+        }
+      },
+      "material": {
+        "base_color": {
+          "r": 0.12,
+          "g": 0.14,
+          "b": 0.14
+        },
+        "perceptual_roughness": 0.9
+      },
+      "pick_half_extents": {
+        "x": 10.0,
+        "y": 0.02,
+        "z": 10.0
+      }
+    },
+    {
+      "id": "preview_cube",
+      "name": "Preview Cube",
+      "kind": "mesh",
+      "parent_id": "world",
+      "transform": {
+        "translation": {
+          "x": 0.0,
+          "y": 0.7,
+          "z": 0.0
+        },
+        "rotation_y_radians": 0.7853982
+      },
+      "mesh": {
+        "primitive": "cube",
+        "size": {
+          "x": 1.4,
+          "y": 1.4,
+          "z": 1.4
+        }
+      },
+      "material": {
+        "base_color": {
+          "r": 0.08,
+          "g": 0.56,
+          "b": 0.47
+        },
+        "metallic": 0.1,
+        "perceptual_roughness": 0.55
+      },
+      "pick_half_extents": {
+        "x": 0.7,
+        "y": 0.7,
+        "z": 0.7
+      },
+      "spin_y_radians_per_second": 0.6
+    },
+    {
+      "id": "key_light",
+      "name": "Key Light",
+      "kind": "light",
+      "parent_id": "world",
+      "transform": {
+        "translation": {
+          "x": 4.0,
+          "y": 7.0,
+          "z": 5.0
+        }
+      },
+      "light": {
+        "intensity": 2800000.0,
+        "range": 40.0,
+        "shadows_enabled": true
+      }
+    },
+    {
+      "id": "camera_3d",
+      "name": "Camera3d",
+      "kind": "camera",
+      "parent_id": "world",
+      "transform": {
+        "translation": {
+          "x": -4.5,
+          "y": 4.2,
+          "z": 7.5
+        },
+        "look_at": {
+          "x": 0.0,
+          "y": 0.6,
+          "z": 0.0
+        }
+      },
+      "camera": {}
+    }
+  ]
+}

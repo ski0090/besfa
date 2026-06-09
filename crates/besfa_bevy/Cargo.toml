@@ -8,6 +8,7 @@ license.workspace = true
 besfa_core = { workspace = true }
 besfa_ipc = { workspace = true, optional = true }
 bevy = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
@@ -25,4 +26,4 @@ windows = { version = "0.58.0", default-features = false, features = [
 
 [features]
 default = []
-runtime = ["dep:bevy", "dep:besfa_ipc", "dep:serde_json", "dep:wgpu-hal", "dep:windows", "bevy/3d"]
+runtime = ["dep:bevy", "dep:besfa_ipc", "dep:serde", "dep:serde_json", "dep:wgpu-hal", "dep:windows", "bevy/3d"]

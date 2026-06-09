@@ -22,42 +22,49 @@ Commands are sent by the editor:
 {"type":"command","id":1,"method":"reload_scene","params":{}}
 ```
 
+Scene playback uses commands distinct from runtime process lifetime:
+
+```json
+{"type":"command","id":2,"method":"play_scene","params":{}}
+{"type":"command","id":3,"method":"stop_scene","params":{}}
+```
+
 Entity creation includes the entity kind and optional display/parent metadata:
 
 ```json
-{"type":"command","id":2,"method":"create_entity","params":{"kind":"cube","name":"Cube","parent_entity_id":"world"}}
+{"type":"command","id":4,"method":"create_entity","params":{"kind":"cube","name":"Cube","parent_entity_id":"world"}}
 ```
 
 Transform updates target one runtime entity and currently carry translation:
 
 ```json
-{"type":"command","id":3,"method":"set_transform","params":{"entity_id":"cube_1","translation":{"x":1.0,"y":0.5,"z":-2.0}}}
+{"type":"command","id":5,"method":"set_transform","params":{"entity_id":"cube_1","translation":{"x":1.0,"y":0.5,"z":-2.0}}}
 ```
 
 Viewport picks use normalized coordinates inside the runtime preview surface:
 
 ```json
-{"type":"command","id":4,"method":"pick_entity","params":{"viewport_x":0.5,"viewport_y":0.5}}
+{"type":"command","id":6,"method":"pick_entity","params":{"viewport_x":0.5,"viewport_y":0.5}}
 ```
 
 Editor camera navigation input is separate from scene entity transforms:
 
 ```json
-{"type":"command","id":5,"method":"editor_camera_input","params":{"rotate_delta_x":12.0,"rotate_delta_y":-4.0,"move_forward":1.0,"speed_multiplier":4.0,"delta_seconds":0.016}}
+{"type":"command","id":7,"method":"editor_camera_input","params":{"rotate_delta_x":12.0,"rotate_delta_y":-4.0,"move_forward":1.0,"speed_multiplier":4.0,"delta_seconds":0.016}}
 ```
 
 Selected scene cameras can be aligned to the current editor camera:
 
 ```json
-{"type":"command","id":6,"method":"align_selected_camera_to_editor","params":{}}
+{"type":"command","id":8,"method":"align_selected_camera_to_editor","params":{}}
 ```
 
 Selected entity transform axes can be picked and dragged from the Scene View:
 
 ```json
-{"type":"command","id":7,"method":"begin_transform_axis_drag","params":{"viewport_x":0.5,"viewport_y":0.5}}
-{"type":"command","id":8,"method":"update_transform_axis_drag","params":{"viewport_x":0.55,"viewport_y":0.5}}
-{"type":"command","id":9,"method":"end_transform_axis_drag","params":{}}
+{"type":"command","id":9,"method":"begin_transform_axis_drag","params":{"viewport_x":0.5,"viewport_y":0.5}}
+{"type":"command","id":10,"method":"update_transform_axis_drag","params":{"viewport_x":0.55,"viewport_y":0.5}}
+{"type":"command","id":11,"method":"end_transform_axis_drag","params":{}}
 ```
 
 Responses are sent by the runtime:
@@ -75,7 +82,12 @@ Events are pushed by the runtime:
 ## Commands
 
 - `open_project`: records the project path for the runtime session.
-- `reload_scene`: asks the runtime to rebuild or refresh its preview scene.
+- `reload_scene`: asks the runtime to pause game time and rebuild the active
+  scene from the Scene file.
+- `play_scene`: asks the runtime to resume game-time playback without changing
+  the resident runtime process.
+- `stop_scene`: asks the runtime to pause game time and rebuild the active
+  scene from the Scene file so play-mode changes return to the initial state.
 - `select_entity`: asks the runtime to update its selected entity.
 - `pick_entity`: asks the runtime to ray-pick and select an entity from
   normalized preview viewport coordinates.

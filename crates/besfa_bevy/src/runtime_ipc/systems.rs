@@ -9,9 +9,10 @@ use super::{
 use crate::{
     external_preview::{PREVIEW_SURFACE_HEIGHT, PREVIEW_SURFACE_WIDTH},
     preview::{
-        EditorPreviewCamera, PreviewPickTarget, PreviewSceneNode, PreviewSceneObjects,
-        SelectedCameraPreviewCamera,
+        EditorPreviewCamera, PreviewPickTarget, PreviewPlaybackState, PreviewSceneNode,
+        PreviewSceneObjects, SelectedCameraPreviewCamera, reload_preview_scene,
     },
+    scene_file::PreviewSceneSource,
 };
 use besfa_ipc::{
     CreateEntityResult, EditorCameraInputParams, FrameStatsPayload, IpcError, PickEntityParams,
@@ -37,12 +38,15 @@ pub(super) fn process_runtime_ipc_commands(
     server: Res<RuntimeIpcServer>,
     mut commands: Commands,
     mut project: ResMut<RuntimeIpcProject>,
+    mut scene_source: ResMut<PreviewSceneSource>,
     mut selection: ResMut<RuntimeIpcSelection>,
     mut axis_drag: ResMut<RuntimeIpcTransformAxisDrag>,
     mut scene_objects: ResMut<PreviewSceneObjects>,
+    mut playback: ResMut<PreviewPlaybackState>,
+    mut virtual_time: ResMut<Time<Virtual>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    scene_nodes: Query<&PreviewSceneNode>,
+    scene_nodes: Query<(Entity, &PreviewSceneNode)>,
     mut transforms: Query<(&PreviewSceneNode, &mut Transform), Without<EditorPreviewCamera>>,
     cameras: Query<(&Camera, &GlobalTransform), With<EditorPreviewCamera>>,
     mut editor_cameras: Query<&mut Transform, With<EditorPreviewCamera>>,
@@ -52,23 +56,81 @@ pub(super) fn process_runtime_ipc_commands(
         match request.command {
             RuntimeCommand::OpenProject(params) => {
                 project.path = Some(params.path.clone());
+                scene_source.set_project_path(&params.path);
+                playback.playing = false;
+                virtual_time.pause();
+                selection.selected_entity_id = None;
+                axis_drag.active = None;
+                let load_status = reload_preview_scene(
+                    &mut commands,
+                    &scene_source,
+                    &mut scene_objects,
+                    &mut meshes,
+                    &mut materials,
+                    &scene_nodes,
+                );
                 let _ = request.response_tx.send(empty_ok_response(request.id));
                 server.broadcast(log_message(
                     "info",
                     format!("Opened project {}", params.path),
                 ));
+                server.broadcast(log_message(
+                    load_status.log_level(),
+                    load_status.log_message(),
+                ));
                 server.request_snapshot();
             }
             RuntimeCommand::ReloadScene => {
+                virtual_time.pause();
+                playback.playing = false;
+                selection.selected_entity_id = None;
                 axis_drag.active = None;
+                let load_status = reload_preview_scene(
+                    &mut commands,
+                    &scene_source,
+                    &mut scene_objects,
+                    &mut meshes,
+                    &mut materials,
+                    &scene_nodes,
+                );
                 let _ = request.response_tx.send(empty_ok_response(request.id));
-                server.broadcast(log_message("info", "Reloaded preview scene"));
+                server.broadcast(log_message(
+                    load_status.log_level(),
+                    load_status.log_message(),
+                ));
+                server.request_snapshot();
+            }
+            RuntimeCommand::PlayScene => {
+                playback.playing = true;
+                virtual_time.unpause();
+                let _ = request.response_tx.send(empty_ok_response(request.id));
+                server.broadcast(log_message("info", "Scene playback started"));
+            }
+            RuntimeCommand::StopScene => {
+                playback.playing = false;
+                virtual_time.pause();
+                selection.selected_entity_id = None;
+                axis_drag.active = None;
+                let load_status = reload_preview_scene(
+                    &mut commands,
+                    &scene_source,
+                    &mut scene_objects,
+                    &mut meshes,
+                    &mut materials,
+                    &scene_nodes,
+                );
+                let _ = request.response_tx.send(empty_ok_response(request.id));
+                server.broadcast(log_message("info", "Scene playback stopped"));
+                server.broadcast(log_message(
+                    load_status.log_level(),
+                    load_status.log_message(),
+                ));
                 server.request_snapshot();
             }
             RuntimeCommand::SelectEntity(params) => {
                 if scene_nodes
                     .iter()
-                    .any(|node| node.id.as_str() == params.entity_id)
+                    .any(|(_, node)| node.id.as_str() == params.entity_id)
                 {
                     axis_drag.active = None;
                     selection.selected_entity_id = Some(params.entity_id.clone());
@@ -118,7 +180,7 @@ pub(super) fn process_runtime_ipc_commands(
                     .unwrap_or_else(|| "world".to_string());
                 if !scene_nodes
                     .iter()
-                    .any(|node| node.id.as_str() == parent_entity_id)
+                    .any(|(_, node)| node.id.as_str() == parent_entity_id)
                 {
                     let _ = request.response_tx.send(error_response(
                         request.id,

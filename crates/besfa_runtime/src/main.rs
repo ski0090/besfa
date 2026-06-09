@@ -17,6 +17,10 @@ fn parse_options(args: impl IntoIterator<Item = String>) -> besfa_bevy::PreviewR
             ipc_token = value.parse::<u64>().ok();
         } else if arg == "--ipc-token" {
             ipc_token = args.next().and_then(|value| value.parse::<u64>().ok());
+        } else if let Some(value) = arg.strip_prefix("--scene=") {
+            options.scene_path = Some(value.into());
+        } else if arg == "--scene" {
+            options.scene_path = args.next().map(Into::into);
         }
     }
 
@@ -40,5 +44,15 @@ mod tests {
         let ipc = options.ipc.unwrap();
         assert_eq!(ipc.port, 49152);
         assert_eq!(ipc.token, 42);
+    }
+
+    #[test]
+    fn parses_scene_option() {
+        let options = super::parse_options(["--scene=C:/project/Scene.besfa.json".to_string()]);
+
+        assert_eq!(
+            options.scene_path.unwrap(),
+            std::path::PathBuf::from("C:/project/Scene.besfa.json")
+        );
     }
 }
