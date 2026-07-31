@@ -1,0 +1,214 @@
+use std::{
+    env, fs, io,
+    path::{Path, PathBuf},
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+#[derive(Debug)]
+pub(crate) struct CreateError {
+    pub(crate) exit_code: u8,
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+    pub(crate) diagnostic: Option<String>,
+}
+
+impl CreateError {
+    fn new(exit_code: u8, code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            exit_code,
+            code,
+            message: message.into(),
+            diagnostic: None,
+        }
+    }
+
+    fn with_diagnostic(mut self, diagnostic: String) -> Self {
+        self.diagnostic = Some(diagnostic);
+        self
+    }
+}
+
+pub(crate) fn create_project(directory: &Path) -> Result<PathBuf, CreateError> {
+    let destination = absolute_path(directory)?;
+
+    if destination.exists() {
+        return Err(CreateError::new(
+            10,
+            "destination_exists",
+            "The destination directory already exists.",
+        ));
+    }
+
+    let project_name = destination
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            CreateError::new(
+                11,
+                "invalid_project_name",
+                "The destination must include a project directory name.",
+            )
+        })?;
+    let parent = destination.parent().ok_or_else(|| {
+        CreateError::new(
+            11,
+            "invalid_project_name",
+            "The destination must include a parent directory.",
+        )
+    })?;
+    let staging_dir = create_staging_dir(parent)?;
+    let staged_project = staging_dir.join(project_name);
+
+    let cargo_output = Command::new("cargo")
+        .arg("new")
+        .arg("--bin")
+        .arg(&staged_project)
+        .output()
+        .map_err(|error| {
+            CreateError::new(
+                30,
+                "cargo_execution_failed",
+                "Failed to start Cargo while creating the project.",
+            )
+            .with_diagnostic(error.to_string())
+        })?;
+
+    if !cargo_output.status.success() {
+        let _ = fs::remove_dir_all(&staging_dir);
+        return Err(CreateError::new(
+            11,
+            "invalid_project_name",
+            "Cargo rejected the project creation request.",
+        )
+        .with_diagnostic(String::from_utf8_lossy(&cargo_output.stderr).into_owned()));
+    }
+
+    if !staged_project.is_dir() {
+        let _ = fs::remove_dir_all(&staging_dir);
+        return Err(CreateError::new(
+            30,
+            "internal_error",
+            "Cargo completed without creating the expected project directory.",
+        ));
+    }
+
+    match fs::rename(&staged_project, &destination) {
+        Ok(()) => {
+            let _ = fs::remove_dir(&staging_dir);
+            Ok(destination)
+        }
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging_dir);
+            let (exit_code, code, message) = if destination.exists() {
+                (
+                    10,
+                    "destination_exists",
+                    "The destination directory already exists.",
+                )
+            } else {
+                (
+                    20,
+                    "filesystem_error",
+                    "Failed to move the created project into place.",
+                )
+            };
+            Err(CreateError::new(exit_code, code, message).with_diagnostic(error.to_string()))
+        }
+    }
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf, CreateError> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        env::current_dir()
+            .map(|current_dir| current_dir.join(path))
+            .map_err(|error| {
+                CreateError::new(
+                    20,
+                    "filesystem_error",
+                    "Failed to determine the current working directory.",
+                )
+                .with_diagnostic(error.to_string())
+            })
+    }
+}
+
+fn create_staging_dir(parent: &Path) -> Result<PathBuf, CreateError> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after the Unix epoch")
+        .as_nanos();
+
+    for attempt in 0..32 {
+        let path = parent.join(format!(
+            ".besfa-new-{}-{timestamp}-{attempt}",
+            std::process::id()
+        ));
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(CreateError::new(
+                    20,
+                    "filesystem_error",
+                    "Failed to create a temporary project directory.",
+                )
+                .with_diagnostic(error.to_string()));
+            }
+        }
+    }
+
+    Err(CreateError::new(
+        20,
+        "filesystem_error",
+        "Failed to allocate a unique temporary project directory.",
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn creates_a_cargo_binary_project_in_the_requested_directory() {
+        let parent = test_directory("create");
+        fs::create_dir(&parent).expect("test parent should be created");
+        let destination = parent.join("demo_game");
+
+        let result = create_project(&destination);
+        let manifest_exists = destination.join("Cargo.toml").is_file();
+        fs::remove_dir_all(&parent).expect("test directory should be removed");
+
+        assert_eq!(
+            result.expect("project creation should succeed"),
+            destination
+        );
+        assert!(manifest_exists, "Cargo.toml should be created");
+    }
+
+    #[test]
+    fn rejects_an_existing_destination() {
+        let parent = test_directory("existing");
+        let destination = parent.join("demo_game");
+        fs::create_dir_all(&destination).expect("test destination should be created");
+
+        let error = create_project(&destination).expect_err("existing destination should fail");
+        fs::remove_dir_all(&parent).expect("test directory should be removed");
+
+        assert_eq!(error.exit_code, 10);
+        assert_eq!(error.code, "destination_exists");
+    }
+
+    fn test_directory(label: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "besfa-cli-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be after the Unix epoch")
+                .as_nanos()
+        ))
+    }
+}

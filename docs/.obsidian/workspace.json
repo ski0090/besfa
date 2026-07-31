@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "TODO.md",
+                "file": "CLI_CONTRACT.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "TODO"
+              "title": "CLI_CONTRACT"
             }
           },
           {
@@ -201,13 +201,13 @@
   },
   "active": "49426cf2f14f8764",
   "lastOpenFiles": [
-    "EDITOR_UI.md",
-    "DATA_FORMAT.md",
     "TODO.md",
+    "DATA_FORMAT.md",
+    "EDITOR_UI.md",
     "CLI_CONTRACT.md",
+    "FSD.md",
     "ARCHITECTURE.md",
     "PROJECT_OVERVIEW.md",
-    "FSD.md",
     "무제.base"
   ]
 }
