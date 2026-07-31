@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/besfa_cli"]
+resolver = "3"
