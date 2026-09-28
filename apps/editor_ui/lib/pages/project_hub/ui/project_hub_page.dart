@@ -28,26 +28,24 @@ class ProjectHubPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            const _AppHeader(),
-            Expanded(
-              child: Center(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(32),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 920),
-                    child: _ProjectHubContent(
-                      onCreateProject: () => _showCreateProject(context),
-                    ),
+      body: Column(
+        children: [
+          const _AppHeader(),
+          Expanded(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(32),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 920),
+                  child: _ProjectHubContent(
+                    onCreateProject: () => _showCreateProject(context),
                   ),
                 ),
               ),
             ),
-            const _Footer(),
-          ],
-        ),
+          ),
+          const _Footer(),
+        ],
       ),
     );
   }

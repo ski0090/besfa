@@ -6,11 +6,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "besfa",
     version,
-    about = "Command-line tools for Besfa projects"
+    about = "Command-line tools for Besfa projects",
+    arg_required_else_help = true
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
-    pub(crate) command: Option<Commands>,
+    pub(crate) command: Commands,
 }
 
 #[derive(Debug, Subcommand)]
@@ -48,7 +49,7 @@ mod tests {
             .expect("the new command should parse");
 
         match cli.command {
-            Some(Commands::New { directory, output }) => {
+            Commands::New { directory, output } => {
                 assert_eq!(directory, PathBuf::from("projects/demo"));
                 assert!(matches!(output, Some(OutputFormat::Json)));
             }
