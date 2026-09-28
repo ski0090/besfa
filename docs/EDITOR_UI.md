@@ -18,4 +18,5 @@ UI 코드는 [FSD.md](./FSD.md)의 Feature-Sliced Design 규칙을 따른다.
 - CLI의 JSON 성공·실패 결과를 UI에 표시
 - 생성에 성공하면 해당 프로젝트로 에디터 화면(`pages/project_editor`)을 연다
 - 프로젝트 열기: 폴더를 선택하면 `Cargo.toml`이 있는지 확인한 뒤 에디터 화면을 연다
+- 에디터의 Run 버튼은 프로젝트 폴더에서 `cargo run`을 실행하고, 출력은 하단 로그 패널에 표시한다. Stop은 cargo와 게임 프로세스 트리를 함께 종료한다
 - 최근 프로젝트 목록은 아직 저장되지 않음
