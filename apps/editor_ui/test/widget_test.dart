@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:editor_ui/app/app.dart';
@@ -16,6 +17,17 @@ void main() {
   testWidgets('creates a project and opens it in the editor', (
     WidgetTester tester,
   ) async {
+    final titleBarStyles = <Object?>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('window_manager'),
+      (call) async {
+        if (call.method == 'setTitleBarStyle') {
+          titleBarStyles.add((call.arguments as Map)['titleBarStyle']);
+        }
+        return call.method == 'isMaximized' ? false : null;
+      },
+    );
+
     await tester.pumpWidget(
       BesfaEditorApp(projectCreator: _FakeProjectCreator()),
     );
@@ -27,10 +39,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Viewport'), findsOneWidget);
+    expect(find.text('demo_game'), findsOneWidget);
 
-    await tester.tap(find.text('Close project'));
+    await tester.tap(find.text('File'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Back to Project Hub'));
     await tester.pumpAndSettle();
     expect(find.text('Start creating'), findsOneWidget);
+    expect(titleBarStyles, ['hidden', 'normal']);
   });
 }
 
