@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 Future<ProjectCreationSuccess?> showCreateProjectDialog(
@@ -29,6 +32,30 @@ class _CreateProjectDialogState extends State<_CreateProjectDialog> {
   void dispose() {
     _directoryController.dispose();
     super.dispose();
+  }
+
+  Future<void> _browse() async {
+    final parent = await getDirectoryPath(
+      confirmButtonText: 'Select location',
+    );
+    if (parent == null || !mounted) {
+      return;
+    }
+
+    // The CLI needs a folder that does not exist yet, so append an editable name.
+    const name = 'new_project';
+    final separator = parent.endsWith(Platform.pathSeparator)
+        ? ''
+        : Platform.pathSeparator;
+    final path = '$parent$separator$name';
+    _directoryController.value = TextEditingValue(
+      text: path,
+      selection: TextSelection(
+        baseOffset: path.length - name.length,
+        extentOffset: path.length,
+      ),
+    );
+    setState(() => _errorMessage = null);
   }
 
   Future<void> _createProject() async {
@@ -72,17 +99,34 @@ class _CreateProjectDialogState extends State<_CreateProjectDialog> {
           children: [
             const Text('Enter the folder path for the new Cargo project.'),
             const SizedBox(height: 16),
-            TextField(
-              controller: _directoryController,
-              autofocus: true,
-              enabled: !_isCreating,
-              decoration: InputDecoration(
-                labelText: 'Project directory',
-                hintText: r'C:\Projects\my_game',
-                errorText: _errorMessage,
-                border: const OutlineInputBorder(),
-              ),
-              onSubmitted: (_) => _isCreating ? null : _createProject(),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _directoryController,
+                    autofocus: true,
+                    enabled: !_isCreating,
+                    decoration: InputDecoration(
+                      labelText: 'Project directory',
+                      hintText: r'ex) C:\Projects\my_game',
+                      floatingLabelBehavior: FloatingLabelBehavior.always,
+                      errorText: _errorMessage,
+                      border: const OutlineInputBorder(),
+                    ),
+                    onSubmitted: (_) => _isCreating ? null : _createProject(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  height: 56,
+                  child: OutlinedButton.icon(
+                    onPressed: _isCreating ? null : _browse,
+                    icon: const Icon(Icons.folder_open),
+                    label: const Text('Browse'),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
