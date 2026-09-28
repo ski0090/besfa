@@ -22,7 +22,8 @@ class GameProcess {
       executable,
       arguments,
       workingDirectory: directory,
-      environment: environment,
+      // The log panel shows plain text, not ANSI colors.
+      environment: {'NO_COLOR': '1', ...?environment},
     );
     for (final stream in [process.stdout, process.stderr]) {
       stream
