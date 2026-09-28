@@ -39,7 +39,7 @@ UI의 역할은 [EDITOR_UI.md](./EDITOR_UI.md), FSD-lite 구조와 의존성 규
 - Windows 최소 창 크기: 900 × 640
 - FSD-lite 구조 적용
 
-현재 화면은 기능과 연결되지 않은 UI 골격이다.
+새 프로젝트 생성은 `besfa new <DIRECTORY> --output json`을 실행하도록 연결되어 있다. 프로젝트 열기와 생성된 프로젝트를 에디터에서 여는 흐름은 아직 구현되지 않았다.
 
 ### `crates/besfa_cli`
 

@@ -14,4 +14,6 @@ UI 코드는 [FSD.md](./FSD.md)의 Feature-Sliced Design 규칙을 따른다.
 
 - 프로젝트 생성과 열기를 위한 시작 허브 화면
 - Windows 최소 창 크기: 900 × 640
-- 프로젝트 생성과 열기 기능은 아직 연결되지 않음
+- 새 프로젝트 생성 대화상자에서 대상 경로를 입력하면 PATH의 `besfa` CLI를 `new <DIRECTORY> --output json`으로 실행
+- CLI의 JSON 성공·실패 결과를 UI에 표시
+- 프로젝트 열기 기능은 아직 연결되지 않음

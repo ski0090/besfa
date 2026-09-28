@@ -1,7 +1,29 @@
 import 'package:flutter/material.dart';
 
+import 'package:editor_ui/features/create_project/model/project_creator.dart';
+import 'package:editor_ui/features/create_project/ui/create_project_dialog.dart';
+
 class ProjectHubPage extends StatelessWidget {
-  const ProjectHubPage({super.key});
+  const ProjectHubPage({
+    super.key,
+    this.projectCreator = const BesfaCliProjectCreator(),
+  });
+
+  final ProjectCreator projectCreator;
+
+  Future<void> _showCreateProject(BuildContext context) async {
+    final result = await showCreateProjectDialog(
+      context,
+      creator: projectCreator,
+    );
+    if (!context.mounted || result == null) {
+      return;
+    }
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text("Created '${result.projectPath}'.")));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -16,7 +38,9 @@ class ProjectHubPage extends StatelessWidget {
                   padding: const EdgeInsets.all(32),
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 920),
-                    child: const _ProjectHubContent(),
+                    child: _ProjectHubContent(
+                      onCreateProject: () => _showCreateProject(context),
+                    ),
                   ),
                 ),
               ),
@@ -76,7 +100,9 @@ class _BesfaMark extends StatelessWidget {
 }
 
 class _ProjectHubContent extends StatelessWidget {
-  const _ProjectHubContent();
+  const _ProjectHubContent({required this.onCreateProject});
+
+  final VoidCallback onCreateProject;
 
   @override
   Widget build(BuildContext context) {
@@ -94,14 +120,15 @@ class _ProjectHubContent extends StatelessWidget {
         const SizedBox(height: 32),
         LayoutBuilder(
           builder: (context, constraints) {
-            const children = [
+            final children = [
               Expanded(
                 child: _ProjectActionCard(
                   icon: Icons.add_box_outlined,
                   title: 'Create project',
-                  description: 'Start a new game from a Besfa template.',
+                  description: 'Start a new binary Rust game project.',
                   action: 'New project',
                   emphasized: true,
+                  onPressed: onCreateProject,
                 ),
               ),
               SizedBox(width: 16, height: 16),
@@ -111,16 +138,17 @@ class _ProjectHubContent extends StatelessWidget {
                   title: 'Open project',
                   description: 'Open an existing Besfa project folder.',
                   action: 'Open folder',
+                  onPressed: () {},
                 ),
               ),
             ];
 
             return constraints.maxWidth < 680
-                ? const Column(
+                ? Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: children,
                   )
-                : const Row(children: children);
+                : Row(children: children);
           },
         ),
         const SizedBox(height: 48),
@@ -138,6 +166,7 @@ class _ProjectActionCard extends StatelessWidget {
     required this.title,
     required this.description,
     required this.action,
+    required this.onPressed,
     this.emphasized = false,
   });
 
@@ -145,6 +174,7 @@ class _ProjectActionCard extends StatelessWidget {
   final String title;
   final String description;
   final String action;
+  final VoidCallback onPressed;
   final bool emphasized;
 
   @override
@@ -165,12 +195,12 @@ class _ProjectActionCard extends StatelessWidget {
             const SizedBox(height: 24),
             emphasized
                 ? FilledButton.icon(
-                    onPressed: () {},
+                    onPressed: onPressed,
                     icon: const Icon(Icons.add),
                     label: Text(action),
                   )
                 : OutlinedButton.icon(
-                    onPressed: () {},
+                    onPressed: onPressed,
                     icon: const Icon(Icons.folder_open_outlined),
                     label: Text(action),
                   ),
