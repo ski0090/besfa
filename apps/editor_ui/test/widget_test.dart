@@ -1,13 +1,25 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:editor_ui/app/app.dart';
+import 'package:editor_ui/entities/project/model/recent_projects.dart';
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
 
 void main() {
+  late Directory dir;
+  late RecentProjects recent;
+
+  setUp(() {
+    dir = Directory.systemTemp.createTempSync('besfa_widget');
+    recent = RecentProjects(File('${dir.path}/recent.json'));
+  });
+  tearDown(() => dir.deleteSync(recursive: true));
+
   testWidgets('shows the project hub', (WidgetTester tester) async {
-    await tester.pumpWidget(const BesfaEditorApp());
+    await tester.pumpWidget(BesfaEditorApp(recentProjects: recent));
 
     expect(find.text('Start creating'), findsOneWidget);
     expect(find.text('Create project'), findsOneWidget);
@@ -29,7 +41,10 @@ void main() {
     );
 
     await tester.pumpWidget(
-      BesfaEditorApp(projectCreator: _FakeProjectCreator()),
+      BesfaEditorApp(
+        projectCreator: _FakeProjectCreator(),
+        recentProjects: recent,
+      ),
     );
 
     await tester.tap(find.widgetWithText(FilledButton, 'New project'));
@@ -46,6 +61,8 @@ void main() {
     await tester.tap(find.text('Back to Project Hub'));
     await tester.pumpAndSettle();
     expect(find.text('Start creating'), findsOneWidget);
+    expect(find.text(r'C:\Projects\demo_game'), findsOneWidget);
+    expect(recent.load().single.path, r'C:\Projects\demo_game');
     expect(titleBarStyles, ['hidden', 'normal']);
   });
 }

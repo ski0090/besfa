@@ -2,51 +2,79 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import 'package:editor_ui/entities/project/model/project.dart';
+import 'package:editor_ui/entities/project/model/recent_projects.dart';
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
 import 'package:editor_ui/features/create_project/ui/create_project_dialog.dart';
 import 'package:editor_ui/features/open_project/model/project_loader.dart';
 
-class ProjectHubPage extends StatelessWidget {
+class ProjectHubPage extends StatefulWidget {
   const ProjectHubPage({
     super.key,
     this.projectCreator = const BesfaCliProjectCreator(),
+    required this.recentProjects,
   });
 
   final ProjectCreator projectCreator;
+  final RecentProjects recentProjects;
 
   /// Route registered by the app that shows the editor for a [Project].
   static const editorRoute = '/editor';
 
-  void _openEditor(BuildContext context, Project project) {
-    Navigator.of(context).pushNamed(editorRoute, arguments: project);
+  @override
+  State<ProjectHubPage> createState() => _ProjectHubPageState();
+}
+
+class _ProjectHubPageState extends State<ProjectHubPage> {
+  late var _recent = widget.recentProjects.load();
+
+  void _openEditor(Project project) {
+    setState(() => _recent = widget.recentProjects.add(project));
+    Navigator.of(
+      context,
+    ).pushNamed(ProjectHubPage.editorRoute, arguments: project);
   }
 
-  Future<void> _showCreateProject(BuildContext context) async {
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _showCreateProject() async {
     final result = await showCreateProjectDialog(
       context,
-      creator: projectCreator,
+      creator: widget.projectCreator,
     );
-    if (!context.mounted || result == null) {
+    if (!mounted || result == null) {
       return;
     }
 
-    _openEditor(context, Project(result.projectPath));
+    _openEditor(Project(result.projectPath));
   }
 
-  Future<void> _showOpenProject(BuildContext context) async {
+  Future<void> _showOpenProject() async {
     final directory = await getDirectoryPath(confirmButtonText: 'Open');
-    if (!context.mounted || directory == null) {
+    if (!mounted || directory == null) {
       return;
     }
 
     final project = loadProject(directory);
     if (project == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("'$directory' has no Cargo.toml.")),
+      _showMessage("'$directory' has no Cargo.toml.");
+      return;
+    }
+    _openEditor(project);
+  }
+
+  void _openRecent(Project project) {
+    if (loadProject(project.path) == null) {
+      setState(() => _recent = widget.recentProjects.remove(project));
+      _showMessage(
+        "'${project.path}' is no longer a Cargo project and was removed.",
       );
       return;
     }
-    _openEditor(context, project);
+    _openEditor(project);
   }
 
   @override
@@ -62,8 +90,10 @@ class ProjectHubPage extends StatelessWidget {
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 920),
                   child: _ProjectHubContent(
-                    onCreateProject: () => _showCreateProject(context),
-                    onOpenProject: () => _showOpenProject(context),
+                    recent: _recent,
+                    onCreateProject: _showCreateProject,
+                    onOpenProject: _showOpenProject,
+                    onOpenRecent: _openRecent,
                   ),
                 ),
               ),
@@ -124,12 +154,16 @@ class _BesfaMark extends StatelessWidget {
 
 class _ProjectHubContent extends StatelessWidget {
   const _ProjectHubContent({
+    required this.recent,
     required this.onCreateProject,
     required this.onOpenProject,
+    required this.onOpenRecent,
   });
 
+  final List<Project> recent;
   final VoidCallback onCreateProject;
   final VoidCallback onOpenProject;
+  final ValueChanged<Project> onOpenRecent;
 
   @override
   Widget build(BuildContext context) {
@@ -181,7 +215,9 @@ class _ProjectHubContent extends StatelessWidget {
         const SizedBox(height: 48),
         Text('Recent projects', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 16),
-        const _EmptyRecentProjects(),
+        recent.isEmpty
+            ? const _EmptyRecentProjects()
+            : _RecentProjectList(recent, onOpen: onOpenRecent),
       ],
     );
   }
@@ -233,6 +269,34 @@ class _ProjectActionCard extends StatelessWidget {
                   ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _RecentProjectList extends StatelessWidget {
+  const _RecentProjectList(this.projects, {required this.onOpen});
+
+  final List<Project> projects;
+  final ValueChanged<Project> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          for (final project in projects)
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: Text(project.name),
+              subtitle: Text(
+                project.path,
+                style: const TextStyle(color: Color(0xFF9DA6B5)),
+              ),
+              onTap: () => onOpen(project),
+            ),
+        ],
       ),
     );
   }
