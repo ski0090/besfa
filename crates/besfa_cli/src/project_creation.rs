@@ -93,6 +93,11 @@ pub(crate) fn create_project(directory: &Path) -> Result<PathBuf, CreateError> {
         ));
     }
 
+    if let Err(error) = write_bevy_template(&staged_project) {
+        let _ = fs::remove_dir_all(&staging_dir);
+        return Err(error);
+    }
+
     match fs::rename(&staged_project, &destination) {
         Ok(()) => {
             let _ = fs::remove_dir(&staging_dir);
@@ -116,6 +121,46 @@ pub(crate) fn create_project(directory: &Path) -> Result<PathBuf, CreateError> {
             Err(CreateError::new(exit_code, code, message).with_diagnostic(error.to_string()))
         }
     }
+}
+
+const TEMPLATE_MAIN: &str = include_str!("../template/main.rs");
+
+/// Appended to the `[dependencies]` table that ends Cargo's generated manifest.
+const TEMPLATE_DEPENDENCIES: &str = r#"bevy = "0.19.1"
+besfa_editor_plugin = { git = "https://github.com/ski0090/besfa" }
+
+# Bevy is slow unoptimized: optimize dependencies, keep the game quick to rebuild.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+"#;
+
+/// Turns Cargo's hello-world project into a Bevy game with a cube scene.
+fn write_bevy_template(project: &Path) -> Result<(), CreateError> {
+    let filesystem_error = |message: &str, error: io::Error| {
+        CreateError::new(20, "filesystem_error", message).with_diagnostic(error.to_string())
+    };
+
+    let manifest_path = project.join("Cargo.toml");
+    let manifest = fs::read_to_string(&manifest_path)
+        .map_err(|error| filesystem_error("Failed to read the generated Cargo.toml.", error))?;
+    if !manifest.trim_end().ends_with("[dependencies]") {
+        return Err(CreateError::new(
+            30,
+            "internal_error",
+            "Cargo generated a manifest that does not end with [dependencies].",
+        ));
+    }
+
+    fs::write(
+        &manifest_path,
+        format!("{}\n{TEMPLATE_DEPENDENCIES}", manifest.trim_end()),
+    )
+    .map_err(|error| filesystem_error("Failed to write Cargo.toml.", error))?;
+    fs::write(project.join("src").join("main.rs"), TEMPLATE_MAIN)
+        .map_err(|error| filesystem_error("Failed to write src/main.rs.", error))
 }
 
 fn absolute_path(path: &Path) -> Result<PathBuf, CreateError> {
@@ -178,14 +223,19 @@ mod tests {
         let destination = parent.join("demo_game");
 
         let result = create_project(&destination);
-        let manifest_exists = destination.join("Cargo.toml").is_file();
+        let manifest = fs::read_to_string(destination.join("Cargo.toml"));
+        let main = fs::read_to_string(destination.join("src").join("main.rs"));
         fs::remove_dir_all(&parent).expect("test directory should be removed");
 
         assert_eq!(
             result.expect("project creation should succeed"),
             destination
         );
-        assert!(manifest_exists, "Cargo.toml should be created");
+        let manifest = manifest.expect("Cargo.toml should be created");
+        assert!(manifest.contains("name = \"demo_game\""));
+        assert!(manifest.contains("[dependencies]\nbevy = \"0.19.1\""));
+        assert!(manifest.contains("besfa_editor_plugin = { git ="));
+        assert_eq!(main.expect("main.rs should be created"), TEMPLATE_MAIN);
     }
 
     #[test]

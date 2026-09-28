@@ -1,10 +1,12 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/features/run_game/model/game_process.dart';
+import 'package:editor_ui/shared/native/viewport_texture.dart';
 
 class ProjectEditorPage extends StatefulWidget {
   const ProjectEditorPage({super.key, required this.project});
@@ -20,9 +22,15 @@ const _captionColor = Color(0xFF15171B);
 // ponytail: fixed log cap, switch to a ring buffer if trimming shows up in profiles.
 const _maxLogLines = 2000;
 
+// ponytail: fixed viewport resolution, resize the shared texture with the
+// panel once the viewport needs to fill it exactly.
+const _viewportWidth = 1280;
+const _viewportHeight = 720;
+
 class _ProjectEditorPageState extends State<ProjectEditorPage> {
   final _logs = <String>[];
   GameProcess? _game;
+  ViewportTexture? _viewport;
   bool _starting = false;
 
   @override
@@ -37,6 +45,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   @override
   void dispose() {
     _game?.stop();
+    _viewport?.dispose();
     windowManager.setTitleBarStyle(TitleBarStyle.normal);
     super.dispose();
   }
@@ -59,7 +68,21 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
       _starting = true;
     });
     try {
-      final game = await GameProcess.start(widget.project.path, onOutput: _log);
+      final viewport = await _ensureViewport();
+      final game = await GameProcess.start(
+        widget.project.path,
+        onOutput: _log,
+        environment: viewport == null
+            ? null
+            : {
+                // Read by besfa_editor_plugin in the game.
+                'BESFA_VIEWPORT': viewport.sharedName,
+                'BESFA_VIEWPORT_SIZE': '${viewport.width}x${viewport.height}',
+                // The shared texture is opened on D3D12, on the editor's GPU.
+                'WGPU_BACKEND': 'dx12',
+                'WGPU_ADAPTER_NAME': viewport.adapterName,
+              },
+      );
       if (!mounted) {
         await game.stop();
         return;
@@ -79,8 +102,35 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     }
   }
 
+  /// Creates the viewport texture once per editor. Without it the game opens
+  /// its own window, so failures are logged rather than fatal.
+  Future<ViewportTexture?> _ensureViewport() async {
+    if (_viewport != null) {
+      return _viewport;
+    }
+    try {
+      final viewport = await ViewportTexture.create(
+        width: _viewportWidth,
+        height: _viewportHeight,
+      );
+      if (!mounted) {
+        await viewport.dispose();
+        return null;
+      }
+      setState(() => _viewport = viewport);
+      return viewport;
+    } on PlatformException catch (error) {
+      _log(
+        'Viewport unavailable, the game opens its own window: '
+        '${error.message}',
+      );
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final viewport = _viewport;
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(kWindowCaptionHeight),
@@ -135,12 +185,17 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
             onRun: _run,
             onStop: () => _game?.stop(),
           ),
-          const Expanded(
+          Expanded(
             child: Center(
-              child: Text(
-                'Viewport',
-                style: TextStyle(color: Color(0xFF7E8795)),
-              ),
+              child: _game != null && viewport != null
+                  ? AspectRatio(
+                      aspectRatio: viewport.width / viewport.height,
+                      child: Texture(textureId: viewport.textureId),
+                    )
+                  : const Text(
+                      'Viewport',
+                      style: TextStyle(color: Color(0xFF7E8795)),
+                    ),
             ),
           ),
           SizedBox(height: 200, child: _LogPanel(_logs)),

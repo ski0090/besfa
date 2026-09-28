@@ -14,6 +14,7 @@ class GameProcess {
   static Future<GameProcess> start(
     String directory, {
     required void Function(String line) onOutput,
+    Map<String, String>? environment,
     String executable = 'cargo',
     List<String> arguments = const ['run'],
   }) async {
@@ -21,6 +22,7 @@ class GameProcess {
       executable,
       arguments,
       workingDirectory: directory,
+      environment: environment,
     );
     for (final stream in [process.stdout, process.stderr]) {
       stream
