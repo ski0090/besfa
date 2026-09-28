@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:editor_ui/app/app.dart';
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
-import 'package:editor_ui/pages/project_hub/ui/project_hub_page.dart';
 
 void main() {
   testWidgets('shows the project hub', (WidgetTester tester) async {
@@ -14,11 +13,11 @@ void main() {
     expect(find.text('Open project'), findsOneWidget);
   });
 
-  testWidgets('creates a project through the CLI feature', (
+  testWidgets('creates a project and opens it in the editor', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
-      MaterialApp(home: ProjectHubPage(projectCreator: _FakeProjectCreator())),
+      BesfaEditorApp(projectCreator: _FakeProjectCreator()),
     );
 
     await tester.tap(find.widgetWithText(FilledButton, 'New project'));
@@ -27,7 +26,11 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Create'));
     await tester.pumpAndSettle();
 
-    expect(find.text("Created 'C:\\Projects\\demo_game'."), findsOneWidget);
+    expect(find.text('Viewport'), findsOneWidget);
+
+    await tester.tap(find.text('Close project'));
+    await tester.pumpAndSettle();
+    expect(find.text('Start creating'), findsOneWidget);
   });
 }
 

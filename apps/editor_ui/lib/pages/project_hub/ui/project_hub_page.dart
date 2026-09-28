@@ -1,7 +1,10 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
+import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
 import 'package:editor_ui/features/create_project/ui/create_project_dialog.dart';
+import 'package:editor_ui/features/open_project/model/project_loader.dart';
 
 class ProjectHubPage extends StatelessWidget {
   const ProjectHubPage({
@@ -10,6 +13,13 @@ class ProjectHubPage extends StatelessWidget {
   });
 
   final ProjectCreator projectCreator;
+
+  /// Route registered by the app that shows the editor for a [Project].
+  static const editorRoute = '/editor';
+
+  void _openEditor(BuildContext context, Project project) {
+    Navigator.of(context).pushNamed(editorRoute, arguments: project);
+  }
 
   Future<void> _showCreateProject(BuildContext context) async {
     final result = await showCreateProjectDialog(
@@ -20,9 +30,23 @@ class ProjectHubPage extends StatelessWidget {
       return;
     }
 
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text("Created '${result.projectPath}'.")));
+    _openEditor(context, Project(result.projectPath));
+  }
+
+  Future<void> _showOpenProject(BuildContext context) async {
+    final directory = await getDirectoryPath(confirmButtonText: 'Open');
+    if (!context.mounted || directory == null) {
+      return;
+    }
+
+    final project = loadProject(directory);
+    if (project == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("'$directory' has no Cargo.toml.")),
+      );
+      return;
+    }
+    _openEditor(context, project);
   }
 
   @override
@@ -39,6 +63,7 @@ class ProjectHubPage extends StatelessWidget {
                   constraints: const BoxConstraints(maxWidth: 920),
                   child: _ProjectHubContent(
                     onCreateProject: () => _showCreateProject(context),
+                    onOpenProject: () => _showOpenProject(context),
                   ),
                 ),
               ),
@@ -98,9 +123,13 @@ class _BesfaMark extends StatelessWidget {
 }
 
 class _ProjectHubContent extends StatelessWidget {
-  const _ProjectHubContent({required this.onCreateProject});
+  const _ProjectHubContent({
+    required this.onCreateProject,
+    required this.onOpenProject,
+  });
 
   final VoidCallback onCreateProject;
+  final VoidCallback onOpenProject;
 
   @override
   Widget build(BuildContext context) {
@@ -136,7 +165,7 @@ class _ProjectHubContent extends StatelessWidget {
                   title: 'Open project',
                   description: 'Open an existing Besfa project folder.',
                   action: 'Open folder',
-                  onPressed: () {},
+                  onPressed: onOpenProject,
                 ),
               ),
             ];

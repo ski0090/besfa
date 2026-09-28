@@ -8,7 +8,7 @@
 
 UI 코드는 [FSD.md](./FSD.md)의 Feature-Sliced Design 규칙을 따른다.
 
-현재는 `app`과 `pages/project_hub`만 구현되어 있다. 나머지 레이어와 slice는 실제 기능을 만들 때 추가한다.
+나머지 레이어와 slice는 실제 기능을 만들 때 추가한다. 페이지 사이의 이동은 `app`의 `onGenerateRoute`에서 조립한다.
 
 ## 현재 상태
 
@@ -16,4 +16,6 @@ UI 코드는 [FSD.md](./FSD.md)의 Feature-Sliced Design 규칙을 따른다.
 - Windows 최소 창 크기: 900 × 640
 - 새 프로젝트 생성 대화상자에서 대상 경로를 입력하면 PATH의 `besfa` CLI를 `new <DIRECTORY> --output json`으로 실행
 - CLI의 JSON 성공·실패 결과를 UI에 표시
-- 프로젝트 열기 기능은 아직 연결되지 않음
+- 생성에 성공하면 해당 프로젝트로 에디터 화면(`pages/project_editor`)을 연다
+- 프로젝트 열기: 폴더를 선택하면 `Cargo.toml`이 있는지 확인한 뒤 에디터 화면을 연다
+- 최근 프로젝트 목록은 아직 저장되지 않음

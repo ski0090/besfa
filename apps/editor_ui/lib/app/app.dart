@@ -1,9 +1,17 @@
 import 'package:flutter/material.dart';
 
+import 'package:editor_ui/entities/project/model/project.dart';
+import 'package:editor_ui/features/create_project/model/project_creator.dart';
+import 'package:editor_ui/pages/project_editor/ui/project_editor_page.dart';
 import 'package:editor_ui/pages/project_hub/ui/project_hub_page.dart';
 
 class BesfaEditorApp extends StatelessWidget {
-  const BesfaEditorApp({super.key});
+  const BesfaEditorApp({
+    super.key,
+    this.projectCreator = const BesfaCliProjectCreator(),
+  });
+
+  final ProjectCreator projectCreator;
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +36,18 @@ class BesfaEditorApp extends StatelessWidget {
           color: Color(0xFF20242B),
         ),
       ),
-      home: const ProjectHubPage(),
+      home: ProjectHubPage(projectCreator: projectCreator),
+      onGenerateRoute: (settings) => switch (settings) {
+        RouteSettings(
+          name: ProjectHubPage.editorRoute,
+          :final Project arguments,
+        ) =>
+          MaterialPageRoute<void>(
+            settings: settings,
+            builder: (_) => ProjectEditorPage(project: arguments),
+          ),
+        _ => null,
+      },
     );
   }
 }

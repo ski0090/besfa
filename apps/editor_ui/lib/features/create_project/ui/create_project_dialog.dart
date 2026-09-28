@@ -35,9 +35,7 @@ class _CreateProjectDialogState extends State<_CreateProjectDialog> {
   }
 
   Future<void> _browse() async {
-    final parent = await getDirectoryPath(
-      confirmButtonText: 'Select location',
-    );
+    final parent = await getDirectoryPath(confirmButtonText: 'Select location');
     if (parent == null || !mounted) {
       return;
     }
