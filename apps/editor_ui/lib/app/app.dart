@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/entities/project/model/recent_projects.dart';
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
+import 'package:editor_ui/features/delete_project/model/project_deleter.dart';
 import 'package:editor_ui/pages/project_editor/ui/project_editor_page.dart';
 import 'package:editor_ui/pages/project_hub/ui/project_hub_page.dart';
 
@@ -11,10 +12,12 @@ class BesfaEditorApp extends StatelessWidget {
     super.key,
     this.projectCreator = const BesfaCliProjectCreator(),
     required this.recentProjects,
+    this.deleteProject = moveToRecycleBin,
   });
 
   final ProjectCreator projectCreator;
   final RecentProjects recentProjects;
+  final Future<bool> Function(String directory) deleteProject;
 
   @override
   Widget build(BuildContext context) {
@@ -42,6 +45,7 @@ class BesfaEditorApp extends StatelessWidget {
       home: ProjectHubPage(
         projectCreator: projectCreator,
         recentProjects: recentProjects,
+        deleteProject: deleteProject,
       ),
       onGenerateRoute: (settings) => switch (settings) {
         RouteSettings(

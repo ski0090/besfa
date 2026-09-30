@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
@@ -5,6 +7,7 @@ import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/entities/project/model/recent_projects.dart';
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
 import 'package:editor_ui/features/create_project/ui/create_project_dialog.dart';
+import 'package:editor_ui/features/delete_project/model/project_deleter.dart';
 import 'package:editor_ui/features/open_project/model/project_loader.dart';
 
 class ProjectHubPage extends StatefulWidget {
@@ -12,10 +15,12 @@ class ProjectHubPage extends StatefulWidget {
     super.key,
     this.projectCreator = const BesfaCliProjectCreator(),
     required this.recentProjects,
+    this.deleteProject = moveToRecycleBin,
   });
 
   final ProjectCreator projectCreator;
   final RecentProjects recentProjects;
+  final Future<bool> Function(String directory) deleteProject;
 
   /// Route registered by the app that shows the editor for a [Project].
   static const editorRoute = '/editor';
@@ -77,6 +82,56 @@ class _ProjectHubPageState extends State<ProjectHubPage> {
     _openEditor(project);
   }
 
+  Future<void> _deleteRecent(Project project) async {
+    // Never delete a folder that is not (or no longer) a Cargo project.
+    if (loadProject(project.path) == null) {
+      setState(() => _recent = widget.recentProjects.remove(project));
+      _showMessage(
+        "'${project.path}' is no longer a Cargo project and was removed.",
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Delete '${project.name}'?"),
+        content: Text("'${project.path}' will be moved to the Recycle Bin."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) {
+      return;
+    }
+
+    if (!await widget.deleteProject(project.path)) {
+      if (mounted) _showMessage("Could not delete '${project.path}'.");
+      return;
+    }
+    final recent = widget.recentProjects.remove(project);
+    if (mounted) setState(() => _recent = recent);
+  }
+
+  void _revealRecent(Project project) {
+    if (!Directory(project.path).existsSync()) {
+      _showMessage("'${project.path}' no longer exists.");
+      return;
+    }
+    // Explorer needs backslashes; with '/' it silently opens Documents.
+    Process.start('explorer', [
+      project.path.replaceAll('/', r'\'),
+    ], mode: ProcessStartMode.detached);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -94,6 +149,8 @@ class _ProjectHubPageState extends State<ProjectHubPage> {
                     onCreateProject: _showCreateProject,
                     onOpenProject: _showOpenProject,
                     onOpenRecent: _openRecent,
+                    onRevealRecent: _revealRecent,
+                    onDeleteRecent: _deleteRecent,
                   ),
                 ),
               ),
@@ -158,12 +215,16 @@ class _ProjectHubContent extends StatelessWidget {
     required this.onCreateProject,
     required this.onOpenProject,
     required this.onOpenRecent,
+    required this.onRevealRecent,
+    required this.onDeleteRecent,
   });
 
   final List<Project> recent;
   final VoidCallback onCreateProject;
   final VoidCallback onOpenProject;
   final ValueChanged<Project> onOpenRecent;
+  final ValueChanged<Project> onRevealRecent;
+  final ValueChanged<Project> onDeleteRecent;
 
   @override
   Widget build(BuildContext context) {
@@ -217,7 +278,12 @@ class _ProjectHubContent extends StatelessWidget {
         const SizedBox(height: 16),
         recent.isEmpty
             ? const _EmptyRecentProjects()
-            : _RecentProjectList(recent, onOpen: onOpenRecent),
+            : _RecentProjectList(
+                recent,
+                onOpen: onOpenRecent,
+                onReveal: onRevealRecent,
+                onDelete: onDeleteRecent,
+              ),
       ],
     );
   }
@@ -275,10 +341,17 @@ class _ProjectActionCard extends StatelessWidget {
 }
 
 class _RecentProjectList extends StatelessWidget {
-  const _RecentProjectList(this.projects, {required this.onOpen});
+  const _RecentProjectList(
+    this.projects, {
+    required this.onOpen,
+    required this.onReveal,
+    required this.onDelete,
+  });
 
   final List<Project> projects;
   final ValueChanged<Project> onOpen;
+  final ValueChanged<Project> onReveal;
+  final ValueChanged<Project> onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -293,6 +366,21 @@ class _RecentProjectList extends StatelessWidget {
               subtitle: Text(
                 project.path,
                 style: const TextStyle(color: Color(0xFF9DA6B5)),
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Show in Explorer',
+                    icon: const Icon(Icons.folder_open_outlined),
+                    onPressed: () => onReveal(project),
+                  ),
+                  IconButton(
+                    tooltip: 'Delete project',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => onDelete(project),
+                  ),
+                ],
               ),
               onTap: () => onOpen(project),
             ),

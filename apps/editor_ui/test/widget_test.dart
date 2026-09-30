@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:editor_ui/app/app.dart';
+import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/entities/project/model/recent_projects.dart';
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
 
@@ -64,6 +65,41 @@ void main() {
     expect(find.text(r'C:\Projects\demo_game'), findsOneWidget);
     expect(recent.load().single.path, r'C:\Projects\demo_game');
     expect(titleBarStyles, ['hidden', 'normal']);
+  });
+
+  testWidgets('deletes a recent project only after confirmation', (
+    WidgetTester tester,
+  ) async {
+    final project = Directory('${dir.path}/old_game')..createSync();
+    File('${project.path}/Cargo.toml').createSync();
+    recent.add(Project(project.path));
+    final deleted = <String>[];
+    await tester.pumpWidget(
+      BesfaEditorApp(
+        recentProjects: recent,
+        deleteProject: (path) async {
+          deleted.add(path);
+          return true;
+        },
+      ),
+    );
+
+    final delete = find.byTooltip('Delete project');
+    await tester.ensureVisible(delete);
+    await tester.tap(delete);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(deleted, isEmpty);
+    expect(recent.load(), hasLength(1));
+
+    await tester.tap(delete);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+    expect(deleted, [project.path]);
+    expect(find.text('No recent projects'), findsOneWidget);
+    expect(recent.load(), isEmpty);
   });
 }
 
