@@ -13,6 +13,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     CreateAndAttachConsole();
   }
 
+  // Builds and games the editor starts inherit this job, and the kernel kills
+  // them when the job's last handle closes: when the editor exits, however it
+  // exits. Without it a crashed editor leaves cargo and a window-less game
+  // running. The handle is left open on purpose.
+  // ponytail: everything the editor launches dies with it; allow breakaway
+  // (JOB_OBJECT_LIMIT_BREAKAWAY_OK) once something must outlive the editor.
+  if (HANDLE job = ::CreateJobObjectW(nullptr, nullptr)) {
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    ::SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits,
+                              sizeof(limits));
+    ::AssignProcessToJobObject(job, ::GetCurrentProcess());
+  }
+
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
