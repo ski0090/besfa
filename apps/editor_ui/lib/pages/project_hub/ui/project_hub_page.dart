@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/entities/project/model/recent_projects.dart';
@@ -135,9 +136,23 @@ class _ProjectHubPageState extends State<ProjectHubPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kWindowCaptionHeight),
+        child: WindowCaption(
+          brightness: Theme.of(context).brightness,
+          backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+          title: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _BesfaMark(),
+              SizedBox(width: 8),
+              Text('Besfa', style: TextStyle(fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      ),
       body: Column(
         children: [
-          const _AppHeader(),
           Expanded(
             child: Center(
               child: SingleChildScrollView(
@@ -163,48 +178,19 @@ class _ProjectHubPageState extends State<ProjectHubPage> {
   }
 }
 
-class _AppHeader extends StatelessWidget {
-  const _AppHeader();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 64,
-      padding: const EdgeInsets.symmetric(horizontal: 28),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: .08)),
-        ),
-      ),
-      child: const Row(
-        children: [
-          _BesfaMark(),
-          SizedBox(width: 12),
-          Text(
-            'Besfa',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-          ),
-          Spacer(),
-          Text('Editor Preview', style: TextStyle(color: Color(0xFF9DA6B5))),
-        ],
-      ),
-    );
-  }
-}
-
 class _BesfaMark extends StatelessWidget {
   const _BesfaMark();
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 28,
-      height: 28,
+      width: 18,
+      height: 18,
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.primary,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(5),
       ),
-      child: const Icon(Icons.change_history_rounded, size: 19),
+      child: const Icon(Icons.change_history_rounded, size: 13),
     );
   }
 }

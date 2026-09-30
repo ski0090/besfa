@@ -10,6 +10,9 @@ Future<void> initializeEditorWindow() async {
     size: Size(1280, 800),
     minimumSize: Size(900, 640),
     center: true,
+    // Every page draws its own caption with WindowCaption.
+    titleBarStyle: TitleBarStyle.hidden,
+    windowButtonVisibility: false,
   );
 
   windowManager.waitUntilReadyToShow(windowOptions, () async {

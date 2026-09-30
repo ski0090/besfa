@@ -30,15 +30,9 @@ void main() {
   testWidgets('creates a project and opens it in the editor', (
     WidgetTester tester,
   ) async {
-    final titleBarStyles = <Object?>[];
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       const MethodChannel('window_manager'),
-      (call) async {
-        if (call.method == 'setTitleBarStyle') {
-          titleBarStyles.add((call.arguments as Map)['titleBarStyle']);
-        }
-        return call.method == 'isMaximized' ? false : null;
-      },
+      (call) async => call.method == 'isMaximized' ? false : null,
     );
 
     await tester.pumpWidget(
@@ -64,7 +58,6 @@ void main() {
     expect(find.text('Start creating'), findsOneWidget);
     expect(find.text(r'C:\Projects\demo_game'), findsOneWidget);
     expect(recent.load().single.path, r'C:\Projects\demo_game');
-    expect(titleBarStyles, ['hidden', 'normal']);
   });
 
   testWidgets('deletes a recent project only after confirmation', (

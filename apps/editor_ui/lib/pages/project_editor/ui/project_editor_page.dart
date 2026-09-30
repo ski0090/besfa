@@ -34,19 +34,9 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   bool _starting = false;
 
   @override
-  void initState() {
-    super.initState();
-    windowManager.setTitleBarStyle(
-      TitleBarStyle.hidden,
-      windowButtonVisibility: false,
-    );
-  }
-
-  @override
   void dispose() {
     _game?.stop();
     _viewport?.dispose();
-    windowManager.setTitleBarStyle(TitleBarStyle.normal);
     super.dispose();
   }
 
