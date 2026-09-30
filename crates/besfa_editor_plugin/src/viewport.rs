@@ -22,26 +22,16 @@ const VIEWPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb
 #[derive(Resource, Clone)]
 pub(crate) struct ViewportConfig {
     name: String,
-    size: UVec2,
 }
 
 impl ViewportConfig {
-    /// Reads `BESFA_VIEWPORT` (shared handle name) and `BESFA_VIEWPORT_SIZE`
-    /// (`<width>x<height>`), set by the editor.
+    /// Reads `BESFA_VIEWPORT`, the shared handle name set by the editor. The
+    /// size comes from the texture itself.
     pub(crate) fn from_env() -> Option<Self> {
-        let name = std::env::var("BESFA_VIEWPORT").ok()?;
-        let size = std::env::var("BESFA_VIEWPORT_SIZE").ok()?;
         Some(Self {
-            name,
-            size: parse_size(&size)?,
+            name: std::env::var("BESFA_VIEWPORT").ok()?,
         })
     }
-}
-
-fn parse_size(size: &str) -> Option<UVec2> {
-    let (width, height) = size.split_once('x')?;
-    let size = UVec2::new(width.trim().parse().ok()?, height.trim().parse().ok()?);
-    (size.x > 0 && size.y > 0).then_some(size)
 }
 
 pub(crate) struct ViewportPlugin(pub(crate) ViewportConfig);
@@ -49,46 +39,62 @@ pub(crate) struct ViewportPlugin(pub(crate) ViewportConfig);
 impl Plugin for ViewportPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.0.clone())
-            .add_systems(Startup, open_viewport)
+            // Before the game's Startup systems spawn their cameras.
+            .add_systems(PreStartup, open_viewport)
             .add_observer(retarget_camera);
     }
 }
 
 /// Keeps the wgpu texture alive for as long as the view renders into it.
 #[derive(Resource)]
-struct ViewportTexture(#[expect(dead_code, reason = "held only to keep the texture alive")] wgpu::Texture);
+struct ViewportTexture(
+    #[expect(dead_code, reason = "held only to keep the texture alive")] wgpu::Texture,
+);
 
 fn open_viewport(
     mut commands: Commands,
     config: Res<ViewportConfig>,
     device: Res<RenderDevice>,
     mut views: ResMut<ManualTextureViews>,
+    mut exit: MessageWriter<AppExit>,
 ) {
-    let texture = match shared::open(device.wgpu_device(), &config.name, config.size) {
+    let texture = match shared::open(device.wgpu_device(), &config.name) {
         Ok(texture) => texture,
         Err(error) => {
-            error!("Could not open the editor viewport '{}': {error}", config.name);
+            // Without a window or a viewport the game would run unseen.
+            error!(
+                "Could not open the editor viewport '{}': {error}",
+                config.name
+            );
+            exit.write(AppExit::error());
             return;
         }
     };
 
+    let size = UVec2::new(texture.width(), texture.height());
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     views.insert(
         VIEWPORT_HANDLE,
         ManualTextureView {
             texture_view: view.into(),
-            size: config.size,
+            size,
             view_format: VIEWPORT_FORMAT,
         },
     );
     commands.insert_resource(ViewportTexture(texture));
-    info!("Rendering into the editor viewport {}x{}.", config.size.x, config.size.y);
+    info!("Rendering into the editor viewport {}x{}.", size.x, size.y);
 }
 
 /// Sends cameras that would render to the (absent) primary window into the
-/// viewport. Cameras with any other target are left alone.
-fn retarget_camera(add: On<Add, Camera>, mut targets: Query<&mut RenderTarget>) {
-    if let Ok(mut target) = targets.get_mut(add.entity)
+/// viewport. Cameras with any other target are left alone, and so is every
+/// camera when the viewport could not be opened: a missing view would panic.
+fn retarget_camera(
+    add: On<Add, Camera>,
+    viewport: Option<Res<ViewportTexture>>,
+    mut targets: Query<&mut RenderTarget>,
+) {
+    if viewport.is_some()
+        && let Ok(mut target) = targets.get_mut(add.entity)
         && matches!(*target, RenderTarget::Window(WindowRef::Primary))
     {
         *target = RenderTarget::TextureView(VIEWPORT_HANDLE);
@@ -97,33 +103,26 @@ fn retarget_camera(add: On<Add, Camera>, mut targets: Query<&mut RenderTarget>) 
 
 #[cfg(windows)]
 mod shared {
-    use bevy::math::UVec2;
+    use wgpu::hal::{api::Dx12, dx12};
     use windows::{
         Win32::{
             Foundation::{CloseHandle, GENERIC_ALL},
-            Graphics::Direct3D12::ID3D12Resource,
+            Graphics::{
+                Direct3D12::{D3D12_RESOURCE_DIMENSION_TEXTURE2D, ID3D12Resource},
+                Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            },
         },
         core::HSTRING,
     };
-    use wgpu::hal::{api::Dx12, dx12};
 
     use super::VIEWPORT_FORMAT;
 
-    /// Opens the editor's named shared texture on Bevy's D3D12 device.
-    pub(super) fn open(
-        device: &wgpu::Device,
-        name: &str,
-        size: UVec2,
-    ) -> Result<wgpu::Texture, String> {
-        let extent = wgpu::Extent3d {
-            width: size.x,
-            height: size.y,
-            depth_or_array_layers: 1,
-        };
-
+    /// Opens the editor's named shared texture on Bevy's D3D12 device. Size
+    /// and format are read from the resource, not trusted from the editor.
+    pub(super) fn open(device: &wgpu::Device, name: &str) -> Result<wgpu::Texture, String> {
         // SAFETY: the device is only used to open a resource, and the raw
-        // texture is handed straight to wgpu with a matching description.
-        let hal_texture = unsafe {
+        // texture is handed straight to wgpu with its own description.
+        let (hal_texture, extent) = unsafe {
             let hal = device
                 .as_hal::<Dx12>()
                 .ok_or("the renderer is not using DX12; set WGPU_BACKEND=dx12")?;
@@ -138,17 +137,36 @@ mod shared {
             opened.map_err(|error| format!("OpenSharedHandle failed: {error}"))?;
             let resource = resource.ok_or("OpenSharedHandle returned no resource")?;
 
-            dx12::Device::texture_from_raw(
+            let desc = resource.GetDesc();
+            if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+                || desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+                || desc.DepthOrArraySize != 1
+                || desc.MipLevels != 1
+                || desc.SampleDesc.Count != 1
+            {
+                return Err(format!(
+                    "expected a single-sample BGRA8 sRGB 2D texture, got {:?} {:?}",
+                    desc.Dimension, desc.Format
+                ));
+            }
+            let extent = wgpu::Extent3d {
+                width: u32::try_from(desc.Width).map_err(|_| "the texture is too wide")?,
+                height: desc.Height,
+                depth_or_array_layers: 1,
+            };
+
+            let texture = dx12::Device::texture_from_raw(
                 resource,
                 VIEWPORT_FORMAT,
                 wgpu::TextureDimension::D2,
                 extent,
                 1,
                 1,
-            )
+            );
+            (texture, extent)
         };
 
-        // SAFETY: the description matches the resource created by the editor.
+        // SAFETY: the description matches the resource, checked above.
         Ok(unsafe {
             device.create_texture_from_hal::<Dx12>(
                 hal_texture,
@@ -169,23 +187,7 @@ mod shared {
 
 #[cfg(not(windows))]
 mod shared {
-    use bevy::math::UVec2;
-
-    pub(super) fn open(_: &wgpu::Device, _: &str, _: UVec2) -> Result<wgpu::Texture, String> {
+    pub(super) fn open(_: &wgpu::Device, _: &str) -> Result<wgpu::Texture, String> {
         Err("the editor viewport is only supported on Windows".into())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_viewport_sizes() {
-        assert_eq!(parse_size("1280x720"), Some(UVec2::new(1280, 720)));
-        assert_eq!(parse_size(" 640 x 360 "), Some(UVec2::new(640, 360)));
-        assert_eq!(parse_size("0x720"), None);
-        assert_eq!(parse_size("1280"), None);
-        assert_eq!(parse_size("wide x tall"), None);
     }
 }

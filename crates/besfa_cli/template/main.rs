@@ -1,12 +1,12 @@
 use bevy::prelude::*;
 
-fn main() {
+fn main() -> AppExit {
     App::new()
         // DefaultPlugins that render into the Besfa editor when it runs the game.
         .add_plugins(besfa_editor_plugin::default_plugins())
         .add_systems(Startup, setup)
         .add_systems(Update, spin)
-        .run();
+        .run()
 }
 
 #[derive(Component)]

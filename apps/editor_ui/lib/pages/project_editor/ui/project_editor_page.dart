@@ -65,9 +65,9 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
         environment: viewport == null
             ? null
             : {
-                // Read by besfa_editor_plugin in the game.
+                // Read by besfa_editor_plugin in the game, which takes the
+                // size from the texture itself.
                 'BESFA_VIEWPORT': viewport.sharedName,
-                'BESFA_VIEWPORT_SIZE': '${viewport.width}x${viewport.height}',
                 // The shared texture is opened on D3D12, on the editor's GPU.
                 'WGPU_BACKEND': 'dx12',
                 'WGPU_ADAPTER_NAME': viewport.adapterName,
