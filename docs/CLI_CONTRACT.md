@@ -23,6 +23,11 @@ cargo new --bin <프로젝트 이름>
 - `Cargo.toml`의 `[dependencies]`에 `bevy = "0.19.1"`과 `besfa_editor_plugin`(이 저장소의 git 의존성)을 추가하고, Bevy 권장 `dev` 프로필 최적화 설정을 붙인다.
 - `src/main.rs`를 카메라, 조명, 회전하는 큐브가 있는 씬으로 바꾼다. 원본은 `crates/besfa_cli/template/main.rs`다.
 
+`%LOCALAPPDATA%`가 있으면 모든 게임이 Bevy 빌드를 공유하도록 두 가지를 더 한다.
+
+- `.cargo/config.toml`에 `target-dir = "%LOCALAPPDATA%/Besfa/target"`을 쓴다.
+- `%LOCALAPPDATA%/Besfa/prebuild/Cargo.lock`이 있으면 새 프로젝트로 복사해, 의존성 버전을 미리 빌드된 것과 맞춘다.
+
 생성 시점에는 네트워크를 쓰지 않는다. 의존성은 게임을 처음 빌드할 때 받는다. 모든 단계가 성공한 경우에만 결과물을 최종 루트 디렉터리로 이동한다. `besfa/` 또는 `.besfa/` 데이터 경로와 초기 데이터 파일 생성은 데이터 포맷 계약을 확정한 뒤 추가한다.
 
 초기 구현은 Cargo의 기본 VCS 및 Rust edition 설정을 그대로 따른다. 게임 프로젝트의 VCS 설정 선택은 추후 에디터 UI에서 제공한다.

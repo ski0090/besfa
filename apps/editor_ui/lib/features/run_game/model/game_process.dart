@@ -16,7 +16,13 @@ class GameProcess {
     required void Function(String line) onOutput,
     Map<String, String>? environment,
     String executable = 'cargo',
-    List<String> arguments = const ['run'],
+    // Dynamic linking makes rebuilds after a code change much faster. Only
+    // the editor turns it on, so a plain `cargo build` stays standalone.
+    List<String> arguments = const [
+      'run',
+      '--features',
+      'bevy/dynamic_linking',
+    ],
   }) async {
     final process = await Process.start(
       executable,

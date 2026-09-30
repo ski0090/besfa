@@ -30,6 +30,15 @@ impl CreateError {
 }
 
 pub(crate) fn create_project(directory: &Path) -> Result<PathBuf, CreateError> {
+    create_project_with(directory, shared_dir().as_deref())
+}
+
+/// Machine-wide Besfa data: `%LOCALAPPDATA%\Besfa`.
+fn shared_dir() -> Option<PathBuf> {
+    env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("Besfa"))
+}
+
+fn create_project_with(directory: &Path, shared: Option<&Path>) -> Result<PathBuf, CreateError> {
     let destination = absolute_path(directory)?;
 
     if destination.exists() {
@@ -93,7 +102,7 @@ pub(crate) fn create_project(directory: &Path) -> Result<PathBuf, CreateError> {
         ));
     }
 
-    if let Err(error) = write_bevy_template(&staged_project) {
+    if let Err(error) = write_bevy_template(&staged_project, shared) {
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(error);
     }
@@ -138,7 +147,11 @@ opt-level = 3
 "#;
 
 /// Turns Cargo's hello-world project into a Bevy game with a cube scene.
-fn write_bevy_template(project: &Path) -> Result<(), CreateError> {
+///
+/// With a machine-wide `shared` directory, the game also builds into
+/// `<shared>/target` and starts from `<shared>/prebuild/Cargo.lock`, so every
+/// Besfa game reuses one Bevy build instead of compiling its own.
+fn write_bevy_template(project: &Path, shared: Option<&Path>) -> Result<(), CreateError> {
     let filesystem_error = |message: &str, error: io::Error| {
         CreateError::new(20, "filesystem_error", message).with_diagnostic(error.to_string())
     };
@@ -160,7 +173,37 @@ fn write_bevy_template(project: &Path) -> Result<(), CreateError> {
     )
     .map_err(|error| filesystem_error("Failed to write Cargo.toml.", error))?;
     fs::write(project.join("src").join("main.rs"), TEMPLATE_MAIN)
-        .map_err(|error| filesystem_error("Failed to write src/main.rs.", error))
+        .map_err(|error| filesystem_error("Failed to write src/main.rs.", error))?;
+
+    let Some(shared) = shared else {
+        return Ok(());
+    };
+
+    // Same dependency versions as the prebuild, or Cargo rebuilds everything.
+    let prebuild_lock = shared.join("prebuild").join("Cargo.lock");
+    if prebuild_lock.is_file() {
+        fs::copy(&prebuild_lock, project.join("Cargo.lock"))
+            .map_err(|error| filesystem_error("Failed to copy the prebuild Cargo.lock.", error))?;
+    }
+
+    let cargo_dir = project.join(".cargo");
+    fs::create_dir_all(&cargo_dir)
+        .map_err(|error| filesystem_error("Failed to create .cargo.", error))?;
+    fs::write(
+        cargo_dir.join("config.toml"),
+        cargo_config(&shared.join("target")),
+    )
+    .map_err(|error| filesystem_error("Failed to write .cargo/config.toml.", error))
+}
+
+fn cargo_config(target_dir: &Path) -> String {
+    // Forward slashes need no escaping in a TOML string and work on Windows.
+    let target_dir = target_dir.to_string_lossy().replace('\\', "/");
+    format!(
+        "# Shared by every Besfa game on this machine, so Bevy is compiled once.\n\
+         [build]\n\
+         target-dir = \"{target_dir}\"\n"
+    )
 }
 
 fn absolute_path(path: &Path) -> Result<PathBuf, CreateError> {
@@ -222,8 +265,9 @@ mod tests {
         fs::create_dir(&parent).expect("test parent should be created");
         let destination = parent.join("demo_game");
 
-        let result = create_project(&destination);
+        let result = create_project_with(&destination, None);
         let manifest = fs::read_to_string(destination.join("Cargo.toml"));
+        let has_cargo_config = destination.join(".cargo").exists();
         let main = fs::read_to_string(destination.join("src").join("main.rs"));
         fs::remove_dir_all(&parent).expect("test directory should be removed");
 
@@ -236,6 +280,31 @@ mod tests {
         assert!(manifest.contains("[dependencies]\nbevy = \"0.19.1\""));
         assert!(manifest.contains("besfa_editor_plugin = { git ="));
         assert_eq!(main.expect("main.rs should be created"), TEMPLATE_MAIN);
+        assert!(!has_cargo_config, "no shared directory means no config");
+    }
+
+    #[test]
+    fn shares_the_target_dir_and_prebuild_lock() {
+        let parent = test_directory("shared");
+        let shared = parent.join("Besfa");
+        fs::create_dir_all(shared.join("prebuild")).expect("prebuild dir should be created");
+        fs::write(shared.join("prebuild").join("Cargo.lock"), "# pinned\n")
+            .expect("prebuild lock should be written");
+        let destination = parent.join("demo_game");
+
+        let result = create_project_with(&destination, Some(&shared));
+        let config = fs::read_to_string(destination.join(".cargo").join("config.toml"));
+        let lock = fs::read_to_string(destination.join("Cargo.lock"));
+        fs::remove_dir_all(&parent).expect("test directory should be removed");
+
+        result.expect("project creation should succeed");
+        let target_dir = shared.join("target").to_string_lossy().replace('\\', "/");
+        assert!(
+            config
+                .expect("config.toml should be created")
+                .contains(&format!("target-dir = \"{target_dir}\"")),
+        );
+        assert_eq!(lock.expect("Cargo.lock should be copied"), "# pinned\n");
     }
 
     #[test]
