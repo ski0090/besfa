@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
-/// A `cargo run` of a game project, started by the editor.
+/// A command-line process started by the editor, usually a game's
+/// `cargo run`, with its output reported line by line.
 class GameProcess {
   GameProcess._(this._process);
 

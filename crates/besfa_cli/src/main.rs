@@ -9,7 +9,7 @@ use clap::Parser;
 use crate::{
     cli::{Cli, Commands},
     output::{print_create_error, print_create_success},
-    project_creation::create_project,
+    project_creation::{create_project, prebuild},
 };
 
 fn main() -> ExitCode {
@@ -23,6 +23,13 @@ fn main() -> ExitCode {
             }
             Err(error) => {
                 print_create_error(output, &error);
+                ExitCode::from(error.exit_code)
+            }
+        },
+        Commands::Prebuild => match prebuild() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                print_create_error(None, &error);
                 ExitCode::from(error.exit_code)
             }
         },

@@ -28,6 +28,12 @@ cargo new --bin <프로젝트 이름>
 - `.cargo/config.toml`에 `target-dir = "%LOCALAPPDATA%/Besfa/target"`을 쓴다.
 - `%LOCALAPPDATA%/Besfa/prebuild/Cargo.lock`이 있으면 새 프로젝트로 복사해, 의존성 버전을 미리 빌드된 것과 맞춘다.
 
+```text
+besfa prebuild
+```
+
+`%LOCALAPPDATA%/Besfa/prebuild`를 `besfa new`와 같은 템플릿의 게임 프로젝트로 만들고(`Cargo.toml`, `src/main.rs`, `.cargo/config.toml`이 템플릿과 다를 때만 다시 써서, 바뀐 것이 없으면 다시 컴파일하지 않는다), 그 안에서 `cargo update -p besfa_editor_plugin`으로 플러그인을 최신 git 커밋으로 올린 뒤(에디터의 Run이 package cache 잠금을 기다리지 않도록 재시도 없이 요청당 10초만 기다리고, 실패하면 경고만 남기고 고정된 버전으로 계속한다) `cargo build --features bevy/dynamic_linking`을 실행한다. 공유 target 디렉터리, 의존성, feature, 프로필이 에디터의 Run과 같으므로, 이후 게임의 첫 Run은 게임 코드만 컴파일한다. 빌드가 만든 `Cargo.lock`은 `besfa new`가 새 프로젝트로 복사한다. Cargo 출력은 그대로 표준 출력·오류로 나간다. `LOCALAPPDATA`가 없으면 종료 코드 `20`, Cargo 실행이나 빌드가 실패하면 `30`을 반환한다.
+
 생성 시점에는 네트워크를 쓰지 않는다. 의존성은 게임을 처음 빌드할 때 받는다. 모든 단계가 성공한 경우에만 결과물을 최종 루트 디렉터리로 이동한다. `besfa/` 또는 `.besfa/` 데이터 경로와 초기 데이터 파일 생성은 데이터 포맷 계약을 확정한 뒤 추가한다.
 
 초기 구현은 Cargo의 기본 VCS 및 Rust edition 설정을 그대로 따른다. 게임 프로젝트의 VCS 설정 선택은 추후 에디터 UI에서 제공한다.
@@ -87,4 +93,4 @@ Cargo가 프로젝트 이름 때문에 생성에 실패하면, `besfa`는 Cargo�
 
 ## 구현 상태
 
-`besfa new`는 이 문서의 Cargo 실행, Bevy 시작 코드 적용, JSON 출력, 종료 코드, 대상 디렉터리 정책을 구현한다. `besfa validate`는 아직 구현되지 않았다.
+`besfa new`는 이 문서의 Cargo 실행, Bevy 시작 코드 적용, JSON 출력, 종료 코드, 대상 디렉터리 정책을 구현하고, `besfa prebuild`는 공유 Bevy 빌드를 구현한다. `besfa validate`는 아직 구현되지 않았다.

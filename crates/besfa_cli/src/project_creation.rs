@@ -33,6 +33,87 @@ pub(crate) fn create_project(directory: &Path) -> Result<PathBuf, CreateError> {
     create_project_with(directory, shared_dir().as_deref())
 }
 
+/// Builds Bevy into the shared target directory the way the editor's Run
+/// does, so the first run of each game only compiles the game itself.
+pub(crate) fn prebuild() -> Result<(), CreateError> {
+    let shared = shared_dir()
+        .ok_or_else(|| CreateError::new(20, "filesystem_error", "LOCALAPPDATA is not set."))?;
+    let project = shared.join("prebuild");
+    write_prebuild_project(&project, &shared)?;
+
+    // New games copy this lock, so this keeps them on the latest editor
+    // plugin. Offline, the pinned version still builds. Cargo holds the
+    // package cache lock while it fetches, which would stall a Run in the
+    // editor, so a bad network is given up on quickly instead of retried.
+    let updated = Command::new("cargo")
+        .args(["update", "-p", "besfa_editor_plugin"])
+        .args(["--config", "net.retry=0", "--config", "http.timeout=10"])
+        .current_dir(&project)
+        .status();
+    if !updated.is_ok_and(|status| status.success()) {
+        eprintln!("Could not update besfa_editor_plugin, building the pinned version.");
+    }
+
+    // Same features as the editor's Run, or the build is not reused.
+    let status = Command::new("cargo")
+        .args(["build", "--features", "bevy/dynamic_linking"])
+        .current_dir(&project)
+        .status()
+        .map_err(cargo_start_error)?;
+    if !status.success() {
+        return Err(CreateError::new(
+            30,
+            "prebuild_failed",
+            "Cargo failed to build the prebuild project.",
+        ));
+    }
+    Ok(())
+}
+
+/// Cargo's manifest header for the prebuild game; the template dependencies
+/// follow it, as in a new game.
+const PREBUILD_MANIFEST: &str = "[package]\n\
+                                 name = \"prebuild\"\n\
+                                 version = \"0.1.0\"\n\
+                                 edition = \"2024\"\n\
+                                 \n\
+                                 [dependencies]";
+
+/// A game made of the template files, so it pulls in exactly the
+/// dependencies, features and profile a new game does. Files are rewritten
+/// only when the template changed, so an unchanged prebuild is not recompiled.
+fn write_prebuild_project(project: &Path, shared: &Path) -> Result<(), CreateError> {
+    let manifest = format!("{PREBUILD_MANIFEST}\n{TEMPLATE_DEPENDENCIES}");
+    write_if_changed(&project.join("Cargo.toml"), &manifest)?;
+    write_if_changed(&project.join("src").join("main.rs"), TEMPLATE_MAIN)?;
+    write_if_changed(
+        &project.join(".cargo").join("config.toml"),
+        &cargo_config(&shared.join("target")),
+    )
+}
+
+fn write_if_changed(path: &Path, contents: &str) -> Result<(), CreateError> {
+    if fs::read_to_string(path).is_ok_and(|current| current == contents) {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            filesystem_error(format!("Failed to create {}.", parent.display()), error)
+        })?;
+    }
+    fs::write(path, contents)
+        .map_err(|error| filesystem_error(format!("Failed to write {}.", path.display()), error))
+}
+
+fn filesystem_error(message: impl Into<String>, error: io::Error) -> CreateError {
+    CreateError::new(20, "filesystem_error", message).with_diagnostic(error.to_string())
+}
+
+fn cargo_start_error(error: io::Error) -> CreateError {
+    CreateError::new(30, "cargo_execution_failed", "Failed to start Cargo.")
+        .with_diagnostic(error.to_string())
+}
+
 /// Machine-wide Besfa data: `%LOCALAPPDATA%\Besfa`.
 fn shared_dir() -> Option<PathBuf> {
     env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("Besfa"))
@@ -74,14 +155,7 @@ fn create_project_with(directory: &Path, shared: Option<&Path>) -> Result<PathBu
         .arg("--bin")
         .arg(&staged_project)
         .output()
-        .map_err(|error| {
-            CreateError::new(
-                30,
-                "cargo_execution_failed",
-                "Failed to start Cargo while creating the project.",
-            )
-            .with_diagnostic(error.to_string())
-        })?;
+        .map_err(cargo_start_error)?;
 
     if !cargo_output.status.success() {
         let _ = fs::remove_dir_all(&staging_dir);
@@ -152,10 +226,6 @@ opt-level = 3
 /// `<shared>/target` and starts from `<shared>/prebuild/Cargo.lock`, so every
 /// Besfa game reuses one Bevy build instead of compiling its own.
 fn write_bevy_template(project: &Path, shared: Option<&Path>) -> Result<(), CreateError> {
-    let filesystem_error = |message: &str, error: io::Error| {
-        CreateError::new(20, "filesystem_error", message).with_diagnostic(error.to_string())
-    };
-
     let manifest_path = project.join("Cargo.toml");
     let manifest = fs::read_to_string(&manifest_path)
         .map_err(|error| filesystem_error("Failed to read the generated Cargo.toml.", error))?;
@@ -305,6 +375,47 @@ mod tests {
                 .contains(&format!("target-dir = \"{target_dir}\"")),
         );
         assert_eq!(lock.expect("Cargo.lock should be copied"), "# pinned\n");
+    }
+
+    #[test]
+    fn prebuild_project_is_the_template_and_is_written_once() {
+        let shared = test_directory("prebuild");
+        let project = shared.join("prebuild");
+        let files = ["Cargo.toml", "src/main.rs", ".cargo/config.toml"];
+        // Left behind by an older template; the lock must survive the rewrite.
+        fs::create_dir_all(project.join("src")).expect("prebuild dir should be created");
+        fs::write(project.join("Cargo.toml"), "[package]\n").expect("manifest should be written");
+        fs::write(project.join("src/main.rs"), "fn main() {}\n").expect("main should be written");
+        fs::write(project.join("Cargo.lock"), "# pinned\n").expect("lock should be written");
+        let modified = || {
+            files.map(|file| {
+                fs::metadata(project.join(file))
+                    .and_then(|meta| meta.modified())
+                    .ok()
+            })
+        };
+
+        let first = write_prebuild_project(&project, &shared);
+        let written = modified();
+        let second = write_prebuild_project(&project, &shared);
+        let rewritten = modified();
+        let [manifest, main, config] = files.map(|file| fs::read_to_string(project.join(file)));
+        let lock = fs::read_to_string(project.join("Cargo.lock"));
+        fs::remove_dir_all(&shared).expect("test directory should be removed");
+
+        first.expect("the prebuild project should be written");
+        second.expect("an up-to-date prebuild project should be accepted");
+        assert_eq!(
+            manifest.expect("Cargo.toml should exist"),
+            format!("{PREBUILD_MANIFEST}\n{TEMPLATE_DEPENDENCIES}")
+        );
+        assert_eq!(main.expect("main.rs should exist"), TEMPLATE_MAIN);
+        assert_eq!(
+            config.expect("config.toml should exist"),
+            cargo_config(&shared.join("target"))
+        );
+        assert_eq!(lock.expect("Cargo.lock should be kept"), "# pinned\n");
+        assert_eq!(written, rewritten, "an up-to-date prebuild is left alone");
     }
 
     #[test]

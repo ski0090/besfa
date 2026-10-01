@@ -26,6 +26,8 @@ pub(crate) enum Commands {
         #[arg(long, value_enum)]
         output: Option<OutputFormat>,
     },
+    /// Build Bevy into the shared target directory, so games start fast.
+    Prebuild,
     /// Validate a Besfa project directory.
     Validate {
         /// Project directory to validate.
@@ -55,5 +57,12 @@ mod tests {
             }
             _ => panic!("expected the new command"),
         }
+    }
+
+    #[test]
+    fn parses_prebuild() {
+        let cli = Cli::try_parse_from(["besfa", "prebuild"]).expect("prebuild should parse");
+
+        assert!(matches!(cli.command, Commands::Prebuild));
     }
 }
