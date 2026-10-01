@@ -17,9 +17,12 @@ class BevyPrebuildStatusView extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           switch (status.phase) {
-            BevyPrebuildPhase.running => const SizedBox.square(
+            BevyPrebuildPhase.running => SizedBox.square(
               dimension: 12,
-              child: CircularProgressIndicator(strokeWidth: 1.5),
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                value: status.progress,
+              ),
             ),
             BevyPrebuildPhase.ready => Icon(
               Icons.check_circle_outline,
@@ -35,7 +38,14 @@ class BevyPrebuildStatusView extends StatelessWidget {
           const SizedBox(width: 8),
           Flexible(
             child: Text(
-              status.message,
+              switch (status) {
+                BevyPrebuildStatus(
+                  phase: BevyPrebuildPhase.running,
+                  :final progress?,
+                ) =>
+                  '${(progress * 100).floor()}% · ${status.message}',
+                _ => status.message,
+              },
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 12, color: Color(0xFF7E8795)),
