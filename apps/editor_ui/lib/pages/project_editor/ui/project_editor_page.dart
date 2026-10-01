@@ -5,13 +5,18 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'package:editor_ui/entities/project/model/project.dart';
-import 'package:editor_ui/features/run_game/model/game_process.dart';
+import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
+import 'package:editor_ui/features/prebuild_bevy/ui/bevy_prebuild_status_view.dart';
 import 'package:editor_ui/shared/native/viewport_texture.dart';
+import 'package:editor_ui/shared/process/cli_process.dart';
 
 class ProjectEditorPage extends StatefulWidget {
-  const ProjectEditorPage({super.key, required this.project});
+  const ProjectEditorPage({super.key, required this.project, this.prebuild});
 
   final Project project;
+
+  /// Shown in the toolbar; Run is disabled while it is running.
+  final BevyPrebuild? prebuild;
 
   @override
   State<ProjectEditorPage> createState() => _ProjectEditorPageState();
@@ -29,16 +34,30 @@ const _viewportHeight = 720;
 
 class _ProjectEditorPageState extends State<ProjectEditorPage> {
   final _logs = <String>[];
-  GameProcess? _game;
+  CliProcess? _game;
   ViewportTexture? _viewport;
   bool _starting = false;
 
   @override
+  void initState() {
+    super.initState();
+    widget.prebuild?.addListener(_onPrebuildChanged);
+  }
+
+  @override
   void dispose() {
+    widget.prebuild?.removeListener(_onPrebuildChanged);
     _game?.stop();
     _viewport?.dispose();
     super.dispose();
   }
+
+  void _onPrebuildChanged() => setState(() {});
+
+  /// The prebuild holds the shared build directory, so a Run now would only
+  /// wait for it.
+  bool get _prebuilding =>
+      widget.prebuild?.value.phase == BevyPrebuildPhase.running;
 
   void _log(String line) {
     if (!mounted) {
@@ -59,8 +78,12 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     });
     try {
       final viewport = await _ensureViewport();
-      final game = await GameProcess.start(
+      final game = await CliProcess.start(
         widget.project.path,
+        executable: 'cargo',
+        // Dynamic linking makes rebuilds after a code change much faster. Only
+        // the editor turns it on, so a plain `cargo build` stays standalone.
+        arguments: const ['run', '--features', 'bevy/dynamic_linking'],
         onOutput: _log,
         environment: viewport == null
             ? null
@@ -171,9 +194,10 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
         children: [
           _RunToolbar(
             running: _game != null,
-            busy: _starting && _game == null,
+            busy: (_starting && _game == null) || _prebuilding,
             onRun: _run,
             onStop: () => _game?.stop(),
+            prebuild: widget.prebuild,
           ),
           Expanded(
             child: Center(
@@ -201,12 +225,14 @@ class _RunToolbar extends StatelessWidget {
     required this.busy,
     required this.onRun,
     required this.onStop,
+    this.prebuild,
   });
 
   final bool running;
   final bool busy;
   final VoidCallback onRun;
   final VoidCallback onStop;
+  final BevyPrebuild? prebuild;
 
   @override
   Widget build(BuildContext context) {
@@ -231,6 +257,13 @@ class _RunToolbar extends StatelessWidget {
                   icon: const Icon(Icons.play_arrow, size: 18),
                   label: const Text('Run'),
                 ),
+          if (prebuild case final prebuild?)
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: BevyPrebuildStatusView(prebuild),
+              ),
+            ),
         ],
       ),
     );

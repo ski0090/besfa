@@ -8,6 +8,8 @@ import 'package:editor_ui/app/app.dart';
 import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/entities/project/model/recent_projects.dart';
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
+import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
+import 'package:editor_ui/pages/project_editor/ui/project_editor_page.dart';
 
 void main() {
   late Directory dir;
@@ -58,6 +60,31 @@ void main() {
     expect(find.text('Start creating'), findsOneWidget);
     expect(find.text(r'C:\Projects\demo_game'), findsOneWidget);
     expect(recent.load().single.path, r'C:\Projects\demo_game');
+  });
+
+  testWidgets('Run waits for the Bevy prebuild', (WidgetTester tester) async {
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('window_manager'),
+      (call) async => call.method == 'isMaximized' ? false : null,
+    );
+    final prebuild = BevyPrebuild();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectEditorPage(project: Project(dir.path), prebuild: prebuild),
+      ),
+    );
+    final run = find.widgetWithText(TextButton, 'Run');
+
+    expect(tester.widget<TextButton>(run).enabled, isFalse);
+    expect(find.text('Preparing Bevy…'), findsOneWidget);
+
+    prebuild.value = const BevyPrebuildStatus(
+      BevyPrebuildPhase.ready,
+      'Bevy is ready',
+    );
+    await tester.pump();
+    expect(tester.widget<TextButton>(run).enabled, isTrue);
+    expect(find.text('Bevy is ready'), findsOneWidget);
   });
 
   testWidgets('deletes a recent project only after confirmation', (

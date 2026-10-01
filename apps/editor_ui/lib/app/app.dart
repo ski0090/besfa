@@ -4,6 +4,7 @@ import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/entities/project/model/recent_projects.dart';
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
 import 'package:editor_ui/features/delete_project/model/project_deleter.dart';
+import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
 import 'package:editor_ui/pages/project_editor/ui/project_editor_page.dart';
 import 'package:editor_ui/pages/project_hub/ui/project_hub_page.dart';
 
@@ -13,11 +14,15 @@ class BesfaEditorApp extends StatelessWidget {
     this.projectCreator = const BesfaCliProjectCreator(),
     required this.recentProjects,
     this.deleteProject = moveToRecycleBin,
+    this.prebuild,
   });
 
   final ProjectCreator projectCreator;
   final RecentProjects recentProjects;
   final Future<bool> Function(String directory) deleteProject;
+
+  /// Progress of the background Bevy prebuild, shown on every page.
+  final BevyPrebuild? prebuild;
 
   @override
   Widget build(BuildContext context) {
@@ -46,6 +51,7 @@ class BesfaEditorApp extends StatelessWidget {
         projectCreator: projectCreator,
         recentProjects: recentProjects,
         deleteProject: deleteProject,
+        prebuild: prebuild,
       ),
       onGenerateRoute: (settings) => switch (settings) {
         RouteSettings(
@@ -54,7 +60,8 @@ class BesfaEditorApp extends StatelessWidget {
         ) =>
           MaterialPageRoute<void>(
             settings: settings,
-            builder: (_) => ProjectEditorPage(project: arguments),
+            builder: (_) =>
+                ProjectEditorPage(project: arguments, prebuild: prebuild),
           ),
         _ => null,
       },

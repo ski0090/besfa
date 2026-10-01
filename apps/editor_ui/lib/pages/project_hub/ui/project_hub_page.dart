@@ -10,6 +10,8 @@ import 'package:editor_ui/features/create_project/model/project_creator.dart';
 import 'package:editor_ui/features/create_project/ui/create_project_dialog.dart';
 import 'package:editor_ui/features/delete_project/model/project_deleter.dart';
 import 'package:editor_ui/features/open_project/model/project_loader.dart';
+import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
+import 'package:editor_ui/features/prebuild_bevy/ui/bevy_prebuild_status_view.dart';
 
 class ProjectHubPage extends StatefulWidget {
   const ProjectHubPage({
@@ -17,11 +19,13 @@ class ProjectHubPage extends StatefulWidget {
     this.projectCreator = const BesfaCliProjectCreator(),
     required this.recentProjects,
     this.deleteProject = moveToRecycleBin,
+    this.prebuild,
   });
 
   final ProjectCreator projectCreator;
   final RecentProjects recentProjects;
   final Future<bool> Function(String directory) deleteProject;
+  final BevyPrebuild? prebuild;
 
   /// Route registered by the app that shows the editor for a [Project].
   static const editorRoute = '/editor';
@@ -171,7 +175,7 @@ class _ProjectHubPageState extends State<ProjectHubPage> {
               ),
             ),
           ),
-          const _Footer(),
+          _Footer(prebuild: widget.prebuild),
         ],
       ),
     );
@@ -405,7 +409,9 @@ class _EmptyRecentProjects extends StatelessWidget {
 }
 
 class _Footer extends StatelessWidget {
-  const _Footer();
+  const _Footer({this.prebuild});
+
+  final BevyPrebuild? prebuild;
 
   @override
   Widget build(BuildContext context) {
@@ -417,7 +423,12 @@ class _Footer extends StatelessWidget {
             'Besfa Editor',
             style: TextStyle(color: Color(0xFF7E8795)),
           ),
-          const Spacer(),
+          const SizedBox(width: 24),
+          if (prebuild case final prebuild?)
+            Expanded(child: BevyPrebuildStatusView(prebuild))
+          else
+            const Spacer(),
+          const SizedBox(width: 24),
           Text(
             '0.1.0-dev',
             style: Theme.of(
