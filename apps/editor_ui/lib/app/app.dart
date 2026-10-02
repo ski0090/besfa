@@ -15,6 +15,7 @@ class BesfaEditorApp extends StatelessWidget {
     required this.recentProjects,
     this.deleteProject = moveToRecycleBin,
     this.prebuild,
+    this.startGame = startCargoRun,
   });
 
   final ProjectCreator projectCreator;
@@ -23,6 +24,8 @@ class BesfaEditorApp extends StatelessWidget {
 
   /// Progress of the background Bevy prebuild, shown on every page.
   final BevyPrebuild? prebuild;
+
+  final StartGame startGame;
 
   @override
   Widget build(BuildContext context) {
@@ -60,8 +63,11 @@ class BesfaEditorApp extends StatelessWidget {
         ) =>
           MaterialPageRoute<void>(
             settings: settings,
-            builder: (_) =>
-                ProjectEditorPage(project: arguments, prebuild: prebuild),
+            builder: (_) => ProjectEditorPage(
+              project: arguments,
+              prebuild: prebuild,
+              startGame: startGame,
+            ),
           ),
         _ => null,
       },

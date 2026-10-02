@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import 'package:editor_ui/entities/project/model/recent_projects.dart';
 import 'package:editor_ui/features/create_project/model/project_creator.dart';
 import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
 import 'package:editor_ui/pages/project_editor/ui/project_editor_page.dart';
+import 'package:editor_ui/shared/process/cli_process.dart';
 
 void main() {
   late Directory dir;
@@ -32,15 +34,14 @@ void main() {
   testWidgets('creates a project and opens it in the editor', (
     WidgetTester tester,
   ) async {
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-      const MethodChannel('window_manager'),
-      (call) async => call.method == 'isMaximized' ? false : null,
-    );
+    _mockEditorChannels(tester);
 
     await tester.pumpWidget(
       BesfaEditorApp(
         projectCreator: _FakeProjectCreator(),
         recentProjects: recent,
+        startGame: (_, {required environment, required onOutput}) =>
+            Completer<CliProcess>().future,
       ),
     );
 
@@ -62,28 +63,36 @@ void main() {
     expect(recent.load().single.path, r'C:\Projects\demo_game');
   });
 
-  testWidgets('Run waits for the Bevy prebuild', (WidgetTester tester) async {
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-      const MethodChannel('window_manager'),
-      (call) async => call.method == 'isMaximized' ? false : null,
-    );
+  testWidgets('the edit session waits for the Bevy prebuild', (
+    WidgetTester tester,
+  ) async {
+    _mockEditorChannels(tester);
     final prebuild = BevyPrebuild();
+    final launches = <Map<String, String>>[];
     await tester.pumpWidget(
       MaterialApp(
-        home: ProjectEditorPage(project: Project(dir.path), prebuild: prebuild),
+        home: ProjectEditorPage(
+          project: Project(dir.path),
+          prebuild: prebuild,
+          startGame: (_, {required environment, required onOutput}) {
+            launches.add(environment);
+            return Completer<CliProcess>().future;
+          },
+        ),
       ),
     );
-    final run = find.widgetWithText(TextButton, 'Run');
+    final play = find.widgetWithText(TextButton, 'Play');
 
-    expect(tester.widget<TextButton>(run).enabled, isFalse);
+    expect(tester.widget<TextButton>(play).enabled, isFalse);
     expect(find.text('Preparing Bevy…'), findsOneWidget);
+    expect(launches, isEmpty);
 
     prebuild.value = const BevyPrebuildStatus(
       BevyPrebuildPhase.ready,
       'Bevy is ready',
     );
     await tester.pump();
-    expect(tester.widget<TextButton>(run).enabled, isTrue);
+    expect(launches.single['BESFA_EDIT_MODE'], '1');
     expect(find.text('Bevy is ready'), findsOneWidget);
   });
 
@@ -121,6 +130,18 @@ void main() {
     expect(find.text('No recent projects'), findsOneWidget);
     expect(recent.load(), isEmpty);
   });
+}
+
+void _mockEditorChannels(WidgetTester tester) {
+  final messenger = tester.binding.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(
+    const MethodChannel('window_manager'),
+    (call) async => call.method == 'isMaximized' ? false : null,
+  );
+  messenger.setMockMethodCallHandler(
+    const MethodChannel('besfa/viewport'),
+    (call) async => throw PlatformException(code: 'unavailable'),
+  );
 }
 
 class _FakeProjectCreator implements ProjectCreator {

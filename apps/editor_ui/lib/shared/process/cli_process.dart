@@ -28,6 +28,8 @@ class CliProcess {
       // The log panel shows plain text, not ANSI colors.
       environment: {'NO_COLOR': '1', ...?environment},
     );
+    // Lines sent after the process exited fail on the closed pipe; drop them.
+    process.stdin.done.ignore();
     final drained = [
       for (final stream in [process.stdout, process.stderr])
         stream
@@ -44,6 +46,10 @@ class CliProcess {
       Future.wait(drained).then((_) => process.exitCode),
     );
   }
+
+  /// Writes [line] to the process's stdin. A child that inherits it, like
+  /// the game under `cargo run`, reads it once it starts.
+  void send(String line) => _process.stdin.writeln(line);
 
   /// Stops the process and everything it launched.
   Future<void> stop() async {

@@ -2,7 +2,8 @@
 //!
 //! Games use [`default_plugins`] in place of `DefaultPlugins`. Run on its own,
 //! the game behaves exactly like `DefaultPlugins`. Launched by the editor, it
-//! renders into the editor's viewport instead of opening a window.
+//! renders into the editor's viewport instead of opening a window, and starts
+//! paused in edit mode until the editor says play.
 
 use std::time::Duration;
 
@@ -13,12 +14,16 @@ use bevy::{
     winit::WinitPlugin,
 };
 
+mod edit_mode;
 mod viewport;
 
-/// `DefaultPlugins`, adjusted to render into the editor viewport when the
-/// editor launched the game.
+/// `DefaultPlugins`, adjusted to start in edit mode and render into the
+/// editor viewport when the editor launched the game.
 pub fn default_plugins() -> PluginGroupBuilder {
-    let plugins = DefaultPlugins.build();
+    let mut plugins = DefaultPlugins.build();
+    if edit_mode::requested() {
+        plugins = plugins.add(edit_mode::EditModePlugin);
+    }
     let Some(config) = viewport::ViewportConfig::from_env() else {
         return plugins;
     };

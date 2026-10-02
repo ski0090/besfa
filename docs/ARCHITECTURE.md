@@ -38,6 +38,8 @@ sequenceDiagram
     Bridge-->>UI: Editor state update
 ```
 
+아직 `besfa_protocol`은 없다. 지금은 에디터가 게임의 stdin에 한 줄 명령을 쓰는 것이 유일한 채널이고, 명령은 편집 상태에서 실행 상태로 넘기는 `play` 하나다. 실행 상태를 끝낼 때는 프로세스를 종료하고 편집 상태로 다시 실행한다.
+
 ## 뷰포트 표시
 
 Windows에서는 `besfa_viewport_windows`가 Bevy의 렌더 타깃을 공유 가능한 D3D 텍스처로 노출한다. Flutter Windows 네이티브 플러그인은 이를 외부 텍스처로 등록하고, Dart는 텍스처 ID를 통해 표시한다.

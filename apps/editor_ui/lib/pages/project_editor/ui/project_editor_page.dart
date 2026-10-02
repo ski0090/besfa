@@ -10,13 +10,42 @@ import 'package:editor_ui/features/prebuild_bevy/ui/bevy_prebuild_status_view.da
 import 'package:editor_ui/shared/native/viewport_texture.dart';
 import 'package:editor_ui/shared/process/cli_process.dart';
 
+/// Starts the game process in [directory]; tests replace it.
+typedef StartGame =
+    Future<CliProcess> Function(
+      String directory, {
+      required Map<String, String> environment,
+      required void Function(String line) onOutput,
+    });
+
+Future<CliProcess> startCargoRun(
+  String directory, {
+  required Map<String, String> environment,
+  required void Function(String line) onOutput,
+}) => CliProcess.start(
+  directory,
+  executable: 'cargo',
+  // Dynamic linking makes rebuilds after a code change much faster. Only
+  // the editor turns it on, so a plain `cargo build` stays standalone.
+  arguments: const ['run', '--features', 'bevy/dynamic_linking'],
+  environment: environment,
+  onOutput: onOutput,
+);
+
 class ProjectEditorPage extends StatefulWidget {
-  const ProjectEditorPage({super.key, required this.project, this.prebuild});
+  const ProjectEditorPage({
+    super.key,
+    required this.project,
+    this.prebuild,
+    this.startGame = startCargoRun,
+  });
 
   final Project project;
 
-  /// Shown in the toolbar; Run is disabled while it is running.
+  /// Shown in the toolbar; the edit session and Play wait for it.
   final BevyPrebuild? prebuild;
+
+  final StartGame startGame;
 
   @override
   State<ProjectEditorPage> createState() => _ProjectEditorPageState();
@@ -32,16 +61,29 @@ const _maxLogLines = 2000;
 const _viewportWidth = 1280;
 const _viewportHeight = 720;
 
+/// The game runs in one of two states: paused in edit mode, where the
+/// viewport shows the scene as Startup built it, or playing. Stop ends play by
+/// relaunching the game in edit mode, which resets the scene and picks up code
+/// changes.
 class _ProjectEditorPageState extends State<ProjectEditorPage> {
   final _logs = <String>[];
   CliProcess? _game;
   ViewportTexture? _viewport;
+
+  /// Waiting for a game process: launching one, or stopping play.
   bool _starting = false;
+
+  /// The game was told to play; otherwise it sits paused in edit mode.
+  bool _playing = false;
 
   @override
   void initState() {
     super.initState();
-    widget.prebuild?.addListener(_onPrebuildChanged);
+    if (_prebuilding) {
+      widget.prebuild!.addListener(_onPrebuildChanged);
+    } else {
+      _launch();
+    }
   }
 
   @override
@@ -52,10 +94,17 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     super.dispose();
   }
 
-  void _onPrebuildChanged() => setState(() {});
+  void _onPrebuildChanged() {
+    if (_prebuilding) {
+      setState(() {});
+      return;
+    }
+    widget.prebuild!.removeListener(_onPrebuildChanged);
+    _launch();
+  }
 
-  /// The prebuild holds the shared build directory, so a Run now would only
-  /// wait for it.
+  /// The prebuild holds the shared build directory, so a game started now
+  /// would only wait for it.
   bool get _prebuilding =>
       widget.prebuild?.value.phase == BevyPrebuildPhase.running;
 
@@ -71,47 +120,78 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     });
   }
 
-  Future<void> _run() async {
-    setState(() {
-      _logs.clear();
-      _starting = true;
-    });
+  /// Starts the game paused in edit mode, or already playing with [play].
+  Future<void> _launch({bool play = false}) async {
+    setState(() => _starting = true);
+    final CliProcess game;
     try {
       final viewport = await _ensureViewport();
-      final game = await CliProcess.start(
+      game = await widget.startGame(
         widget.project.path,
-        executable: 'cargo',
-        // Dynamic linking makes rebuilds after a code change much faster. Only
-        // the editor turns it on, so a plain `cargo build` stays standalone.
-        arguments: const ['run', '--features', 'bevy/dynamic_linking'],
         onOutput: _log,
-        environment: viewport == null
-            ? null
-            : {
-                // Read by besfa_editor_plugin in the game, which takes the
-                // size from the texture itself.
-                'BESFA_VIEWPORT': viewport.sharedName,
-                // The shared texture is opened on D3D12, on the editor's GPU.
-                'WGPU_BACKEND': 'dx12',
-                'WGPU_ADAPTER_NAME': viewport.adapterName,
-              },
+        environment: {
+          // Read by besfa_editor_plugin: start paused, play on `play`.
+          'BESFA_EDIT_MODE': '1',
+          if (viewport != null) ...{
+            // The plugin takes the size from the texture itself.
+            'BESFA_VIEWPORT': viewport.sharedName,
+            // The shared texture is opened on D3D12, on the editor's GPU.
+            'WGPU_BACKEND': 'dx12',
+            'WGPU_ADAPTER_NAME': viewport.adapterName,
+          },
+        },
       );
-      if (!mounted) {
-        await game.stop();
-        return;
-      }
-      setState(() => _game = game);
-      final code = await game.exitCode;
-      _log('Process exited with code $code.');
-      if (mounted) {
-        setState(() => _game = null);
-      }
     } on ProcessException catch (error) {
       _log('Could not start cargo: ${error.message}');
+      return;
     } finally {
       if (mounted) {
         setState(() => _starting = false);
       }
+    }
+    if (!mounted) {
+      await game.stop();
+      return;
+    }
+    if (play) {
+      game.send('play');
+    }
+    setState(() {
+      _game = game;
+      _playing = play;
+    });
+    final code = await game.exitCode;
+    _log('Process exited with code $code.');
+    // Stop may already have replaced it with a new edit session.
+    if (mounted && _game == game) {
+      setState(() {
+        _game = null;
+        _playing = false;
+      });
+    }
+  }
+
+  /// Sent while cargo still builds, `play` waits in the pipe for the game.
+  void _play() {
+    setState(() => _logs.clear());
+    final game = _game;
+    if (game == null) {
+      // The edit session is gone, e.g. it failed to build or crashed.
+      _launch(play: true);
+      return;
+    }
+    game.send('play');
+    setState(() => _playing = true);
+  }
+
+  Future<void> _stop() async {
+    final game = _game!;
+    setState(() => _starting = true);
+    await game.stop();
+    // The running game locks its executable against the next build.
+    await game.exitCode;
+    if (mounted) {
+      _launch();
     }
   }
 
@@ -193,10 +273,10 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
       body: Column(
         children: [
           _RunToolbar(
-            running: _game != null,
-            busy: (_starting && _game == null) || _prebuilding,
-            onRun: _run,
-            onStop: () => _game?.stop(),
+            playing: _playing,
+            busy: _starting || _prebuilding,
+            onPlay: _play,
+            onStop: _stop,
             prebuild: widget.prebuild,
           ),
           Expanded(
@@ -221,16 +301,16 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
 
 class _RunToolbar extends StatelessWidget {
   const _RunToolbar({
-    required this.running,
+    required this.playing,
     required this.busy,
-    required this.onRun,
+    required this.onPlay,
     required this.onStop,
     this.prebuild,
   });
 
-  final bool running;
+  final bool playing;
   final bool busy;
-  final VoidCallback onRun;
+  final VoidCallback onPlay;
   final VoidCallback onStop;
   final BevyPrebuild? prebuild;
 
@@ -246,16 +326,16 @@ class _RunToolbar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          running
+          playing
               ? TextButton.icon(
-                  onPressed: onStop,
+                  onPressed: busy ? null : onStop,
                   icon: const Icon(Icons.stop, size: 18),
                   label: const Text('Stop'),
                 )
               : TextButton.icon(
-                  onPressed: busy ? null : onRun,
+                  onPressed: busy ? null : onPlay,
                   icon: const Icon(Icons.play_arrow, size: 18),
-                  label: const Text('Run'),
+                  label: const Text('Play'),
                 ),
           if (prebuild case final prebuild?)
             Expanded(
