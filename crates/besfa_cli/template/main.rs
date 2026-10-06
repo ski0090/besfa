@@ -9,7 +9,9 @@ fn main() -> AppExit {
         .run()
 }
 
-#[derive(Component)]
+// Reflect lets the Besfa editor show the component on the cube.
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 struct Spin;
 
 fn setup(

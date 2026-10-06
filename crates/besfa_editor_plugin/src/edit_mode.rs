@@ -1,16 +1,18 @@
-//! Holds the game still until the editor says play.
+//! Holds the game still until the editor says play, and takes the editor's
+//! other commands.
 //!
 //! The editor sets `BESFA_EDIT_MODE` and the game starts with virtual time
 //! paused: Startup systems build the scene, `Update` sees no time pass and
-//! `FixedUpdate` does not run. The line `play` on stdin unpauses it once. The
-//! editor ends a play session by killing the process, which resets the scene.
+//! `FixedUpdate` does not run. The editor writes one command per line to
+//! stdin: `play` unpauses once, `select <id>` picks the entity that `inspect`
+//! reports and `select` alone clears it. The editor ends a play session by
+//! killing the process, which resets the scene.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Mutex, PoisonError, mpsc};
 
 use bevy::prelude::*;
+
+use crate::inspect::Selected;
 
 pub(crate) fn requested() -> bool {
     std::env::var_os("BESFA_EDIT_MODE").is_some()
@@ -21,27 +23,28 @@ pub(crate) fn requested() -> bool {
 // starts to matter.
 pub(crate) struct EditModePlugin;
 
-/// Set by the stdin reader when the editor sends `play`.
+/// Lines the editor wrote to stdin, one command each.
 #[derive(Resource)]
-struct PlayRequested(Arc<AtomicBool>);
+pub(crate) struct EditorCommands(pub(crate) Mutex<mpsc::Receiver<String>>);
 
 impl Plugin for EditModePlugin {
     fn build(&self, app: &mut App) {
-        let requested = Arc::new(AtomicBool::new(false));
-        let reader = requested.clone();
-        // ponytail: stdin is the editor's only channel into the game; move to
-        // besfa_protocol IPC once the editor sends more than `play`.
+        let (sender, receiver) = mpsc::channel();
+        // ponytail: the editor talks over the game's stdin and stdout (see
+        // `inspect` for the replies). A besfa_protocol crate can take over
+        // once the editor and the game need shared message types.
         std::thread::spawn(move || {
             for line in std::io::stdin().lines().map_while(Result::ok) {
-                if line.trim() == "play" {
-                    reader.store(true, Ordering::Relaxed);
+                if sender.send(line).is_err() {
+                    return;
                 }
             }
         });
 
-        app.insert_resource(PlayRequested(requested))
+        app.insert_resource(EditorCommands(Mutex::new(receiver)))
+            .init_resource::<Selected>()
             .add_systems(PreStartup, pause)
-            .add_systems(PreUpdate, play_when_requested);
+            .add_systems(PreUpdate, run_commands);
     }
 }
 
@@ -49,11 +52,27 @@ fn pause(mut time: ResMut<Time<Virtual>>) {
     time.pause();
 }
 
-/// Unpauses once per request, so a game that pauses itself stays paused.
-fn play_when_requested(requested: Res<PlayRequested>, mut time: ResMut<Time<Virtual>>) {
-    if requested.0.swap(false, Ordering::Relaxed) {
-        time.unpause();
-        info!("Playing.");
+fn run_commands(
+    commands: Res<EditorCommands>,
+    mut time: ResMut<Time<Virtual>>,
+    mut selected: ResMut<Selected>,
+) {
+    let receiver = commands.0.lock().unwrap_or_else(PoisonError::into_inner);
+    for line in receiver.try_iter() {
+        let line = line.trim();
+        let (command, argument) = line.split_once(' ').unwrap_or((line, ""));
+        match command {
+            // Unpauses once per request, so a game that pauses itself stays paused.
+            "play" => {
+                time.unpause();
+                info!("Playing.");
+            }
+            // An id the editor got from `inspect`; anything else clears.
+            "select" => {
+                selected.0 = argument.trim().parse().ok().and_then(Entity::try_from_bits);
+            }
+            _ => warn!("Unknown editor command: {line}"),
+        }
     }
 }
 
@@ -63,21 +82,26 @@ mod tests {
 
     use super::*;
 
+    fn editor_app() -> (App, mpsc::Sender<String>) {
+        let mut app = App::new();
+        app.add_plugins((TimePlugin, EditModePlugin));
+        // Replaces stdin with the test's channel.
+        let (sender, receiver) = mpsc::channel();
+        app.insert_resource(EditorCommands(Mutex::new(receiver)));
+        (app, sender)
+    }
+
     fn paused(app: &App) -> bool {
         app.world().resource::<Time<Virtual>>().is_paused()
     }
 
     #[test]
     fn starts_paused_and_plays_once_asked() {
-        let mut app = App::new();
-        app.add_plugins((TimePlugin, EditModePlugin));
+        let (mut app, editor) = editor_app();
         app.update();
         assert!(paused(&app));
 
-        app.world()
-            .resource::<PlayRequested>()
-            .0
-            .store(true, Ordering::Relaxed);
+        editor.send("play".into()).unwrap();
         app.update();
         assert!(!paused(&app));
 
@@ -85,5 +109,19 @@ mod tests {
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
         app.update();
         assert!(paused(&app));
+    }
+
+    #[test]
+    fn selects_an_entity_by_id_and_clears_on_a_bare_select() {
+        let (mut app, editor) = editor_app();
+        let cube = app.world_mut().spawn_empty().id();
+
+        editor.send(format!("select {}", cube.to_bits())).unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<Selected>().0, Some(cube));
+
+        editor.send("select".into()).unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<Selected>().0, None);
     }
 }

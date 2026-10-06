@@ -5,10 +5,13 @@ edition = "2024"
 description = "Connects a Bevy game to the Besfa editor"
 
 [dependencies]
-bevy = "0.19.1"
+# `debug` keeps component and system names, which the editor shows.
+bevy = { version = "0.19.1", features = ["debug"] }
 # Must match the wgpu and windows versions Bevy's renderer uses, so the raw
 # D3D12 types line up with wgpu-hal's.
 wgpu = "29"
+# Reports to the editor are JSON lines.
+serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

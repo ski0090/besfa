@@ -1,0 +1,292 @@
+//! Reports the world to the editor: every entity, the selected entity's
+//! components, and every system.
+//!
+//! A report is one stdout line: `@besfa ` and a JSON object with a `type`,
+//! which tells reports from the game's logs. Entities and the selected
+//! entity are reported when they change; systems once, before the game runs.
+
+use std::io::Write;
+
+use bevy::{
+    ecs::{
+        component::{ComponentId, ComponentInfo},
+        entity_disabling::Disabled,
+        query::Allow,
+        schedule::Schedules,
+    },
+    prelude::*,
+    reflect::serde::TypedReflectSerializer,
+};
+use serde_json::{Value, json};
+
+/// The entity the editor selected with `select <id>`.
+#[derive(Resource, Default)]
+pub(crate) struct Selected(pub(crate) Option<Entity>);
+
+pub(crate) struct InspectPlugin;
+
+impl Plugin for InspectPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Selected>()
+            // Last: after Update and transform propagation, so values are current.
+            .add_systems(Last, report);
+    }
+
+    /// Every plugin has added its systems by now and no schedule is running,
+    /// so none is missing from `Schedules`.
+    // ponytail: systems added while the game runs are not reported; report
+    // from `Last` on a system count change if a game needs that.
+    fn cleanup(&self, app: &mut App) {
+        write(&systems(app.world()).to_string());
+    }
+}
+
+fn write(line: &str) {
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "@besfa {line}");
+}
+
+/// Writes `report` unless it is the one written last.
+fn write_if_changed(last: &mut String, report: Value) {
+    let line = report.to_string();
+    if *last != line {
+        write(&line);
+        *last = line;
+    }
+}
+
+// ponytail: serializes the world every frame to find changes, which is fine
+// for scenes of hundreds of entities. Track change ticks if it shows up.
+fn report(world: &mut World, mut last_entities: Local<String>, mut last_entity: Local<String>) {
+    write_if_changed(&mut last_entities, entities(world));
+
+    let Some(entity) = world.resource::<Selected>().0 else {
+        last_entity.clear();
+        return;
+    };
+    match components(world, entity) {
+        Some(components) => write_if_changed(
+            &mut last_entity,
+            json!({ "type": "entity", "id": entity.to_bits(), "components": components }),
+        ),
+        // Despawned; the entities report drops it as well.
+        None => world.resource_mut::<Selected>().0 = None,
+    }
+}
+
+/// Every entity, disabled ones included, with its name and parent.
+fn entities(world: &mut World) -> Value {
+    let mut entities: Vec<_> = world
+        .query_filtered::<(Entity, Option<&Name>, Option<&ChildOf>), Allow<Disabled>>()
+        .iter(world)
+        .collect();
+    // Spawn order; `Entity`'s own order inverts the index.
+    entities
+        .sort_unstable_by_key(|(entity, ..)| (entity.index_u32(), entity.generation().to_bits()));
+    let entities: Vec<Value> = entities
+        .iter()
+        .map(|(entity, name, parent)| {
+            json!({
+                "id": entity.to_bits(),
+                "name": name.map(Name::as_str),
+                "parent": parent.map(|parent| parent.parent().to_bits()),
+            })
+        })
+        .collect();
+    json!({ "type": "entities", "entities": entities })
+}
+
+/// The components on `entity`, or `None` once it is despawned. A value is
+/// only there for components registered with `Reflect`.
+fn components(world: &World, entity: Entity) -> Option<Vec<Value>> {
+    let infos: Vec<&ComponentInfo> = world.inspect_entity(entity).ok()?.collect();
+    // The present component that requires a component. `Mesh3d` requires
+    // `Visibility`, which requires `ViewVisibility`: the requirer with the
+    // fewest requirements of its own is the direct one.
+    let required_by = |id: ComponentId| {
+        infos
+            .iter()
+            .filter(|info| {
+                info.required_components()
+                    .iter_ids()
+                    .any(|required| required == id)
+            })
+            .min_by_key(|info| info.required_components().iter_ids().count())
+            .map(|info| info.name().shortname().to_string())
+    };
+    let registry = world.resource::<AppTypeRegistry>().read();
+    let entity_ref = world.entity(entity);
+    let components = infos
+        .iter()
+        .map(|info| {
+            let value = info
+                .type_id()
+                .and_then(|type_id| registry.get_type_data::<ReflectComponent>(type_id))
+                .and_then(|reflect| reflect.reflect(entity_ref))
+                .map(|value| {
+                    // Handles and other opaque types do not serialize; show
+                    // them the way Debug prints them.
+                    serde_json::to_value(TypedReflectSerializer::new(
+                        value.as_partial_reflect(),
+                        &registry,
+                    ))
+                    .unwrap_or_else(|_| Value::String(format!("{value:?}")))
+                });
+            json!({
+                "name": info.name().shortname().to_string(),
+                "path": info.name().to_string(),
+                "mutable": info.mutable(),
+                "required_by": required_by(info.id()),
+                "value": value,
+            })
+        })
+        .collect();
+    Some(components)
+}
+
+/// Every system of every schedule, with the game's crate name so the editor
+/// can put the game's own systems first.
+fn systems(world: &World) -> Value {
+    let systems: Vec<Value> = world
+        .resource::<Schedules>()
+        .iter()
+        .flat_map(|(label, schedule)| {
+            let label = format!("{label:?}");
+            system_names(schedule)
+                .into_iter()
+                .map(move |name| json!({ "schedule": label, "name": name }))
+        })
+        .collect();
+    json!({ "type": "systems", "crate": game_crate(), "systems": systems })
+}
+
+/// Initializing a schedule moves its systems out of the graph, so look in
+/// both places.
+fn system_names(schedule: &Schedule) -> Vec<String> {
+    match schedule.systems() {
+        Ok(systems) => systems
+            .map(|(_, system)| system.name().to_string())
+            .collect(),
+        Err(_) => schedule
+            .graph()
+            .systems
+            .iter()
+            .map(|(_, system, _)| system.name().to_string())
+            .collect(),
+    }
+}
+
+/// The game's crate name as its type paths start: `my-game.exe` is `my_game::`.
+fn game_crate() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.file_stem()?.to_string_lossy().replace('-', "_"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Component)]
+    struct Plain;
+
+    fn find<'a>(components: &'a [Value], name: &str) -> &'a Value {
+        components
+            .iter()
+            .find(|component| component["name"] == name)
+            .unwrap_or_else(|| panic!("no component {name} in {components:?}"))
+    }
+
+    #[test]
+    fn reports_entities_with_names_and_parents() {
+        let mut world = World::new();
+        let parent = world.spawn(Name::new("Parent")).id();
+        let child = world.spawn(ChildOf(parent)).id();
+
+        let report = entities(&mut world);
+
+        assert_eq!(report["type"], "entities");
+        // The world spawns an entity of its own, so look the two up by id.
+        let entities = report["entities"].as_array().unwrap();
+        let find = |entity: Entity| {
+            entities
+                .iter()
+                .find(|reported| reported["id"] == entity.to_bits())
+                .unwrap_or_else(|| panic!("{entity} missing from {entities:?}"))
+        };
+        let position = |entity: Entity| {
+            entities
+                .iter()
+                .position(|reported| reported["id"] == entity.to_bits())
+        };
+        assert!(
+            position(parent) < position(child),
+            "spawn order: {entities:?}"
+        );
+        assert_eq!(find(parent)["name"], "Parent");
+        assert_eq!(find(parent)["parent"], Value::Null);
+        assert_eq!(find(child)["name"], Value::Null);
+        assert_eq!(find(child)["parent"], parent.to_bits());
+    }
+
+    #[test]
+    fn reports_components_with_reflected_values_and_requirers() {
+        let mut app = App::new();
+        app.register_type::<Transform>()
+            .register_type::<Visibility>();
+        let cube = app
+            .world_mut()
+            .spawn((
+                Name::new("Cube"),
+                Transform::from_xyz(1.0, 2.0, 3.0),
+                Visibility::Hidden,
+                Plain,
+            ))
+            .id();
+
+        let components = components(app.world(), cube).expect("the cube exists");
+
+        let transform = find(&components, "Transform");
+        assert_eq!(
+            transform["path"],
+            "bevy_transform::components::transform::Transform"
+        );
+        // glam serializes vectors as arrays.
+        assert_eq!(transform["value"]["translation"][1], 2.0);
+        assert_eq!(transform["mutable"], true);
+        assert_eq!(transform["required_by"], Value::Null);
+        // Required by Visibility, which Visibility::Hidden brought in.
+        assert_eq!(
+            find(&components, "ViewVisibility")["required_by"],
+            "Visibility"
+        );
+        assert_eq!(find(&components, "Visibility")["value"], "Hidden");
+        // No Reflect: the name alone.
+        let plain = find(&components, "Plain");
+        assert_eq!(plain["value"], Value::Null);
+        assert!(plain["path"].as_str().unwrap().ends_with("::tests::Plain"));
+
+        app.world_mut().despawn(cube);
+        assert!(super::components(app.world(), cube).is_none());
+    }
+
+    #[test]
+    fn reports_systems_per_schedule_before_and_after_they_run() {
+        fn spin() {}
+        let mut app = App::new();
+        app.add_systems(Update, spin);
+
+        let before = systems(app.world());
+        app.update();
+        let after = systems(app.world());
+
+        for report in [before, after] {
+            assert_eq!(report["type"], "systems");
+            let systems = report["systems"].as_array().unwrap();
+            assert!(
+                systems.iter().any(|system| system["schedule"] == "Update"
+                    && system["name"].as_str().unwrap().ends_with("::spin")),
+                "{systems:?}"
+            );
+        }
+    }
+}

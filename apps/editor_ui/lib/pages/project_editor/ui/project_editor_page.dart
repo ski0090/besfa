@@ -5,10 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'package:editor_ui/entities/project/model/project.dart';
+import 'package:editor_ui/entities/scene/model/scene.dart';
 import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
 import 'package:editor_ui/features/prebuild_bevy/ui/bevy_prebuild_status_view.dart';
 import 'package:editor_ui/shared/native/viewport_texture.dart';
 import 'package:editor_ui/shared/process/cli_process.dart';
+import 'package:editor_ui/widgets/entity_inspector/ui/entity_inspector_panel.dart';
+import 'package:editor_ui/widgets/scene_hierarchy/ui/scene_hierarchy_panel.dart';
 
 /// Starts the game process in [directory]; tests replace it.
 typedef StartGame =
@@ -64,9 +67,11 @@ const _viewportHeight = 720;
 /// The game runs in one of two states: paused in edit mode, where the
 /// viewport shows the scene as Startup built it, or playing. Stop ends play by
 /// relaunching the game in edit mode, which resets the scene and picks up code
-/// changes.
+/// changes. In both states the game reports its entities, which the
+/// hierarchy and inspector panels show.
 class _ProjectEditorPageState extends State<ProjectEditorPage> {
   final _logs = <String>[];
+  final _scene = Scene();
   CliProcess? _game;
   ViewportTexture? _viewport;
 
@@ -91,6 +96,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     widget.prebuild?.removeListener(_onPrebuildChanged);
     _game?.stop();
     _viewport?.dispose();
+    _scene.dispose();
     super.dispose();
   }
 
@@ -108,6 +114,17 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   bool get _prebuilding =>
       widget.prebuild?.value.phase == BevyPrebuildPhase.running;
 
+  /// Reports from the game go to the scene, everything else to the log.
+  void _onOutput(String line) {
+    // A stopped game's last lines arrive after the page is disposed.
+    if (!mounted) {
+      return;
+    }
+    if (!_scene.handle(line)) {
+      _log(line);
+    }
+  }
+
   void _log(String line) {
     if (!mounted) {
       return;
@@ -123,12 +140,13 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   /// Starts the game paused in edit mode, or already playing with [play].
   Future<void> _launch({bool play = false}) async {
     setState(() => _starting = true);
+    _scene.reset();
     final CliProcess game;
     try {
       final viewport = await _ensureViewport();
       game = await widget.startGame(
         widget.project.path,
-        onOutput: _log,
+        onOutput: _onOutput,
         environment: {
           // Read by besfa_editor_plugin: start paused, play on `play`.
           'BESFA_EDIT_MODE': '1',
@@ -156,6 +174,10 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     if (play) {
       game.send('play');
     }
+    // The scene is rebuilt from the same Startup, so the selection carries over.
+    if (_scene.selected case final id?) {
+      game.send('select $id');
+    }
     setState(() {
       _game = game;
       _playing = play;
@@ -182,6 +204,12 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     }
     game.send('play');
     setState(() => _playing = true);
+  }
+
+  /// The game reports the selected entity's components back.
+  void _select(int? id) {
+    _scene.select(id);
+    _game?.send(id == null ? 'select' : 'select $id');
   }
 
   Future<void> _stop() async {
@@ -280,16 +308,32 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
             prebuild: widget.prebuild,
           ),
           Expanded(
-            child: Center(
-              child: _game != null && viewport != null
-                  ? AspectRatio(
-                      aspectRatio: viewport.width / viewport.height,
-                      child: Texture(textureId: viewport.textureId),
-                    )
-                  : const Text(
-                      'Viewport',
-                      style: TextStyle(color: Color(0xFF7E8795)),
-                    ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 220,
+                  child: SceneHierarchyPanel(scene: _scene, onSelect: _select),
+                ),
+                const _PanelDivider(),
+                Expanded(
+                  child: Center(
+                    child: _game != null && viewport != null
+                        ? AspectRatio(
+                            aspectRatio: viewport.width / viewport.height,
+                            child: Texture(textureId: viewport.textureId),
+                          )
+                        : const Text(
+                            'Viewport',
+                            style: TextStyle(color: Color(0xFF7E8795)),
+                          ),
+                  ),
+                ),
+                const _PanelDivider(),
+                SizedBox(
+                  width: 320,
+                  child: EntityInspectorPanel(scene: _scene),
+                ),
+              ],
             ),
           ),
           SizedBox(height: 200, child: _LogPanel(_logs)),
@@ -348,6 +392,14 @@ class _RunToolbar extends StatelessWidget {
       ),
     );
   }
+}
+
+class _PanelDivider extends StatelessWidget {
+  const _PanelDivider();
+
+  @override
+  Widget build(BuildContext context) =>
+      Container(width: 1, color: Colors.white.withValues(alpha: .08));
 }
 
 class _LogPanel extends StatelessWidget {

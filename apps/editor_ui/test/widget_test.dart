@@ -12,6 +12,7 @@ import 'package:editor_ui/features/create_project/model/project_creator.dart';
 import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
 import 'package:editor_ui/pages/project_editor/ui/project_editor_page.dart';
 import 'package:editor_ui/shared/process/cli_process.dart';
+import 'package:editor_ui/widgets/scene_hierarchy/ui/scene_hierarchy_panel.dart';
 
 void main() {
   late Directory dir;
@@ -96,6 +97,83 @@ void main() {
     expect(find.text('Bevy is ready'), findsOneWidget);
   });
 
+  testWidgets('selecting an entity shows what the game reports about it', (
+    WidgetTester tester,
+  ) async {
+    _mockEditorChannels(tester);
+    final game = _FakeGame();
+    late void Function(String line) output;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectEditorPage(
+          project: Project(dir.path),
+          startGame: (_, {required environment, required onOutput}) async {
+            output = onOutput;
+            return game;
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+    output(
+      '@besfa {"type":"systems","crate":"demo_game","systems":['
+      '{"schedule":"Update","name":"demo_game::spin"}]}',
+    );
+    output(
+      '@besfa {"type":"entities","entities":['
+      '{"id":4294967295,"name":"Cube","parent":null},'
+      '{"id":4294967294,"name":null,"parent":4294967295}]}',
+    );
+    output('INFO demo_game: hello');
+    await tester.pump();
+
+    expect(find.text('Select an entity in the Hierarchy'), findsOneWidget);
+    expect(find.text('demo_game (1)'), findsOneWidget);
+    expect(find.text('Entity 1v0'), findsOneWidget);
+    expect(find.text('INFO demo_game: hello'), findsOneWidget);
+    expect(find.textContaining('@besfa'), findsNothing);
+
+    // The inspector header repeats the name once selected.
+    final cubeRow = find.descendant(
+      of: find.byType(SceneHierarchyPanel),
+      matching: find.text('Cube'),
+    );
+    await tester.tap(cubeRow);
+    await tester.pump();
+    expect(game.sent, ['select 4294967295']);
+
+    output(
+      '@besfa {"type":"entity","id":4294967295,"components":['
+      '{"name":"Transform","path":"bevy_transform::components::transform::Transform",'
+      '"mutable":true,"required_by":null,"value":{"translation":[0.0,1.0,0.0]}},'
+      '{"name":"Spin","path":"demo_game::Spin","mutable":true,"required_by":null,"value":null},'
+      '{"name":"GlobalTransform","path":"bevy_transform::components::global_transform::GlobalTransform",'
+      '"mutable":true,"required_by":"Transform","value":"opaque"}]}',
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Spin'), findsOneWidget);
+    expect(find.text('no Reflect'), findsOneWidget);
+    expect(find.text('bevy_transform (2)'), findsOneWidget);
+    // Bevy's crates start collapsed.
+    expect(find.text('Transform'), findsNothing);
+    await tester.tap(find.text('bevy_transform (2)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Transform'), findsOneWidget);
+    expect(find.text('required by Transform'), findsOneWidget);
+    expect(find.textContaining('"translation"'), findsOneWidget);
+
+    await tester.tap(cubeRow);
+    await tester.pump();
+    expect(game.sent.last, 'select');
+    expect(find.text('Select an entity in the Hierarchy'), findsOneWidget);
+
+    // The stopped game's last lines arrive after the page is gone.
+    await tester.pumpWidget(const SizedBox());
+    output('@besfa {"type":"entities","entities":[]}');
+    output('INFO demo_game: bye');
+  });
+
   testWidgets('deletes a recent project only after confirmation', (
     WidgetTester tester,
   ) async {
@@ -142,6 +220,20 @@ void _mockEditorChannels(WidgetTester tester) {
     const MethodChannel('besfa/viewport'),
     (call) async => throw PlatformException(code: 'unavailable'),
   );
+}
+
+/// A game that never exits and records what the editor sends it.
+class _FakeGame implements CliProcess {
+  final sent = <String>[];
+
+  @override
+  Future<int> get exitCode => Completer<int>().future;
+
+  @override
+  void send(String line) => sent.add(line);
+
+  @override
+  Future<void> stop() async {}
 }
 
 class _FakeProjectCreator implements ProjectCreator {
