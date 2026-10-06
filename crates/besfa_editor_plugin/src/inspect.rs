@@ -1,5 +1,5 @@
-//! Reports the world to the editor: every entity, the selected entity's
-//! components, and every system.
+//! Reports the world to the editor: the scene's entities, the selected
+//! entity's components, and every system.
 //!
 //! A report is one stdout line: `@besfa ` and a JSON object with a `type`,
 //! which tells reports from the game's logs. Entities and the selected
@@ -11,7 +11,7 @@ use bevy::{
     ecs::{
         component::{ComponentId, ComponentInfo},
         entity_disabling::Disabled,
-        query::Allow,
+        query::{Allow, Or},
         schedule::Schedules,
     },
     prelude::*,
@@ -74,10 +74,17 @@ fn report(world: &mut World, mut last_entities: Local<String>, mut last_entity: 
     }
 }
 
-/// Every entity, disabled ones included, with its name and parent.
+/// The scene's entities with their names and parents: named or placed
+/// ones and their children, disabled ones included. That leaves out the
+/// hundreds of entities Bevy keeps for observers and events.
+// ponytail: tells scene from internals by components; an explicit marker
+// would be needed once internal entities carry transforms.
 fn entities(world: &mut World) -> Value {
     let mut entities: Vec<_> = world
-        .query_filtered::<(Entity, Option<&Name>, Option<&ChildOf>), Allow<Disabled>>()
+        .query_filtered::<(Entity, Option<&Name>, Option<&ChildOf>), (
+            Or<(With<Name>, With<Transform>, With<ChildOf>)>,
+            Allow<Disabled>,
+        )>()
         .iter(world)
         .collect();
     // Spawn order; `Entity`'s own order inverts the index.
@@ -197,31 +204,32 @@ mod tests {
     }
 
     #[test]
-    fn reports_entities_with_names_and_parents() {
+    fn reports_scene_entities_with_names_and_parents() {
         let mut world = World::new();
+        // Neither named, placed nor a child: an internal entity to the editor.
+        world.spawn(Plain);
         let parent = world.spawn(Name::new("Parent")).id();
         let child = world.spawn(ChildOf(parent)).id();
+        let placed = world.spawn(Transform::default()).id();
 
         let report = entities(&mut world);
 
         assert_eq!(report["type"], "entities");
-        // The world spawns an entity of its own, so look the two up by id.
         let entities = report["entities"].as_array().unwrap();
+        assert_eq!(
+            entities
+                .iter()
+                .map(|e| e["id"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [parent.to_bits(), child.to_bits(), placed.to_bits()],
+            "spawn order, internals left out: {entities:?}"
+        );
         let find = |entity: Entity| {
             entities
                 .iter()
                 .find(|reported| reported["id"] == entity.to_bits())
                 .unwrap_or_else(|| panic!("{entity} missing from {entities:?}"))
         };
-        let position = |entity: Entity| {
-            entities
-                .iter()
-                .position(|reported| reported["id"] == entity.to_bits())
-        };
-        assert!(
-            position(parent) < position(child),
-            "spawn order: {entities:?}"
-        );
         assert_eq!(find(parent)["name"], "Parent");
         assert_eq!(find(parent)["parent"], Value::Null);
         assert_eq!(find(child)["name"], Value::Null);
