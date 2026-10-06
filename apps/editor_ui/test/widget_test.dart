@@ -215,16 +215,16 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Plugin aaaaaaa, prebuild bbbbbbb'), findsOneWidget);
-    await tester.tap(find.widgetWithText(TextButton, 'Update'));
+    expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.warning_amber_rounded));
     await tester.pumpAndSettle();
 
     expect(updated, [dir.path]);
-    expect(find.text('Plugin bbbbbbb'), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
     expect(find.text('    Updating besfa_editor_plugin'), findsOneWidget);
     expect(launches, 2);
-    // Up to date: the refresh icon runs the same update.
-    await tester.tap(find.byIcon(Icons.refresh));
+    // Up to date: the icon still runs the update, for commits pushed since.
+    await tester.tap(find.byIcon(Icons.check_circle_outline));
     await tester.pumpAndSettle();
     expect(updated, hasLength(2));
   });

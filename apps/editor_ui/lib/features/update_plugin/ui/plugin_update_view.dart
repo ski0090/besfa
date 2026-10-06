@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// The project's `besfa_editor_plugin` revision, against the one the
-/// Bevy prebuild has, with a way to update it. Hidden for projects whose
-/// lock does not pin the plugin to a git revision.
+/// Whether the project's `besfa_editor_plugin` matches the one the Bevy
+/// prebuild has, as a status icon that updates the plugin when pressed.
+/// Hidden for projects whose lock does not pin the plugin to a git revision.
 class PluginUpdateView extends StatelessWidget {
   const PluginUpdateView({
     super.key,
@@ -23,41 +23,24 @@ class PluginUpdateView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final project = this.project;
     if (project == null) {
       return const SizedBox.shrink();
     }
-    final outdated = latest != null && latest != project;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          // Different, not necessarily older: a push made while the editor
-          // runs leaves the project ahead of the prebuild.
-          outdated
-              ? 'Plugin ${_short(project)}, prebuild ${_short(latest!)}'
-              : 'Plugin ${_short(project)}',
-          style: TextStyle(
-            fontSize: 12,
-            color: outdated ? const Color(0xFFE8B86D) : const Color(0xFF7E8795),
-          ),
-        ),
-        if (outdated)
-          TextButton(
-            onPressed: busy ? null : onUpdate,
-            child: const Text('Update'),
-          )
-        else
-          IconButton(
-            tooltip: 'Update besfa_editor_plugin to its latest commit',
-            iconSize: 16,
-            onPressed: busy ? null : onUpdate,
-            icon: const Icon(Icons.refresh),
-          ),
-      ],
+    // Different, not necessarily older: a push made while the editor runs
+    // leaves the project ahead of the prebuild.
+    final differs = latest != null && latest != project;
+    return IconButton(
+      tooltip: differs
+          ? 'The plugin differs from the Bevy prebuild. '
+                'Click to update it to the latest commit.'
+          : 'The plugin matches the Bevy prebuild. '
+                'Click to update it to the latest commit.',
+      iconSize: 18,
+      onPressed: busy ? null : onUpdate,
+      icon: Icon(
+        differs ? Icons.warning_amber_rounded : Icons.check_circle_outline,
+        color: differs ? const Color(0xFFE8B86D) : const Color(0xFF7EC98F),
+      ),
     );
   }
 }
-
-String _short(String revision) =>
-    revision.length > 7 ? revision.substring(0, 7) : revision;
