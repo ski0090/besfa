@@ -8,6 +8,8 @@ import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/entities/scene/model/scene.dart';
 import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
 import 'package:editor_ui/features/prebuild_bevy/ui/bevy_prebuild_status_view.dart';
+import 'package:editor_ui/features/update_plugin/model/plugin_update.dart';
+import 'package:editor_ui/features/update_plugin/ui/plugin_update_view.dart';
 import 'package:editor_ui/shared/native/viewport_texture.dart';
 import 'package:editor_ui/shared/process/cli_process.dart';
 import 'package:editor_ui/widgets/entity_inspector/ui/entity_inspector_panel.dart';
@@ -41,6 +43,8 @@ class ProjectEditorPage extends StatefulWidget {
     required this.project,
     this.prebuild,
     this.startGame = startCargoRun,
+    this.latestPluginRevision = prebuildPluginRevision,
+    this.updatePlugin = cargoUpdatePlugin,
   });
 
   final Project project;
@@ -49,6 +53,11 @@ class ProjectEditorPage extends StatefulWidget {
   final BevyPrebuild? prebuild;
 
   final StartGame startGame;
+
+  /// The `besfa_editor_plugin` revision the project is compared with.
+  final String? Function() latestPluginRevision;
+
+  final UpdatePlugin updatePlugin;
 
   @override
   State<ProjectEditorPage> createState() => _ProjectEditorPageState();
@@ -81,9 +90,14 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   /// The game was told to play; otherwise it sits paused in edit mode.
   bool _playing = false;
 
+  /// `besfa_editor_plugin` revisions: the project's and the prebuild's.
+  String? _pluginRevision;
+  String? _latestPluginRevision;
+
   @override
   void initState() {
     super.initState();
+    _readPluginRevisions();
     if (_prebuilding) {
       widget.prebuild!.addListener(_onPrebuildChanged);
     } else {
@@ -106,7 +120,18 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
       return;
     }
     widget.prebuild!.removeListener(_onPrebuildChanged);
+    // The prebuild moved its lock to the latest plugin.
+    _readPluginRevisions();
     _launch();
+  }
+
+  void _readPluginRevisions() {
+    setState(() {
+      _pluginRevision = pluginRevision(
+        [widget.project.path, 'Cargo.lock'].join(Platform.pathSeparator),
+      );
+      _latestPluginRevision = widget.latestPluginRevision();
+    });
   }
 
   /// The prebuild holds the shared build directory, so a game started now
@@ -212,6 +237,35 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     _game?.send(id == null ? 'select' : 'select $id');
   }
 
+  /// Moves the project's plugin to the latest commit and restarts the edit
+  /// session, which rebuilds the game against it.
+  Future<void> _updatePlugin() async {
+    setState(() => _starting = true);
+    try {
+      final code = await widget.updatePlugin(
+        widget.project.path,
+        onOutput: _log,
+      );
+      if (code != 0) {
+        _log('cargo update exited with code $code.');
+      }
+    } on ProcessException catch (error) {
+      _log('Could not start cargo: ${error.message}');
+    }
+    if (!mounted) {
+      return;
+    }
+    _readPluginRevisions();
+    if (_game case final game?) {
+      await game.stop();
+      // The running game locks its executable against the rebuild.
+      await game.exitCode;
+    }
+    if (mounted) {
+      _launch();
+    }
+  }
+
   Future<void> _stop() async {
     final game = _game!;
     setState(() => _starting = true);
@@ -305,6 +359,12 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
             busy: _starting || _prebuilding,
             onPlay: _play,
             onStop: _stop,
+            plugin: PluginUpdateView(
+              project: _pluginRevision,
+              latest: _latestPluginRevision,
+              busy: _starting || _prebuilding,
+              onUpdate: _updatePlugin,
+            ),
             prebuild: widget.prebuild,
           ),
           Expanded(
@@ -349,6 +409,7 @@ class _RunToolbar extends StatelessWidget {
     required this.busy,
     required this.onPlay,
     required this.onStop,
+    required this.plugin,
     this.prebuild,
   });
 
@@ -356,6 +417,7 @@ class _RunToolbar extends StatelessWidget {
   final bool busy;
   final VoidCallback onPlay;
   final VoidCallback onStop;
+  final Widget plugin;
   final BevyPrebuild? prebuild;
 
   @override
@@ -381,13 +443,22 @@ class _RunToolbar extends StatelessWidget {
                   icon: const Icon(Icons.play_arrow, size: 18),
                   label: const Text('Play'),
                 ),
-          if (prebuild case final prebuild?)
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: BevyPrebuildStatusView(prebuild),
-              ),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                plugin,
+                // Bounded, so a long cargo line ellipsizes instead of overflowing.
+                if (prebuild case final prebuild?)
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 16),
+                      child: BevyPrebuildStatusView(prebuild),
+                    ),
+                  ),
+              ],
             ),
+          ),
         ],
       ),
     );

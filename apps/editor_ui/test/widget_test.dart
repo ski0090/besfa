@@ -88,6 +88,14 @@ void main() {
     expect(find.text('Preparing Bevy…'), findsOneWidget);
     expect(launches, isEmpty);
 
+    // A long cargo line must not overflow the toolbar.
+    prebuild.value = BevyPrebuildStatus(
+      BevyPrebuildPhase.running,
+      'Compiling bevy_render v0.19.1 ' * 12,
+      progress: .5,
+    );
+    await tester.pump();
+
     prebuild.value = const BevyPrebuildStatus(
       BevyPrebuildPhase.ready,
       'Bevy is ready',
@@ -174,6 +182,53 @@ void main() {
     output('INFO demo_game: bye');
   });
 
+  testWidgets('updates the plugin from the toolbar and relaunches the game', (
+    WidgetTester tester,
+  ) async {
+    _mockEditorChannels(tester);
+    const old = 'aaaaaaa1111111111111111111111111111111111';
+    const latest = 'bbbbbbb2222222222222222222222222222222222';
+    final lock = File('${dir.path}/Cargo.lock');
+    String pin(String revision) =>
+        '[[package]]\nname = "besfa_editor_plugin"\nversion = "0.1.0"\n'
+        'source = "git+https://github.com/ski0090/besfa#$revision"\n';
+    lock.writeAsStringSync(pin(old));
+    var launches = 0;
+    final updated = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectEditorPage(
+          project: Project(dir.path),
+          latestPluginRevision: () => latest,
+          updatePlugin: (directory, {required onOutput}) async {
+            updated.add(directory);
+            lock.writeAsStringSync(pin(latest));
+            onOutput('    Updating besfa_editor_plugin');
+            return 0;
+          },
+          startGame: (_, {required environment, required onOutput}) async {
+            launches++;
+            return _FakeGame();
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Plugin aaaaaaa, prebuild bbbbbbb'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Update'));
+    await tester.pumpAndSettle();
+
+    expect(updated, [dir.path]);
+    expect(find.text('Plugin bbbbbbb'), findsOneWidget);
+    expect(find.text('    Updating besfa_editor_plugin'), findsOneWidget);
+    expect(launches, 2);
+    // Up to date: the refresh icon runs the same update.
+    await tester.tap(find.byIcon(Icons.refresh));
+    await tester.pumpAndSettle();
+    expect(updated, hasLength(2));
+  });
+
   testWidgets('deletes a recent project only after confirmation', (
     WidgetTester tester,
   ) async {
@@ -222,18 +277,24 @@ void _mockEditorChannels(WidgetTester tester) {
   );
 }
 
-/// A game that never exits and records what the editor sends it.
+/// A game that runs until stopped and records what the editor sends it.
 class _FakeGame implements CliProcess {
   final sent = <String>[];
+  final _exit = Completer<int>();
 
   @override
-  Future<int> get exitCode => Completer<int>().future;
+  Future<int> get exitCode => _exit.future;
 
   @override
   void send(String line) => sent.add(line);
 
+  /// Exits the way a killed process does.
   @override
-  Future<void> stop() async {}
+  Future<void> stop() async {
+    if (!_exit.isCompleted) {
+      _exit.complete(1);
+    }
+  }
 }
 
 class _FakeProjectCreator implements ProjectCreator {
