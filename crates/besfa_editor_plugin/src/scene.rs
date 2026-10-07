@@ -414,7 +414,7 @@ fn saved_components(
     registry: &TypeRegistry,
 ) -> Vec<Box<dyn PartialReflect>> {
     let entity_ref = world.entity(entity);
-    let saved: Vec<(&ComponentInfo, &dyn Reflect)> = world
+    let saved: Vec<(&ComponentInfo, Box<dyn PartialReflect>)> = world
         .inspect_entity(entity)
         .into_iter()
         .flatten()
@@ -432,7 +432,7 @@ fn saved_components(
                 warn!("Not saving {}: it does not serialize.", info.name());
                 return None;
             }
-            Some((info, value))
+            Some((info, saved_value(value)))
         })
         .collect();
     let requirers = |id: ComponentId| {
@@ -441,28 +441,47 @@ fn saved_components(
             .filter(|(other, _)| other.required_components().iter_ids().any(|r| r == id))
             .count()
     };
-    let mut kept: Vec<(usize, &dyn Reflect)> = saved
-        .iter()
-        .map(|&(info, value)| (requirers(info.id()), info, value))
-        .filter(|&(requirers, info, value)| requirers == 0 || !is_default(registry, info, value))
-        .map(|(requirers, _, value)| (requirers, value))
+    let requirers: Vec<usize> = saved.iter().map(|(info, _)| requirers(info.id())).collect();
+    let mut kept: Vec<(usize, Box<dyn PartialReflect>)> = saved
+        .into_iter()
+        .zip(requirers)
+        .filter(|((info, value), requirers)| {
+            *requirers == 0 || !is_default(registry, info, value.as_ref())
+        })
+        .map(|((_, value), requirers)| (requirers, value))
         .collect();
     // Stable, and `required_components` holds requirements of requirements,
     // so whatever requires a component has fewer requirers than it.
-    kept.sort_by_key(|&(requirers, _)| requirers);
-    kept.into_iter()
-        .map(|(_, value)| {
-            // A concrete clone keeps types that serialize through serde,
-            // like `Name`, serializable; a dynamic value loses that.
-            value
-                .reflect_clone()
-                .map(|clone| clone.into_partial_reflect())
-                .unwrap_or_else(|_| value.to_dynamic())
-        })
-        .collect()
+    kept.sort_by_key(|(requirers, _)| *requirers);
+    kept.into_iter().map(|(_, value)| value).collect()
 }
 
-fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn Reflect) -> bool {
+/// A copy of `value` for the file. A concrete clone keeps types that
+/// serialize through serde, like `Name`, serializable; a dynamic value
+/// loses that. Bevy recomputes a camera's matrices and target size and a
+/// perspective's aspect ratio every frame, so the file keeps their defaults.
+// ponytail: the template's camera; an orthographic projection's `area` is
+// recomputed too, clear it once 2D scenes are saved.
+fn saved_value(value: &dyn Reflect) -> Box<dyn PartialReflect> {
+    if let Some(camera) = value.downcast_ref::<Camera>() {
+        return Box::new(Camera {
+            computed: default(),
+            ..camera.clone()
+        });
+    }
+    if let Some(Projection::Perspective(perspective)) = value.downcast_ref::<Projection>() {
+        return Box::new(Projection::Perspective(PerspectiveProjection {
+            aspect_ratio: PerspectiveProjection::default().aspect_ratio,
+            ..perspective.clone()
+        }));
+    }
+    value
+        .reflect_clone()
+        .map(|clone| clone.into_partial_reflect())
+        .unwrap_or_else(|_| value.to_dynamic())
+}
+
+fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn PartialReflect) -> bool {
     info.type_id()
         .and_then(|id| registry.get_type_data::<ReflectDefault>(id))
         .and_then(|default| value.reflect_partial_eq(default.default().as_partial_reflect()))
@@ -695,6 +714,17 @@ mod tests {
                 SceneEntity,
             ))
             .id();
+        // What a running game computes every frame.
+        app.world_mut()
+            .get_mut::<Camera>(camera)
+            .unwrap()
+            .computed
+            .old_viewport_size = Some(UVec2::new(1280, 720));
+        if let Some(mut projection) = app.world_mut().get_mut::<Projection>(camera)
+            && let Projection::Perspective(perspective) = &mut *projection
+        {
+            perspective.aspect_ratio = 16.0 / 9.0;
+        }
         let dir = std::env::temp_dir().join(format!("besfa-required-{}", std::process::id()));
         let path = dir.join(SCENE_PATH);
         let quoted = |path: &str| format!("\"{path}\"");
