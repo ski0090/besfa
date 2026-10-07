@@ -1,7 +1,8 @@
 //! Changes the scene on the editor's commands: component values, added and
 //! removed components, and spawned, duplicated, deleted and restored
 //! entities. Deleting hides an entity instead of despawning it, so undoing
-//! brings back the same entity and the editor's history keeps its ids.
+//! brings back the same entity and the editor's history keeps its ids. The
+//! editor despawns it once no undo can bring it back.
 //!
 //! Components are named by their reflected type path, the same path the
 //! scene file and the `entity` report use. Values are JSON in the shape
@@ -20,7 +21,7 @@ use serde_json::Value;
 use crate::scene::{MeshColor, MeshShape, SceneEntity};
 
 /// An entity the editor deleted: disabled, so the game, rendering and
-/// saving skip it, until undoing restores it. The process ending drops it.
+/// saving skip it, until undoing restores it or the editor despawns it.
 #[derive(Component)]
 pub(crate) struct Deleted;
 
@@ -178,6 +179,16 @@ pub(crate) fn restore(world: &mut World, entity: Entity) -> Result<(), String> {
             world.entity_mut(entity).remove::<(Disabled, Deleted)>();
         }
     }
+    Ok(())
+}
+
+/// Despawns an entity [`delete`] hid, with its children, once the
+/// editor's history can no longer restore it. A live entity is refused.
+pub(crate) fn despawn(world: &mut World, entity: Entity) -> Result<(), String> {
+    if !entity_mut(world, entity)?.contains::<Deleted>() {
+        return Err(format!("entity {entity} is not deleted"));
+    }
+    world.despawn(entity);
     Ok(())
 }
 
@@ -341,6 +352,12 @@ mod tests {
         assert!(seen.contains(&cube) && seen.contains(&child));
         assert!(world.get::<Disabled>(hidden_by_game).is_some());
         assert!(delete(&mut world, Entity::from_bits(u64::MAX >> 1)).is_err());
+
+        assert!(despawn(&mut world, cube).is_err(), "a live entity stays");
+        delete(&mut world, cube).unwrap();
+        despawn(&mut world, cube).unwrap();
+        assert!(world.get_entity(cube).is_err() && world.get_entity(child).is_err());
+        assert!(world.get_entity(copy).is_ok());
     }
 
     #[test]

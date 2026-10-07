@@ -299,10 +299,23 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     // A change nothing can take back, like removing an unreflected
     // component, leaves no entry that would undo nothing.
     if (undo != null && undo.isNotEmpty) {
-      _history.add(Edit(undo: undo, redo: [command]));
+      _record(Edit(undo: undo, redo: [command]));
     }
     if (!_playing) {
       _scene.markDirty();
+    }
+  }
+
+  /// Adds [edit] to the history. An undone change it forgets may have
+  /// left an entity hidden for redo; nothing can restore that entity now,
+  /// so the game despawns it.
+  void _record(Edit edit) {
+    for (final forgotten in _history.add(edit)) {
+      for (final command in forgotten.undo) {
+        if (command['command'] == 'delete') {
+          _send({'command': 'despawn', 'id': command['id']});
+        }
+      }
     }
   }
 
@@ -336,7 +349,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     switch (report['type']) {
       case 'spawned':
         final id = report['id'];
-        _history.add(
+        _record(
           Edit(
             undo: [
               {'command': 'delete', 'id': id},
@@ -353,7 +366,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
           'component': report['component'],
           'value': value,
         };
-        _history.add(
+        _record(
           Edit(undo: [set(report['before'])], redo: [set(report['after'])]),
         );
       case 'saved':

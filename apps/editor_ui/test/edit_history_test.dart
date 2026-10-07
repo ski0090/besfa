@@ -28,7 +28,9 @@ void main() {
     expect(history.redo(), isNull);
 
     history.undo();
-    history.add(edit(3));
+    expect(history.add(edit(3)).single.undo, [
+      {'undo': 2},
+    ], reason: 'what was undone is forgotten');
     expect(history.canRedo, isFalse);
     expect(history.undo(), [
       {'undo': 3},

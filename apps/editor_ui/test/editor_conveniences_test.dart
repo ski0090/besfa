@@ -60,6 +60,28 @@ void main() {
     return (game, output);
   }
 
+  testWidgets('despawns a deleted entity once no undo can restore it', (
+    WidgetTester tester,
+  ) async {
+    final (game, output) = await openWithCube(tester);
+    output('@besfa {"type":"spawned","id":42}');
+    await tester.pump();
+    await _control(tester, LogicalKeyboardKey.keyZ);
+    expect(game.commands.last, {'command': 'delete', 'id': 42});
+
+    // A new change forgets the undone spawn: nothing can restore 42 now.
+    await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+    expect(game.commands.reversed.take(2), [
+      {'command': 'despawn', 'id': 42},
+      {'command': 'delete', 'id': _cube},
+    ]);
+
+    // The cube's deletion can still be undone, so the cube stays hidden.
+    await _control(tester, LogicalKeyboardKey.keyZ);
+    expect(game.commands.last, {'command': 'restore', 'id': _cube});
+    expect(game.commands.where((c) => c['command'] == 'despawn'), hasLength(1));
+  });
+
   testWidgets('undoes and redoes field edits, drags, adds and deletes', (
     WidgetTester tester,
   ) async {

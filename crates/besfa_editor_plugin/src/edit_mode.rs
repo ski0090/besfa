@@ -101,6 +101,10 @@ enum Command {
     Restore {
         id: u64,
     },
+    /// Drops a deleted entity for good, once no undo can restore it.
+    Despawn {
+        id: u64,
+    },
     /// Spawns an entity showing the asset at `path`, relative to the asset
     /// directory, then reports and selects it.
     Instantiate {
@@ -193,6 +197,7 @@ fn run(world: &mut World, command: Command) {
                 }
             }),
         Command::Restore { id } => entity(id).and_then(|entity| edit::restore(world, entity)),
+        Command::Despawn { id } => entity(id).and_then(|entity| edit::despawn(world, entity)),
         Command::SavePrefab { id, path } => {
             let result = asset_path(&path)
                 .and_then(|path| entity(id).map(|entity| (entity, path)))

@@ -18,11 +18,14 @@ class EditHistory extends ChangeNotifier {
   bool get canUndo => _done.isNotEmpty;
   bool get canRedo => _undone.isNotEmpty;
 
-  /// Records [edit], which forgets what was undone.
-  void add(Edit edit) {
+  /// Records [edit], which forgets what was undone; returns the forgotten
+  /// edits.
+  List<Edit> add(Edit edit) {
+    final forgotten = [..._undone];
     _done.add(edit);
     _undone.clear();
     notifyListeners();
+    return forgotten;
   }
 
   /// The commands that undo the last change, if any.
