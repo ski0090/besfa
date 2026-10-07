@@ -10,13 +10,13 @@ bevy = { version = "0.19.1", features = ["debug"] }
 # Must match the wgpu and windows versions Bevy's renderer uses, so the raw
 # D3D12 types line up with wgpu-hal's.
 wgpu = "29"
-# Reports to the editor are JSON lines.
+# Commands from the editor and reports to it are JSON lines.
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
 # Reads scene files in tests the way Bevy's loader does.
 ron = "0.12"
-serde = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

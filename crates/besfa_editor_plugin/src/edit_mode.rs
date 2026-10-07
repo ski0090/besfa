@@ -4,16 +4,18 @@
 //! The editor sets `BESFA_EDIT_MODE` and the game starts with virtual time
 //! paused: Startup systems build the scene, `Update` sees no time pass and
 //! `FixedUpdate` does not run. The editor writes one command per line to
-//! stdin: `play` unpauses once, `select <id>` picks the entity that `inspect`
-//! reports, `select` alone clears it and `save` writes the scene file. The
+//! stdin, a JSON object such as `{"command":"play"}`; see [`Command`]. The
 //! editor ends a play session by killing the process, which resets the scene.
 
 use std::sync::{Mutex, PoisonError, mpsc};
 
 use bevy::prelude::*;
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::{
-    inspect::Selected,
+    edit::{self, SpawnKind},
+    inspect::{Selected, report_saved, select},
     scene::{SCENE_PATH, save, scene_file},
 };
 
@@ -55,7 +57,46 @@ fn pause(mut time: ResMut<Time<Virtual>>) {
     time.pause();
 }
 
-/// Exclusive, because saving reads the whole world.
+/// One line from the editor. Entities are the ids `inspect` reports, and
+/// components their reflected type paths.
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(tag = "command", rename_all = "snake_case")]
+enum Command {
+    /// Unpauses virtual time once, so a game that pauses itself stays paused.
+    Play,
+    /// Picks the entity whose components `inspect` reports; no id clears it.
+    Select {
+        id: Option<u64>,
+    },
+    /// Writes the scene file and reports whether that worked.
+    Save,
+    Set {
+        id: u64,
+        component: String,
+        value: Value,
+    },
+    Insert {
+        id: u64,
+        component: String,
+    },
+    Remove {
+        id: u64,
+        component: String,
+    },
+    /// Spawns a scene entity and selects it.
+    Spawn {
+        kind: SpawnKind,
+    },
+    /// Copies an entity and selects the copy.
+    Duplicate {
+        id: u64,
+    },
+    Despawn {
+        id: u64,
+    },
+}
+
+/// Exclusive, because commands change and save the whole world.
 fn run_commands(world: &mut World) {
     let lines: Vec<String> = {
         let commands = world.resource::<EditorCommands>();
@@ -63,26 +104,61 @@ fn run_commands(world: &mut World) {
         receiver.try_iter().collect()
     };
     for line in lines {
-        let line = line.trim();
-        let (command, argument) = line.split_once(' ').unwrap_or((line, ""));
-        match command {
-            // Unpauses once per request, so a game that pauses itself stays paused.
-            "play" => {
-                world.resource_mut::<Time<Virtual>>().unpause();
-                info!("Playing.");
-            }
-            // An id the editor got from `inspect`; anything else clears.
-            "select" => {
-                world.resource_mut::<Selected>().0 =
-                    argument.trim().parse().ok().and_then(Entity::try_from_bits);
-            }
-            "save" => match save(world, &scene_file()) {
-                Ok(()) => info!("Saved {SCENE_PATH}"),
-                Err(error) => error!("Could not save {SCENE_PATH}: {error}"),
-            },
-            _ => warn!("Unknown editor command: {line}"),
+        match serde_json::from_str(&line) {
+            Ok(command) => run(world, command),
+            Err(error) => warn!("Unknown editor command {line}: {error}"),
         }
     }
+}
+
+fn run(world: &mut World, command: Command) {
+    let result = match command {
+        Command::Play => {
+            world.resource_mut::<Time<Virtual>>().unpause();
+            info!("Playing.");
+            Ok(())
+        }
+        Command::Select { id } => {
+            world.resource_mut::<Selected>().0 = id.and_then(Entity::try_from_bits);
+            Ok(())
+        }
+        Command::Save => {
+            let result = save(world, &scene_file());
+            match &result {
+                Ok(()) => info!("Saved {SCENE_PATH}"),
+                Err(error) => error!("Could not save {SCENE_PATH}: {error}"),
+            }
+            report_saved(result.err());
+            return;
+        }
+        Command::Set {
+            id,
+            component,
+            value,
+        } => entity(id).and_then(|entity| edit::set(world, entity, &component, &value)),
+        Command::Insert { id, component } => {
+            entity(id).and_then(|entity| edit::insert(world, entity, &component))
+        }
+        Command::Remove { id, component } => {
+            entity(id).and_then(|entity| edit::remove(world, entity, &component))
+        }
+        Command::Spawn { kind } => {
+            let entity = edit::spawn(world, kind);
+            select(world, Some(entity));
+            Ok(())
+        }
+        Command::Duplicate { id } => entity(id)
+            .and_then(|entity| edit::duplicate(world, entity))
+            .map(|copy| select(world, Some(copy))),
+        Command::Despawn { id } => entity(id).and_then(|entity| edit::despawn(world, entity)),
+    };
+    if let Err(error) = result {
+        error!("Could not apply the editor's change: {error}");
+    }
+}
+
+fn entity(id: u64) -> Result<Entity, String> {
+    Entity::try_from_bits(id).ok_or_else(|| format!("{id} is not an entity id"))
 }
 
 #[cfg(test)]
@@ -110,7 +186,7 @@ mod tests {
         app.update();
         assert!(paused(&app));
 
-        editor.send("play".into()).unwrap();
+        editor.send(r#"{"command":"play"}"#.into()).unwrap();
         app.update();
         assert!(!paused(&app));
 
@@ -125,12 +201,62 @@ mod tests {
         let (mut app, editor) = editor_app();
         let cube = app.world_mut().spawn_empty().id();
 
-        editor.send(format!("select {}", cube.to_bits())).unwrap();
+        editor
+            .send(format!(r#"{{"command":"select","id":{}}}"#, cube.to_bits()))
+            .unwrap();
         app.update();
         assert_eq!(app.world().resource::<Selected>().0, Some(cube));
 
-        editor.send("select".into()).unwrap();
+        editor.send(r#"{"command":"select"}"#.into()).unwrap();
         app.update();
         assert_eq!(app.world().resource::<Selected>().0, None);
+    }
+
+    #[test]
+    fn reads_every_command() {
+        let command = |line: &str| serde_json::from_str::<Command>(line).unwrap();
+
+        assert_eq!(
+            command(r#"{"command":"set","id":4,"component":"a::B<c::D, e::F>","value":{"x":1}}"#),
+            Command::Set {
+                id: 4,
+                component: "a::B<c::D, e::F>".into(),
+                value: serde_json::json!({ "x": 1 }),
+            }
+        );
+        assert_eq!(
+            command(r#"{"command":"spawn","kind":"cube"}"#),
+            Command::Spawn {
+                kind: SpawnKind::Cube
+            }
+        );
+        assert_eq!(command(r#"{"command":"save"}"#), Command::Save);
+        assert!(serde_json::from_str::<Command>("play").is_err());
+    }
+
+    #[test]
+    fn spawns_and_selects_from_a_command() {
+        let (mut app, editor) = editor_app();
+        app.register_type::<Transform>();
+
+        editor
+            .send(r#"{"command":"spawn","kind":"empty"}"#.into())
+            .unwrap();
+        app.update();
+
+        let spawned = app.world().resource::<Selected>().0.expect("selected");
+        assert_eq!(app.world().get::<Name>(spawned).unwrap().as_str(), "Entity");
+        let set = serde_json::json!({
+            "command": "set",
+            "id": spawned.to_bits(),
+            "component": "bevy_transform::components::transform::Transform",
+            "value": { "translation": [1, 2, 3] },
+        });
+        editor.send(set.to_string()).unwrap();
+        app.update();
+        assert_eq!(
+            app.world().get::<Transform>(spawned).unwrap().translation,
+            Vec3::new(1.0, 2.0, 3.0)
+        );
     }
 }

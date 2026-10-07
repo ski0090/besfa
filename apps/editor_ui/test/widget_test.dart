@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:editor_ui/app/app.dart';
@@ -13,6 +12,8 @@ import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
 import 'package:editor_ui/pages/project_editor/ui/project_editor_page.dart';
 import 'package:editor_ui/shared/process/cli_process.dart';
 import 'package:editor_ui/widgets/scene_hierarchy/ui/scene_hierarchy_panel.dart';
+
+import 'support/editor_harness.dart';
 
 void main() {
   late Directory dir;
@@ -35,7 +36,7 @@ void main() {
   testWidgets('creates a project and opens it in the editor', (
     WidgetTester tester,
   ) async {
-    _mockEditorChannels(tester);
+    mockEditorChannels(tester);
 
     await tester.pumpWidget(
       BesfaEditorApp(
@@ -67,7 +68,7 @@ void main() {
   testWidgets('the edit session waits for the Bevy prebuild', (
     WidgetTester tester,
   ) async {
-    _mockEditorChannels(tester);
+    mockEditorChannels(tester);
     final prebuild = BevyPrebuild();
     final launches = <Map<String, String>>[];
     await tester.pumpWidget(
@@ -108,29 +109,15 @@ void main() {
   testWidgets('selecting an entity shows what the game reports about it', (
     WidgetTester tester,
   ) async {
-    _mockEditorChannels(tester);
-    final game = _FakeGame();
-    late void Function(String line) output;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ProjectEditorPage(
-          project: Project(dir.path),
-          startGame: (_, {required environment, required onOutput}) async {
-            output = onOutput;
-            return game;
-          },
-        ),
-      ),
-    );
-    await tester.pump();
+    final (game, output) = await openEditor(tester, dir);
     output(
       '@besfa {"type":"systems","crate":"demo_game","systems":['
       '{"schedule":"Update","name":"demo_game::spin"}]}',
     );
     output(
       '@besfa {"type":"entities","entities":['
-      '{"id":4294967295,"name":"Cube","parent":null},'
-      '{"id":4294967294,"name":null,"parent":4294967295}]}',
+      '{"id":4294967295,"name":"Cube","parent":null,"scene":true},'
+      '{"id":4294967294,"name":null,"parent":4294967295,"scene":false}]}',
     );
     output('INFO demo_game: hello');
     await tester.pump();
@@ -148,32 +135,33 @@ void main() {
     );
     await tester.tap(cubeRow);
     await tester.pump();
-    expect(game.sent, ['select 4294967295']);
+    expect(game.commands, [
+      {'command': 'select', 'id': 4294967295},
+    ]);
 
     output(
       '@besfa {"type":"entity","id":4294967295,"components":['
       '{"name":"Transform","path":"bevy_transform::components::transform::Transform",'
-      '"mutable":true,"required_by":null,"value":{"translation":[0.0,1.0,0.0]}},'
-      '{"name":"Spin","path":"demo_game::Spin","mutable":true,"required_by":null,"value":null},'
+      '"mutable":true,"required_by":null,"saved":true,"value":{"translation":[0.0,1.0,0.0]}},'
+      '{"name":"Spin","path":"demo_game::Spin","mutable":true,"required_by":null,"saved":true,"value":null},'
       '{"name":"GlobalTransform","path":"bevy_transform::components::global_transform::GlobalTransform",'
-      '"mutable":true,"required_by":"Transform","value":"opaque"}]}',
+      '"mutable":true,"required_by":"Transform","saved":false,"value":"opaque"}]}',
     );
     await tester.pumpAndSettle();
 
     expect(find.text('Spin'), findsOneWidget);
     expect(find.text('no Reflect'), findsOneWidget);
+    // Groups with saved components start open.
     expect(find.text('bevy_transform (2)'), findsOneWidget);
-    // Bevy's crates start collapsed.
-    expect(find.text('Transform'), findsNothing);
-    await tester.tap(find.text('bevy_transform (2)'));
-    await tester.pumpAndSettle();
     expect(find.text('Transform'), findsOneWidget);
+    expect(find.text('translation'), findsOneWidget);
     expect(find.text('required by Transform'), findsOneWidget);
-    expect(find.textContaining('"translation"'), findsOneWidget);
+    expect(find.text('computed'), findsOneWidget);
+    expect(find.text('opaque'), findsOneWidget);
 
     await tester.tap(cubeRow);
     await tester.pump();
-    expect(game.sent.last, 'select');
+    expect(game.commands.last, {'command': 'select', 'id': null});
     expect(find.text('Select an entity in the Hierarchy'), findsOneWidget);
 
     // The game writes the scene file on request.
@@ -181,7 +169,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Save scene'));
     await tester.pumpAndSettle();
-    expect(game.sent.last, 'save');
+    expect(game.commands.last, {'command': 'save'});
 
     // The stopped game's last lines arrive after the page is gone.
     await tester.pumpWidget(const SizedBox());
@@ -192,7 +180,7 @@ void main() {
   testWidgets('updates the plugin from the toolbar and relaunches the game', (
     WidgetTester tester,
   ) async {
-    _mockEditorChannels(tester);
+    mockEditorChannels(tester);
     const old = 'aaaaaaa1111111111111111111111111111111111';
     const latest = 'bbbbbbb2222222222222222222222222222222222';
     final lock = File('${dir.path}/Cargo.lock');
@@ -215,7 +203,7 @@ void main() {
           },
           startGame: (_, {required environment, required onOutput}) async {
             launches++;
-            return _FakeGame();
+            return FakeGame();
           },
         ),
       ),
@@ -270,38 +258,6 @@ void main() {
     expect(find.text('No recent projects'), findsOneWidget);
     expect(recent.load(), isEmpty);
   });
-}
-
-void _mockEditorChannels(WidgetTester tester) {
-  final messenger = tester.binding.defaultBinaryMessenger;
-  messenger.setMockMethodCallHandler(
-    const MethodChannel('window_manager'),
-    (call) async => call.method == 'isMaximized' ? false : null,
-  );
-  messenger.setMockMethodCallHandler(
-    const MethodChannel('besfa/viewport'),
-    (call) async => throw PlatformException(code: 'unavailable'),
-  );
-}
-
-/// A game that runs until stopped and records what the editor sends it.
-class _FakeGame implements CliProcess {
-  final sent = <String>[];
-  final _exit = Completer<int>();
-
-  @override
-  Future<int> get exitCode => _exit.future;
-
-  @override
-  void send(String line) => sent.add(line);
-
-  /// Exits the way a killed process does.
-  @override
-  Future<void> stop() async {
-    if (!_exit.isCompleted) {
-      _exit.complete(1);
-    }
-  }
 }
 
 class _FakeProjectCreator implements ProjectCreator {

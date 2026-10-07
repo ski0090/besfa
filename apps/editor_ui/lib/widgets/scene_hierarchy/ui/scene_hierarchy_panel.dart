@@ -3,17 +3,36 @@ import 'package:flutter/material.dart';
 import 'package:editor_ui/entities/scene/model/scene.dart';
 import 'package:editor_ui/shared/ui/panel.dart';
 
+/// What the add menu spawns, by the `kind` the game takes.
+const spawnKinds = {
+  'empty': 'Empty',
+  'cube': 'Cube',
+  'sphere': 'Sphere',
+  'plane': 'Plane',
+  'light': 'Light',
+  'camera': 'Camera',
+};
+
 /// The game's entities as a tree; tapping one selects it, tapping the
-/// selected one clears the selection.
+/// selected one clears the selection. With the callbacks, the header adds,
+/// duplicates and deletes entities.
 class SceneHierarchyPanel extends StatelessWidget {
   const SceneHierarchyPanel({
     super.key,
     required this.scene,
     required this.onSelect,
+    this.onSpawn,
+    this.onDuplicate,
+    this.onDelete,
   });
 
   final Scene scene;
   final ValueChanged<int?> onSelect;
+
+  /// A kind from [spawnKinds].
+  final ValueChanged<String>? onSpawn;
+  final VoidCallback? onDuplicate;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -21,8 +40,35 @@ class SceneHierarchyPanel extends StatelessWidget {
       listenable: scene,
       builder: (context, _) {
         final rows = _treeRows(scene.entities);
+        final hasSelection = scene.selectedEntity != null;
         return Panel(
           title: 'Hierarchy',
+          actions: [
+            if (onSpawn case final onSpawn?)
+              PopupMenuButton<String>(
+                tooltip: 'Add entity',
+                icon: const Icon(Icons.add, size: 16),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 120),
+                onSelected: onSpawn,
+                itemBuilder: (context) => [
+                  for (final MapEntry(:key, :value) in spawnKinds.entries)
+                    PopupMenuItem(value: key, height: 32, child: Text(value)),
+                ],
+              ),
+            if (onDuplicate != null)
+              PanelAction(
+                icon: Icons.copy,
+                tooltip: 'Duplicate (Ctrl+D)',
+                onPressed: hasSelection ? onDuplicate : null,
+              ),
+            if (onDelete != null)
+              PanelAction(
+                icon: Icons.delete_outline,
+                tooltip: 'Delete (Delete)',
+                onPressed: hasSelection ? onDelete : null,
+              ),
+          ],
           child: ListView.builder(
             itemCount: rows.length,
             itemBuilder: (context, index) {
@@ -40,7 +86,11 @@ class SceneHierarchyPanel extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 12,
-                      color: entity.name == null ? panelMutedText : panelText,
+                      // Entities the game spawns while running are not saved.
+                      fontStyle: entity.scene ? null : FontStyle.italic,
+                      color: entity.name == null || !entity.scene
+                          ? panelMutedText
+                          : panelText,
                     ),
                   ),
                 ),

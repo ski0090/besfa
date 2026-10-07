@@ -4,13 +4,28 @@ import 'package:flutter/material.dart';
 
 import 'package:editor_ui/entities/scene/model/scene.dart';
 import 'package:editor_ui/shared/ui/panel.dart';
+import 'package:editor_ui/widgets/entity_inspector/ui/value_editor.dart';
+
+const _transformPath = 'bevy_transform::components::transform::Transform';
 
 /// The selected entity's components, and every system of the game, grouped
-/// by crate with the game's own crate first.
+/// by crate with the game's own crate first. With the callbacks, component
+/// values become fields and components can be added and removed.
 class EntityInspectorPanel extends StatelessWidget {
-  const EntityInspectorPanel({super.key, required this.scene});
+  const EntityInspectorPanel({
+    super.key,
+    required this.scene,
+    this.onSet,
+    this.onInsert,
+    this.onRemove,
+  });
 
   final Scene scene;
+
+  /// A component's type path and its whole new value.
+  final void Function(String component, Object? value)? onSet;
+  final ValueChanged<String>? onInsert;
+  final ValueChanged<String>? onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -18,15 +33,13 @@ class EntityInspectorPanel extends StatelessWidget {
       listenable: scene,
       builder: (context, _) {
         final selected = scene.selected;
-        final entity = scene.entities
-            .where((entity) => entity.id == selected)
-            .firstOrNull;
+        final entity = scene.selectedEntity;
         return Panel(
           title: 'Inspector',
           child: ListView(
             children: [
               Padding(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
                 child: Text(
                   selected == null
                       ? 'Select an entity in the Hierarchy'
@@ -40,20 +53,49 @@ class EntityInspectorPanel extends StatelessWidget {
                   ),
                 ),
               ),
+              if (entity != null && !entity.scene)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: _Tag(
+                    'Spawned by the game while it runs; Save scene skips it.',
+                  ),
+                ),
               if (selected != null) ...[
                 const _SectionTitle('Components'),
                 ..._crateGroups(
                   scene.components,
                   (component) => component.crate,
                   scene.crate,
-                  (component) => _ComponentTile(component),
+                  // Groups that hold something the scene file keeps.
+                  (components) =>
+                      components.any((component) => component.saved),
+                  (component) => _ComponentTile(
+                    component,
+                    // A new entity starts with fresh fields.
+                    key: ValueKey('$selected/${component.path}'),
+                    onSet: onSet,
+                    onRemove: onRemove,
+                  ),
                 ),
+                if (onInsert != null && entity != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('Add component'),
+                        onPressed: () => _addComponent(context),
+                      ),
+                    ),
+                  ),
               ],
               const _SectionTitle('Systems'),
               ..._crateGroups(
                 scene.systems,
                 (system) => system.crate,
                 scene.crate,
+                (_) => false,
                 (system) => _SystemRow(system),
               ),
             ],
@@ -62,13 +104,29 @@ class EntityInspectorPanel extends StatelessWidget {
       },
     );
   }
+
+  Future<void> _addComponent(BuildContext context) async {
+    final present = {for (final component in scene.components) component.path};
+    final path = await showDialog<String>(
+      context: context,
+      builder: (context) => _AddComponentDialog([
+        for (final type in scene.addable)
+          if (!present.contains(type.path)) type,
+      ]),
+    );
+    if (path != null) {
+      onInsert!(path);
+    }
+  }
 }
 
-/// One collapsible group per crate, the game's crate first and expanded.
+/// One collapsible group per crate, the game's crate first. The game's
+/// crate and groups [expand] picks start open.
 List<Widget> _crateGroups<T>(
   List<T> items,
   String Function(T) crateOf,
   String? gameCrate,
+  bool Function(List<T>) expand,
   Widget Function(T) build,
 ) {
   final groups = <String, List<T>>{};
@@ -87,7 +145,7 @@ List<Widget> _crateGroups<T>(
     for (final crate in crates)
       ExpansionTile(
         key: ValueKey(crate),
-        initiallyExpanded: crate == gameCrate,
+        initiallyExpanded: crate == gameCrate || expand(groups[crate]!),
         dense: true,
         tilePadding: const EdgeInsets.symmetric(horizontal: 12),
         childrenPadding: const EdgeInsets.only(bottom: 4),
@@ -125,45 +183,73 @@ class _SectionTitle extends StatelessWidget {
 }
 
 class _ComponentTile extends StatelessWidget {
-  const _ComponentTile(this.component);
+  const _ComponentTile(
+    this.component, {
+    super.key,
+    required this.onSet,
+    required this.onRemove,
+  });
 
   final EntityComponent component;
+  final void Function(String component, Object? value)? onSet;
+  final ValueChanged<String>? onRemove;
 
   @override
   Widget build(BuildContext context) {
     final value = component.value;
+    final onSet = this.onSet;
+    final onRemove = this.onRemove;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 4, 12, 4),
+      padding: const EdgeInsets.fromLTRB(24, 4, 8, 4),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Wrap(
-            spacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          Row(
             children: [
-              Text(
-                component.name,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: panelText,
+              Expanded(
+                child: Wrap(
+                  spacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      component.name,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: component.saved ? panelText : panelMutedText,
+                      ),
+                    ),
+                    if (component.requiredBy case final requiredBy?)
+                      _Tag('required by $requiredBy'),
+                    if (!component.saved) const _Tag('computed'),
+                    if (!component.mutable) const _Tag('immutable'),
+                    if (value == null) const _Tag('no Reflect'),
+                  ],
                 ),
               ),
-              if (component.requiredBy case final requiredBy?)
-                _Tag('required by $requiredBy'),
-              if (!component.mutable) const _Tag('immutable'),
-              if (value == null) const _Tag('no Reflect'),
+              if (onRemove != null && component.saved)
+                PanelAction(
+                  icon: Icons.close,
+                  tooltip: 'Remove component',
+                  onPressed: () => onRemove(component.path),
+                ),
             ],
           ),
           if (value != null)
-            SelectableText(
-              _pretty(value),
-              style: const TextStyle(
-                fontFamily: 'Consolas',
-                fontSize: 11,
-                color: panelText,
-              ),
-            ),
+            component.editable && onSet != null
+                ? ValueEditor(
+                    value: value,
+                    eulerRotation: component.path == _transformPath,
+                    onChanged: (value) => onSet(component.path, value),
+                  )
+                : SelectableText(
+                    _pretty(value),
+                    style: const TextStyle(
+                      fontFamily: 'Consolas',
+                      fontSize: 11,
+                      color: panelMutedText,
+                    ),
+                  ),
         ],
       ),
     );
@@ -214,6 +300,70 @@ class _SystemRow extends StatelessWidget {
         ),
         style: const TextStyle(fontSize: 11, color: panelText),
       ),
+    );
+  }
+}
+
+/// Picks a component type by name; pops with its type path.
+class _AddComponentDialog extends StatefulWidget {
+  const _AddComponentDialog(this.types);
+
+  final List<ComponentType> types;
+
+  @override
+  State<_AddComponentDialog> createState() => _AddComponentDialogState();
+}
+
+class _AddComponentDialogState extends State<_AddComponentDialog> {
+  var _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _query.toLowerCase();
+    final types = [
+      for (final type in widget.types)
+        if (type.path.toLowerCase().contains(query)) type,
+    ];
+    return AlertDialog(
+      title: const Text('Add component'),
+      content: SizedBox(
+        width: 420,
+        height: 420,
+        child: Column(
+          children: [
+            TextField(
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'Search components',
+                prefixIcon: Icon(Icons.search, size: 18),
+                isDense: true,
+              ),
+              onChanged: (query) => setState(() => _query = query),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView.builder(
+                itemCount: types.length,
+                itemBuilder: (context, index) {
+                  final type = types[index];
+                  return ListTile(
+                    dense: true,
+                    title: Text(type.name),
+                    subtitle: Text(type.crate),
+                    onTap: () => Navigator.of(context).pop(type.path),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+      ],
     );
   }
 }

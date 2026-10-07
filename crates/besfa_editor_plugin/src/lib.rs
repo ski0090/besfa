@@ -16,6 +16,7 @@ use bevy::{
     winit::WinitPlugin,
 };
 
+mod edit;
 mod edit_mode;
 mod inspect;
 mod scene;

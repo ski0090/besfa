@@ -35,19 +35,43 @@ pub const SCENE_PATH: &str = "scenes/main.scn.ron";
 #[derive(Component)]
 pub struct SceneEntity;
 
-/// A mesh the plugin builds from a primitive shape when the scene loads.
+/// A mesh the plugin builds from a primitive shape, and rebuilds when the
+/// shape changes.
 #[derive(Component, Reflect, Clone, Debug, PartialEq)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
 pub enum MeshShape {
     Cuboid { size: Vec3 },
     Sphere { radius: f32 },
     Plane { size: Vec2 },
 }
 
-/// A standard material of one color the plugin builds when the scene loads.
+impl Default for MeshShape {
+    fn default() -> Self {
+        Self::Cuboid { size: Vec3::ONE }
+    }
+}
+
+impl MeshShape {
+    fn mesh(&self) -> Mesh {
+        match *self {
+            Self::Cuboid { size } => Cuboid::from_size(size).into(),
+            Self::Sphere { radius } => Sphere::new(radius).into(),
+            Self::Plane { size } => Plane3d::default().mesh().size(size.x, size.y).into(),
+        }
+    }
+}
+
+/// A standard material of one color the plugin builds, and rebuilds when
+/// the color changes.
 #[derive(Component, Reflect, Clone, Debug, PartialEq)]
-#[reflect(Component)]
+#[reflect(Component, Default)]
 pub struct MeshColor(pub Color);
+
+impl Default for MeshColor {
+    fn default() -> Self {
+        Self(Color::srgb(0.8, 0.8, 0.8))
+    }
+}
 
 pub(crate) struct ScenePlugin;
 
@@ -57,8 +81,10 @@ impl Plugin for ScenePlugin {
             .register_type::<MeshColor>()
             .add_systems(Startup, load)
             .add_systems(PreUpdate, mark_loaded)
-            .add_observer(build_mesh)
-            .add_observer(build_material);
+            // After SpawnScene, so a loaded scene gets its meshes this frame.
+            .add_systems(PostUpdate, (build_meshes, build_materials))
+            .add_observer(drop_mesh)
+            .add_observer(drop_material);
     }
 }
 
@@ -101,35 +127,43 @@ fn mark_loaded(
     info!("Loaded {SCENE_PATH}");
 }
 
-// ponytail: builds the mesh once on Add; rebuild on Changed<MeshShape> once
-// the editor edits shapes.
-fn build_mesh(
-    add: On<Add, MeshShape>,
-    shapes: Query<&MeshShape>,
+/// Gives each new or changed shape a new mesh. Replacing `Mesh3d` drops the
+/// old handle, which frees the old mesh, and a duplicated entity never
+/// shares its mesh with the original.
+fn build_meshes(
+    shapes: Query<(Entity, &MeshShape), Changed<MeshShape>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
-    let Ok(shape) = shapes.get(add.entity) else {
-        return;
-    };
-    let mesh: Mesh = match *shape {
-        MeshShape::Cuboid { size } => Cuboid::from_size(size).into(),
-        MeshShape::Sphere { radius } => Sphere::new(radius).into(),
-        MeshShape::Plane { size } => Plane3d::default().mesh().size(size.x, size.y).into(),
-    };
-    commands.entity(add.entity).insert(Mesh3d(meshes.add(mesh)));
+    for (entity, shape) in &shapes {
+        commands
+            .entity(entity)
+            .insert(Mesh3d(meshes.add(shape.mesh())));
+    }
 }
 
-fn build_material(
-    add: On<Add, MeshColor>,
-    colors: Query<&MeshColor>,
+fn build_materials(
+    colors: Query<(Entity, &MeshColor), Changed<MeshColor>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
-    if let Ok(color) = colors.get(add.entity) {
+    for (entity, color) in &colors {
         commands
-            .entity(add.entity)
+            .entity(entity)
             .insert(MeshMaterial3d(materials.add(color.0)));
+    }
+}
+
+/// Removing the shape removes the mesh built from it.
+fn drop_mesh(remove: On<Remove, MeshShape>, mut commands: Commands) {
+    if let Ok(mut entity) = commands.get_entity(remove.entity) {
+        entity.try_remove::<Mesh3d>();
+    }
+}
+
+fn drop_material(remove: On<Remove, MeshColor>, mut commands: Commands) {
+    if let Ok(mut entity) = commands.get_entity(remove.entity) {
+        entity.try_remove::<MeshMaterial3d<StandardMaterial>>();
     }
 }
 
@@ -205,7 +239,7 @@ fn dynamic_world(world: &World, entities: &[Entity], registry: &TypeRegistry) ->
 /// does not make serializable, and the render target, which the editor
 /// points at its viewport after the camera spawns.
 // ponytail: what the template's entities carry; grow it as files show more.
-fn left_out(type_id: TypeId) -> bool {
+pub(crate) fn left_out(type_id: TypeId) -> bool {
     [
         TypeId::of::<SceneEntity>(),
         TypeId::of::<RenderTarget>(),
@@ -268,8 +302,9 @@ mod tests {
             .register_type::<MeshShape>()
             .register_type::<MeshColor>()
             .register_type::<Spin>()
-            .add_observer(build_mesh)
-            .add_observer(build_material);
+            .add_systems(Update, (build_meshes, build_materials))
+            .add_observer(drop_mesh)
+            .add_observer(drop_material);
         app
     }
 
@@ -350,10 +385,31 @@ mod tests {
             SceneEntity,
         ));
         app.update();
-        assert!(
-            app.world().get::<Mesh3d>(cube).is_some(),
-            "the shape builds a mesh"
+        let mesh = app
+            .world()
+            .get::<Mesh3d>(cube)
+            .expect("the shape builds a mesh")
+            .clone();
+        *app.world_mut().get_mut::<MeshShape>(cube).unwrap() = MeshShape::Sphere { radius: 1.0 };
+        app.update();
+        assert_ne!(
+            app.world().get::<Mesh3d>(cube),
+            Some(&mesh),
+            "a new shape builds a new mesh"
         );
+        *app.world_mut().get_mut::<MeshShape>(cube).unwrap() = MeshShape::default();
+        app.world_mut().entity_mut(cube).remove::<MeshColor>();
+        app.update();
+        assert!(
+            app.world()
+                .get::<MeshMaterial3d<StandardMaterial>>(cube)
+                .is_none(),
+            "removing the color removes the material"
+        );
+        app.world_mut()
+            .entity_mut(cube)
+            .insert(MeshColor(Color::srgb(0.55, 0.7, 1.0)));
+        app.update();
         let dir = std::env::temp_dir().join(format!("besfa-scene-{}", std::process::id()));
         let path = dir.join(SCENE_PATH);
 

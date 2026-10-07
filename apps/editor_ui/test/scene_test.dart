@@ -74,10 +74,45 @@ void main() {
   test('reset keeps the selection for the next game process', () {
     final scene = Scene()..select(7);
     scene.handle('@besfa {"type":"entities","entities":[{"id":7}]}');
+    scene.markDirty();
 
     scene.reset();
 
     expect(scene.entities, isEmpty);
     expect(scene.selected, 7);
+    expect(scene.dirty, isFalse, reason: 'the new process reads the file');
+  });
+
+  test('reads what the editor can change and what the game did', () {
+    final scene = Scene()..select(1);
+    scene.handle(
+      '@besfa {"type":"entity","id":1,"components":['
+      '{"name":"A","path":"a::A","mutable":true}]}',
+    );
+
+    scene.handle(
+      '@besfa {"type":"components","components":['
+      '{"name":"MeshShape","path":"besfa_editor_plugin::scene::MeshShape"}]}',
+    );
+    expect(scene.addable.single.crate, 'besfa_editor_plugin');
+
+    // The game re-reporting the same selection keeps the components.
+    scene.handle('@besfa {"type":"selected","id":1}');
+    expect(scene.components, hasLength(1));
+    scene.handle('@besfa {"type":"selected","id":9}');
+    expect(scene.selected, 9);
+    expect(scene.components, isEmpty);
+
+    scene.markDirty();
+    scene.handle('@besfa {"type":"saved","error":"denied"}');
+    expect(scene.dirty, isTrue, reason: 'a failed save keeps the mark');
+    scene.handle('@besfa {"type":"saved","error":null}');
+    expect(scene.dirty, isFalse);
+
+    scene.handle(
+      '@besfa {"type":"entities","entities":[{"id":9,"scene":false},{"id":3}]}',
+    );
+    expect(scene.selectedEntity!.scene, isFalse);
+    expect(scene.entities.last.scene, isTrue);
   });
 }

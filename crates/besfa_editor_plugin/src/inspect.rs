@@ -1,9 +1,11 @@
 //! Reports the world to the editor: the scene's entities, the selected
-//! entity's components, and every system.
+//! entity's components, every system, and the components the editor can add.
 //!
 //! A report is one stdout line: `@besfa ` and a JSON object with a `type`,
 //! which tells reports from the game's logs. Entities and the selected
-//! entity are reported when they change; systems once, before the game runs.
+//! entity are reported when they change; systems and addable components
+//! once, before the game runs. The game also reports a selection it made
+//! itself and the outcome of a save.
 
 use std::io::Write;
 
@@ -12,6 +14,7 @@ use bevy::{
         component::{ComponentId, ComponentInfo},
         entity_disabling::Disabled,
         query::{Allow, Or},
+        reflect::ReflectFromWorld,
         schedule::Schedules,
     },
     prelude::*,
@@ -19,9 +22,22 @@ use bevy::{
 };
 use serde_json::{Value, json};
 
-/// The entity the editor selected with `select <id>`.
+use crate::scene::{SceneEntity, left_out};
+
+/// The entity whose components are reported.
 #[derive(Resource, Default)]
 pub(crate) struct Selected(pub(crate) Option<Entity>);
+
+/// Selects `entity` from the game's side, telling the editor.
+pub(crate) fn select(world: &mut World, entity: Option<Entity>) {
+    world.resource_mut::<Selected>().0 = entity;
+    write(&json!({ "type": "selected", "id": entity.map(Entity::to_bits) }).to_string());
+}
+
+/// Tells the editor whether the scene file was written.
+pub(crate) fn report_saved(error: Option<String>) {
+    write(&json!({ "type": "saved", "error": error }).to_string());
+}
 
 pub(crate) struct InspectPlugin;
 
@@ -38,6 +54,7 @@ impl Plugin for InspectPlugin {
     // from `Last` on a system count change if a game needs that.
     fn cleanup(&self, app: &mut App) {
         write(&systems(app.world()).to_string());
+        write(&addable_components(app.world()).to_string());
     }
 }
 
@@ -70,7 +87,7 @@ fn report(world: &mut World, mut last_entities: Local<String>, mut last_entity: 
             json!({ "type": "entity", "id": entity.to_bits(), "components": components }),
         ),
         // Despawned; the entities report drops it as well.
-        None => world.resource_mut::<Selected>().0 = None,
+        None => select(world, None),
     }
 }
 
@@ -81,7 +98,7 @@ fn report(world: &mut World, mut last_entities: Local<String>, mut last_entity: 
 // would be needed once internal entities carry transforms.
 fn entities(world: &mut World) -> Value {
     let mut entities: Vec<_> = world
-        .query_filtered::<(Entity, Option<&Name>, Option<&ChildOf>), (
+        .query_filtered::<(Entity, Option<&Name>, Option<&ChildOf>, Has<SceneEntity>), (
             Or<(With<Name>, With<Transform>, With<ChildOf>)>,
             Allow<Disabled>,
         )>()
@@ -92,11 +109,13 @@ fn entities(world: &mut World) -> Value {
         .sort_unstable_by_key(|(entity, ..)| (entity.index_u32(), entity.generation().to_bits()));
     let entities: Vec<Value> = entities
         .iter()
-        .map(|(entity, name, parent)| {
+        .map(|(entity, name, parent, scene)| {
             json!({
                 "id": entity.to_bits(),
                 "name": name.map(Name::as_str),
                 "parent": parent.map(|parent| parent.parent().to_bits()),
+                // From the scene file or the editor; saving keeps it.
+                "scene": scene,
             })
         })
         .collect();
@@ -139,11 +158,30 @@ fn components(world: &World, entity: Entity) -> Option<Vec<Value>> {
                     ))
                     .unwrap_or_else(|_| Value::String(format!("{value:?}")))
                 });
+            // The registry's path is what `set` and the scene file use;
+            // the type name can differ from it.
+            let registration = info.type_id().and_then(|id| registry.get(id));
+            let path = registration.map_or_else(
+                || info.name().to_string(),
+                |registration| registration.type_info().type_path().to_string(),
+            );
+            let name = registration.map_or_else(
+                || info.name().shortname().to_string(),
+                |registration| {
+                    registration
+                        .type_info()
+                        .type_path_table()
+                        .short_path()
+                        .to_string()
+                },
+            );
             json!({
-                "name": info.name().shortname().to_string(),
-                "path": info.name().to_string(),
+                "name": name,
+                "path": path,
                 "mutable": info.mutable(),
                 "required_by": required_by(info.id()),
+                // Computed from other components; the scene file leaves it out.
+                "saved": info.type_id().is_some_and(|id| !left_out(id)),
                 "value": value,
             })
         })
@@ -181,6 +219,31 @@ fn system_names(schedule: &Schedule) -> Vec<String> {
             .map(|(_, system, _)| system.name().to_string())
             .collect(),
     }
+}
+
+/// Components the editor can add: reflected, with a default value, and not
+/// computed from other components.
+fn addable_components(world: &World) -> Value {
+    let registry = world.resource::<AppTypeRegistry>().read();
+    let mut components: Vec<(&str, &str)> = registry
+        .iter()
+        .filter(|registration| {
+            registration.data::<ReflectComponent>().is_some()
+                && (registration.data::<ReflectDefault>().is_some()
+                    || registration.data::<ReflectFromWorld>().is_some())
+                && !left_out(registration.type_id())
+        })
+        .map(|registration| {
+            let table = registration.type_info().type_path_table();
+            (table.short_path(), table.path())
+        })
+        .collect();
+    components.sort_unstable_by_key(|(_, path)| *path);
+    let components: Vec<Value> = components
+        .into_iter()
+        .map(|(name, path)| json!({ "name": name, "path": path }))
+        .collect();
+    json!({ "type": "components", "components": components })
 }
 
 /// The game's crate name as its type paths start: `my-game.exe` is `my_game::`.

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -77,7 +78,8 @@ const _viewportHeight = 720;
 /// viewport shows the scene as Startup built it, or playing. Stop ends play by
 /// relaunching the game in edit mode, which resets the scene and picks up code
 /// changes. In both states the game reports its entities, which the
-/// hierarchy and inspector panels show.
+/// hierarchy and inspector panels show and change through commands on its
+/// stdin, one JSON object per line.
 class _ProjectEditorPageState extends State<ProjectEditorPage> {
   final _logs = <String>[];
   final _scene = Scene();
@@ -97,6 +99,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_onKey);
     _readPluginRevisions();
     if (_prebuilding) {
       widget.prebuild!.addListener(_onPrebuildChanged);
@@ -107,6 +110,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKey);
     widget.prebuild?.removeListener(_onPrebuildChanged);
     _game?.stop();
     _viewport?.dispose();
@@ -197,11 +201,11 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
       return;
     }
     if (play) {
-      game.send('play');
+      game.send(jsonEncode({'command': 'play'}));
     }
-    // The scene is rebuilt from the same Startup, so the selection carries over.
+    // The scene is rebuilt from the same file, so the selection carries over.
     if (_scene.selected case final id?) {
-      game.send('select $id');
+      game.send(jsonEncode({'command': 'select', 'id': id}));
     }
     setState(() {
       _game = game;
@@ -219,6 +223,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   }
 
   /// Sent while cargo still builds, `play` waits in the pipe for the game.
+  /// Unsaved changes are saved first: Stop restarts from the file.
   void _play() {
     setState(() => _logs.clear());
     final game = _game;
@@ -227,14 +232,112 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
       _launch(play: true);
       return;
     }
-    game.send('play');
+    if (_scene.dirty) {
+      _save();
+    }
+    _send({'command': 'play'});
     setState(() => _playing = true);
+  }
+
+  void _send(Map<String, Object?> command) => _game?.send(jsonEncode(command));
+
+  /// Sends a command that changes the scene. Changes made while playing
+  /// end with the play session, so they do not count as unsaved.
+  void _edit(Map<String, Object?> command) {
+    _send(command);
+    if (!_playing) {
+      _scene.markDirty();
+    }
+  }
+
+  /// The game reports whether saving worked, which clears the dirty mark.
+  void _save() {
+    if (_game != null && !_playing) {
+      _send({'command': 'save'});
+    }
   }
 
   /// The game reports the selected entity's components back.
   void _select(int? id) {
     _scene.select(id);
-    _game?.send(id == null ? 'select' : 'select $id');
+    _send({'command': 'select', 'id': id});
+  }
+
+  void _duplicate() {
+    if (_scene.selectedEntity case final entity?) {
+      _edit({'command': 'duplicate', 'id': entity.id});
+    }
+  }
+
+  void _delete() {
+    if (_scene.selectedEntity case final entity?) {
+      _edit({'command': 'despawn', 'id': entity.id});
+    }
+  }
+
+  /// Scene shortcuts. Delete and Ctrl+D leave text fields alone, and a
+  /// focused field is committed before Ctrl+S saves.
+  bool _onKey(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        !mounted ||
+        !(ModalRoute.of(context)?.isCurrent ?? false)) {
+      return false;
+    }
+    final control = HardwareKeyboard.instance.isControlPressed;
+    final key = event.logicalKey;
+    if (control && key == LogicalKeyboardKey.keyS) {
+      // Unfocusing commits the field in a microtask; save after it.
+      FocusManager.instance.primaryFocus?.unfocus();
+      Future.microtask(_save);
+      return true;
+    }
+    final typing =
+        FocusManager.instance.primaryFocus?.context
+            ?.findAncestorWidgetOfExactType<EditableText>() !=
+        null;
+    if (typing) {
+      return false;
+    }
+    if (control && key == LogicalKeyboardKey.keyD) {
+      _duplicate();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.delete) {
+      _delete();
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _leave() async {
+    if (_scene.dirty) {
+      final discard = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Discard unsaved changes?'),
+          content: const Text(
+            'The scene has changes that are not saved to '
+            'scenes/main.scn.ron.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Discard'),
+            ),
+          ],
+        ),
+      );
+      if (discard != true) {
+        return;
+      }
+    }
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   /// Moves the project's plugin to the latest commit and restarts the edit
@@ -327,15 +430,16 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
                         menuChildren: [
                           MenuItemButton(
                             leadingIcon: const Icon(Icons.save, size: 16),
+                            trailingIcon: const Text('Ctrl+S'),
                             // Only the edit session's scene is worth keeping.
                             onPressed: _game != null && !_playing
-                                ? () => _game!.send('save')
+                                ? _save
                                 : null,
                             child: const Text('Save scene'),
                           ),
                           MenuItemButton(
                             leadingIcon: const Icon(Icons.arrow_back, size: 16),
-                            onPressed: () => Navigator.of(context).pop(),
+                            onPressed: _leave,
                             child: const Text('Back to Project Hub'),
                           ),
                         ],
@@ -354,7 +458,13 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
               // Centered on the whole bar; ignores pointers so dragging it
               // still moves the window.
               IgnorePointer(
-                child: Center(child: _ProjectTitle(widget.project.name)),
+                child: Center(
+                  child: ListenableBuilder(
+                    listenable: _scene,
+                    builder: (context, _) =>
+                        _ProjectTitle(widget.project.name, dirty: _scene.dirty),
+                  ),
+                ),
               ),
             ],
           ),
@@ -380,7 +490,14 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
               children: [
                 SizedBox(
                   width: 220,
-                  child: SceneHierarchyPanel(scene: _scene, onSelect: _select),
+                  child: SceneHierarchyPanel(
+                    scene: _scene,
+                    onSelect: _select,
+                    onSpawn: (kind) =>
+                        _edit({'command': 'spawn', 'kind': kind}),
+                    onDuplicate: _duplicate,
+                    onDelete: _delete,
+                  ),
                 ),
                 const _PanelDivider(),
                 Expanded(
@@ -399,7 +516,25 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
                 const _PanelDivider(),
                 SizedBox(
                   width: 320,
-                  child: EntityInspectorPanel(scene: _scene),
+                  child: EntityInspectorPanel(
+                    scene: _scene,
+                    onSet: (component, value) => _edit({
+                      'command': 'set',
+                      'id': _scene.selected,
+                      'component': component,
+                      'value': value,
+                    }),
+                    onInsert: (component) => _edit({
+                      'command': 'insert',
+                      'id': _scene.selected,
+                      'component': component,
+                    }),
+                    onRemove: (component) => _edit({
+                      'command': 'remove',
+                      'id': _scene.selected,
+                      'component': component,
+                    }),
+                  ),
                 ),
               ],
             ),
@@ -514,9 +649,12 @@ class _LogPanel extends StatelessWidget {
 }
 
 class _ProjectTitle extends StatelessWidget {
-  const _ProjectTitle(this.name);
+  const _ProjectTitle(this.name, {required this.dirty});
 
   final String name;
+
+  /// The scene has changes that are not saved.
+  final bool dirty;
 
   @override
   Widget build(BuildContext context) {
@@ -531,7 +669,7 @@ class _ProjectTitle extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
-        name,
+        dirty ? '$name *' : name,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontSize: 12, color: Color(0xFFB3BBC8)),
       ),

@@ -38,7 +38,7 @@ sequenceDiagram
     Bridge-->>UI: Editor state update
 ```
 
-아직 `besfa_protocol`은 없다. 지금은 게임의 표준 입출력이 유일한 채널이다. 에디터는 게임의 stdin에 한 줄 명령을 쓴다: 편집 상태에서 실행 상태로 넘기는 `play`, 엔티티를 고르는 `select <id>`, 선택을 지우는 `select`, 씬 파일을 쓰는 `save`. 게임은 stdout에 `@besfa ` 접두어와 JSON 객체 한 줄로 보고하고, 에디터는 이 접두어로 보고와 로그를 구분한다. `type`이 `entities`인 씬 엔티티 목록(id, 이름, 부모; `Name`이나 `Transform`이 있는 엔티티와 그 자식)과 `entity`인 선택한 엔티티의 컴포넌트는 바뀔 때마다, `systems`인 스케줄별 시스템 목록은 게임이 시작하기 전에 한 번 보낸다. 실행 상태를 끝낼 때는 프로세스를 종료하고 편집 상태로 다시 실행한다.
+아직 `besfa_protocol`은 없다. 지금은 게임의 표준 입출력이 유일한 채널이고, 양쪽 모두 한 줄에 JSON 객체 하나를 쓴다. 에디터는 게임의 stdin에 `command`로 이름 붙인 명령을 쓴다: 편집 상태에서 실행 상태로 넘기는 `play`, 엔티티를 고르거나(`id`) 선택을 지우는 `select`, 씬 파일을 쓰는 `save`, 컴포넌트 값을 통째로 바꾸는 `set`(`id`, `component`, `value`), 기본값으로 붙이는 `insert`와 떼는 `remove`(`id`, `component`), 씬 엔티티를 만드는 `spawn`(`kind`: `empty`, `cube`, `sphere`, `plane`, `light`, `camera`), `duplicate`와 `despawn`(`id`). 엔티티 `id`는 게임이 보고한 Bevy 엔티티 비트이고, `component`는 Reflect 타입 경로(씬 파일과 같은 이름)다. 값은 게임이 보고한 JSON 모양 그대로이며, 빠진 필드는 그 타입의 기본값이 된다. 게임은 stdout에 `@besfa ` 접두어와 JSON 객체 한 줄로 보고하고, 에디터는 이 접두어로 보고와 로그를 구분한다. `type`이 `entities`인 씬 엔티티 목록(id, 이름, 부모, 씬 파일에 저장되는지; `Name`이나 `Transform`이 있는 엔티티와 그 자식)과 `entity`인 선택한 엔티티의 컴포넌트(계산되는 것인지 포함)는 바뀔 때마다, `systems`인 스케줄별 시스템 목록과 `components`인 추가할 수 있는 컴포넌트 목록은 게임이 시작하기 전에 한 번 보낸다. 게임이 스스로 선택을 바꾸면(`spawn`, `duplicate`, 선택한 엔티티가 사라질 때) `selected`를, `save`의 결과는 `saved`(실패하면 `error`)를 보낸다. 받아들이지 못한 명령은 게임 로그에 오류로 남는다. 실행 상태를 끝낼 때는 프로세스를 종료하고 편집 상태로 다시 실행한다. Bevy Remote Protocol로 옮기는 것은 Bevy를 다시 빌드해야 하고 HTTP 포트를 관리해야 해서 미룬다.
 
 ## 뷰포트 표시
 
