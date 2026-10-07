@@ -16,7 +16,9 @@ use serde_json::Value;
 use crate::{
     edit::{self, SpawnKind},
     inspect::{Changes, Selected, report_saved, select, send_report},
-    scene::{SCENE_PATH, asset_file, save, save_prefab, scene_file},
+    scene::{
+        SCENE_PATH, asset_file, instance_prefab, save, save_instance, save_prefab, scene_file,
+    },
     scene_view::{self, PointerEvent, SceneView, Tool},
     viewport,
 };
@@ -116,6 +118,11 @@ enum Command {
     SavePrefab {
         id: u64,
         path: String,
+    },
+    /// Writes what a placed prefab shows, changes made inside it included,
+    /// back to its file; every instance of it then shows the new file.
+    ApplyPrefab {
+        id: u64,
     },
     /// The viewport's pointer, for the scene view.
     Pointer(PointerEvent),
@@ -217,6 +224,24 @@ fn run(world: &mut World, command: Command) {
             send_report(serde_json::json!({
                 "type": "prefab_saved",
                 "path": path,
+                "error": result.err(),
+            }));
+            return;
+        }
+        Command::ApplyPrefab { id } => {
+            let result = entity(id).and_then(|entity| {
+                let path = instance_prefab(world, entity)?;
+                save_instance(world, entity, &asset_path(&path)?)?;
+                world.resource::<AssetServer>().reload(path.clone());
+                Ok(path)
+            });
+            match &result {
+                Ok(path) => info!("Saved {path}"),
+                Err(error) => error!("Could not apply the prefab: {error}"),
+            }
+            send_report(serde_json::json!({
+                "type": "prefab_saved",
+                "path": result.as_ref().ok(),
                 "error": result.err(),
             }));
             return;

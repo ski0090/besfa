@@ -19,6 +19,7 @@ use bevy::{
     },
     prelude::*,
     reflect::serde::TypedReflectSerializer,
+    world_serialization::{DynamicWorldRoot, WorldAssetRoot},
 };
 use serde_json::{Value, json};
 
@@ -143,7 +144,13 @@ fn report(world: &mut World, mut last_entities: Local<String>, mut last_entity: 
 // would be needed once internal entities carry transforms.
 fn entities(world: &mut World) -> Value {
     let mut entities: Vec<_> = world
-        .query_filtered::<(Entity, Option<&Name>, Option<&ChildOf>, Has<SceneEntity>), (
+        .query_filtered::<(
+            Entity,
+            Option<&Name>,
+            Option<&ChildOf>,
+            Has<SceneEntity>,
+            (Option<&DynamicWorldRoot>, Option<&WorldAssetRoot>),
+        ), (
             Or<(With<Name>, With<Transform>, With<ChildOf>)>,
             Without<EditorOnly>,
             Without<Deleted>,
@@ -156,13 +163,19 @@ fn entities(world: &mut World) -> Value {
         .sort_unstable_by_key(|(entity, ..)| (entity.index_u32(), entity.generation().to_bits()));
     let entities: Vec<Value> = entities
         .iter()
-        .map(|(entity, name, parent, scene)| {
+        .map(|(entity, name, parent, scene, (placed_scene, model))| {
+            let asset = placed_scene
+                .and_then(|root| root.0.path())
+                .or_else(|| model.and_then(|root| root.0.path()))
+                .map(|path| path.without_label().to_string());
             json!({
                 "id": entity.to_bits(),
                 "name": name.map(Name::as_str),
                 "parent": parent.map(|parent| parent.parent().to_bits()),
                 // From the scene file or the editor; saving keeps it.
                 "scene": scene,
+                // A placed model, scene or prefab: the file it shows.
+                "asset": asset,
             })
         })
         .collect();

@@ -18,6 +18,7 @@ class EntityInspectorPanel extends StatelessWidget {
     this.onSet,
     this.onInsert,
     this.onRemove,
+    this.onApplyPrefab,
   });
 
   final Scene scene;
@@ -26,6 +27,9 @@ class EntityInspectorPanel extends StatelessWidget {
   final void Function(String component, Object? value)? onSet;
   final ValueChanged<String>? onInsert;
   final ValueChanged<String>? onRemove;
+
+  /// Writes the placed prefab of this id back to its file.
+  final ValueChanged<int>? onApplyPrefab;
 
   @override
   Widget build(BuildContext context) {
@@ -53,13 +57,7 @@ class EntityInspectorPanel extends StatelessWidget {
                   ),
                 ),
               ),
-              if (entity != null && !entity.scene)
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12),
-                  child: _Tag(
-                    'Spawned by the game while it runs; Save scene skips it.',
-                  ),
-                ),
+              if (entity != null) ..._placement(entity),
               if (selected != null) ...[
                 const _SectionTitle('Components'),
                 ..._crateGroups(
@@ -103,6 +101,38 @@ class EntityInspectorPanel extends StatelessWidget {
         );
       },
     );
+  }
+
+  /// Where the entity comes from when Save scene does not keep it, and a
+  /// way to keep changes made inside a placed prefab.
+  List<Widget> _placement(SceneEntity entity) {
+    final placed = scene.placement(entity);
+    final tag = switch (placed?.asset) {
+      _ when entity.scene => null,
+      final asset? => 'Part of $asset; Save scene skips it.',
+      null => 'Spawned by the game while it runs; Save scene skips it.',
+    };
+    return [
+      if (tag != null)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: _Tag(tag),
+        ),
+      if (placed != null &&
+          placed.asset!.endsWith('.scn.ron') &&
+          onApplyPrefab != null)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              icon: const Icon(Icons.upload_file, size: 16),
+              label: const Text('Apply to prefab'),
+              onPressed: () => onApplyPrefab!(placed.id),
+            ),
+          ),
+        ),
+    ];
   }
 
   Future<void> _addComponent(BuildContext context) async {

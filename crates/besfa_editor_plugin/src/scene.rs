@@ -30,7 +30,8 @@ use bevy::{
     },
     transform::components::TransformTreeChanged,
     world_serialization::{
-        DynamicEntity, DynamicWorld, InstanceId, WorldInstanceSpawner,
+        DynamicEntity, DynamicWorld, DynamicWorldRoot, InstanceId, WorldAssetRoot,
+        WorldInstanceSpawner,
         serde::{
             ENTITY_FIELD_COMPONENTS, ENTITY_STRUCT, WORLD_ENTITIES, WORLD_RESOURCES, WORLD_STRUCT,
             WorldMapSerializer,
@@ -197,7 +198,7 @@ pub(crate) fn save(world: &mut World, path: &Path) -> Result<(), String> {
         .collect();
     // Spawn order, so the file does not shuffle between saves.
     entities.sort_unstable_by_key(|entity| (entity.index_u32(), entity.generation().to_bits()));
-    write(world, &entities, None, path)
+    write(world, &entities, &[], false, path)
 }
 
 /// Writes `root` and the scene entities under it to `path` as a prefab.
@@ -215,22 +216,76 @@ pub(crate) fn save_prefab(world: &mut World, root: Entity, path: &Path) -> Resul
             }));
         }
     }
-    write(world, &entities, Some(root), path)
+    write(world, &entities, &[root], true, path)
 }
 
+/// The prefab file the instance `root` shows, as an asset path.
+pub(crate) fn instance_prefab(world: &World, root: Entity) -> Result<String, String> {
+    world
+        .get::<DynamicWorldRoot>(root)
+        .and_then(|instance| instance.0.path())
+        .map(|path| path.without_label().to_string())
+        .ok_or_else(|| format!("entity {root} is not a placed scene or prefab"))
+}
+
+/// Writes what the instance `root` shows to `path`: the entities the
+/// prefab spawned under it, as they are now, so changes made inside the
+/// instance reach the prefab. Instances inside it are written as their
+/// paths, as the scene file does.
+pub(crate) fn save_instance(world: &mut World, root: Entity, path: &Path) -> Result<(), String> {
+    // Copies the editor made inside the instance are the scene's own.
+    let content = |world: &World, entity: Entity| {
+        let children = world.get::<Children>(entity).into_iter().flatten();
+        children
+            .copied()
+            .filter(|&child| {
+                world.get::<SceneEntity>(child).is_none()
+                    && world.get::<crate::edit::Deleted>(child).is_none()
+            })
+            .collect::<Vec<_>>()
+    };
+    let tops = content(world, root);
+    let mut entities = tops.clone();
+    let mut next = 0;
+    while let Some(&entity) = entities.get(next) {
+        next += 1;
+        if world.get::<DynamicWorldRoot>(entity).is_none()
+            && world.get::<WorldAssetRoot>(entity).is_none()
+        {
+            entities.extend(content(world, entity));
+        }
+    }
+    write(world, &entities, &tops, false, path)
+}
+
+/// Writes `entities` to `path`. `roots` lose their parent, and with
+/// `at_origin` their place too.
 fn write(
     world: &World,
     entities: &[Entity],
-    root: Option<Entity>,
+    roots: &[Entity],
+    at_origin: bool,
     path: &Path,
 ) -> Result<(), String> {
+    // A file that places itself would load forever.
+    if let Some(placed) = entities
+        .iter()
+        .filter_map(|&entity| instance_prefab(world, entity).ok())
+        .find(|placed| asset_file(placed) == path)
+    {
+        return Err(format!("{placed} cannot be placed inside itself"));
+    }
     let registry = world.resource::<AppTypeRegistry>().read();
     let mut scene = dynamic_world(world, entities, &registry);
-    if let Some(root) = root.and_then(|root| scene.entities.iter_mut().find(|e| e.entity == root)) {
+    for root in scene
+        .entities
+        .iter_mut()
+        .filter(|entity| roots.contains(&entity.entity))
+    {
         root.components
             .retain(|component| !is::<ChildOf>(component.as_ref()));
         for component in &mut root.components {
-            if is::<Transform>(component.as_ref()) {
+            if at_origin && is::<Transform>(component.as_ref()) {
                 *component = Box::new(Transform::default());
             }
         }
@@ -721,6 +776,102 @@ mod tests {
             world.get::<Transform>(leaf).unwrap().translation,
             Vec3::new(0.0, 1.0, 0.0)
         );
+    }
+
+    #[test]
+    fn applies_what_a_placed_prefab_shows_back_to_its_file() {
+        use bevy::world_serialization::WorldSerializationPlugin;
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            WorldSerializationPlugin,
+        ))
+        .register_type::<Name>()
+        .register_type::<Transform>()
+        .register_type::<ChildOf>();
+        let assets = app.world().resource::<AssetServer>().clone();
+        let world = app.world_mut();
+        let placed = world
+            .spawn((
+                Name::new("Tree"),
+                Transform::from_xyz(9.0, 0.0, 0.0),
+                DynamicWorldRoot(assets.load("prefabs/tree.scn.ron")),
+                SceneEntity,
+            ))
+            .id();
+        // What the prefab spawned, changed in the editor.
+        let trunk = world
+            .spawn((
+                Name::new("Trunk"),
+                Transform::from_xyz(0.0, 2.0, 0.0),
+                ChildOf(placed),
+            ))
+            .id();
+        let rock = world
+            .spawn((
+                Name::new("Rock"),
+                DynamicWorldRoot(assets.load("prefabs/rock.scn.ron")),
+                ChildOf(trunk),
+            ))
+            .id();
+        world.spawn((Name::new("RockInside"), ChildOf(rock)));
+        world.spawn((Name::new("Gone"), ChildOf(trunk), crate::edit::Deleted));
+        world.spawn((Name::new("Copy"), ChildOf(placed), SceneEntity));
+        let dir = std::env::temp_dir().join(format!("besfa-apply-{}", std::process::id()));
+        let path = dir.join("tree.scn.ron");
+
+        assert_eq!(
+            instance_prefab(app.world(), placed).as_deref(),
+            Ok("prefabs/tree.scn.ron")
+        );
+        save_instance(app.world_mut(), placed, &path).expect("the prefab should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        for left_out in ["\"Tree\"", "RockInside", "Gone", "Copy", "tree.scn.ron"] {
+            assert!(!ron.contains(left_out), "{left_out} in {ron}");
+        }
+        assert!(ron.contains("\"prefabs/rock.scn.ron\""), "{ron}");
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        let scene = WorldDeserializer {
+            type_registry: &registry.read(),
+            load_from_path: &mut &assets,
+        }
+        .deserialize(&mut ron::de::Deserializer::from_str(&ron).unwrap())
+        .expect("the prefab should deserialize");
+        let mut map = EntityHashMap::default();
+        let mut loaded = World::new();
+        loaded.insert_resource(registry.clone());
+        scene
+            .write_to_world(&mut loaded, &mut map)
+            .expect("the prefab should spawn");
+        let named = |name: &str| {
+            *map.values()
+                .find(|&&entity| loaded.get::<Name>(entity).unwrap().as_str() == name)
+                .unwrap()
+        };
+        let (loaded_trunk, loaded_rock) = (named("Trunk"), named("Rock"));
+        assert_eq!(map.len(), 2, "{ron}");
+        assert!(loaded.get::<ChildOf>(loaded_trunk).is_none(), "a top");
+        assert_eq!(
+            loaded.get::<Transform>(loaded_trunk).unwrap().translation,
+            Vec3::new(0.0, 2.0, 0.0),
+            "changes inside the instance are kept"
+        );
+        assert_eq!(
+            loaded.get::<ChildOf>(loaded_rock).map(ChildOf::parent),
+            Some(loaded_trunk)
+        );
+
+        // An instance that holds itself would load forever.
+        app.world_mut()
+            .entity_mut(rock)
+            .insert(DynamicWorldRoot(assets.load("prefabs/tree.scn.ron")));
+        let itself = asset_file("prefabs/tree.scn.ron");
+        assert!(save_instance(app.world_mut(), placed, &itself).is_err());
+        assert!(!itself.exists());
     }
 
     #[test]

@@ -149,6 +149,51 @@ void main() {
     expect(game.sent, hasLength(sent + 1));
   });
 
+  testWidgets('applies changes made inside a placed prefab to its file', (
+    WidgetTester tester,
+  ) async {
+    final (game, output) = await openEditor(tester, dir);
+    output(
+      '@besfa {"type":"entities","entities":['
+      '{"id":1,"name":"Tree","scene":true,"asset":"prefabs/tree.scn.ron"},'
+      '{"id":2,"name":"Trunk","parent":1,"scene":false},'
+      '{"id":3,"name":"Rock","scene":true,"asset":"models/rock.glb"},'
+      '{"id":4,"name":"Stone","parent":3,"scene":false},'
+      '{"id":5,"name":"Bullet","scene":false}]}',
+    );
+    await tester.pump();
+    Future<void> select(String name) async {
+      await tester.tap(find.text(name).first);
+      await tester.pump();
+    }
+
+    await select('Trunk');
+    expect(
+      find.text('Part of prefabs/tree.scn.ron; Save scene skips it.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Apply to prefab'));
+    expect(game.commands.last, {'command': 'apply_prefab', 'id': 1});
+
+    await select('Tree');
+    expect(find.textContaining('Save scene skips it'), findsNothing);
+    expect(find.text('Apply to prefab'), findsOneWidget);
+
+    // A model's file cannot be written back.
+    await select('Stone');
+    expect(
+      find.text('Part of models/rock.glb; Save scene skips it.'),
+      findsOneWidget,
+    );
+    expect(find.text('Apply to prefab'), findsNothing);
+
+    await select('Bullet');
+    expect(
+      find.text('Spawned by the game while it runs; Save scene skips it.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('places assets and saves prefabs', (WidgetTester tester) async {
     for (final file in [
       'assets/models/tree.glb',

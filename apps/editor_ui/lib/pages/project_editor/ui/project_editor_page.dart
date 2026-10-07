@@ -923,6 +923,10 @@ class _ProjectEditorPageState extends State<ProjectEditorPage>
                         },
                       ],
                     ),
+                    // Writes a file, not the scene: nothing to undo or save.
+                    onApplyPrefab: _playing
+                        ? null
+                        : (id) => _send({'command': 'apply_prefab', 'id': id}),
                     // Setting a missing component adds it back with its value.
                     onRemove: (component) => _edit(
                       {

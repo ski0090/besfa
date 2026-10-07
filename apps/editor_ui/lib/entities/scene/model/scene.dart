@@ -21,6 +21,7 @@ class SceneEntity {
     this.name,
     this.parent,
     this.scene = true,
+    this.asset,
   });
 
   factory SceneEntity.fromJson(Map<String, Object?> json) => SceneEntity(
@@ -28,6 +29,7 @@ class SceneEntity {
     name: json['name'] as String?,
     parent: json['parent'] as int?,
     scene: json['scene'] as bool? ?? true,
+    asset: json['asset'] as String?,
   );
 
   /// Bevy's entity bits; what `select` takes.
@@ -38,6 +40,10 @@ class SceneEntity {
   /// From the scene file or the editor, so saving keeps it. Entities the
   /// game's code spawns while it runs are not saved.
   final bool scene;
+
+  /// The model, scene or prefab file a placed entity shows, which the game
+  /// spawns under it; saving keeps only this path.
+  final String? asset;
 
   /// Unnamed entities are shown the way Bevy prints them: `4v0`, the index
   /// (stored inverted in the low bits) and the generation.
@@ -152,6 +158,21 @@ class Scene extends ChangeNotifier {
 
   SceneEntity? get selectedEntity =>
       entities.where((entity) => entity.id == selected).firstOrNull;
+
+  /// The placed file [entity] is part of: the entity itself or its nearest
+  /// ancestor that shows one.
+  SceneEntity? placement(SceneEntity entity) {
+    final byId = {for (final entity in entities) entity.id: entity};
+    SceneEntity? current = entity;
+    // Bounded, so a parent cycle, a game bug, cannot hang the editor.
+    for (var i = 0; current != null && i <= entities.length; i++) {
+      if (current.asset != null) {
+        return current;
+      }
+      current = byId[current.parent];
+    }
+    return null;
+  }
 
   /// Takes [line] if it is a report. Logs, and lines that only look like a
   /// report, are left for the log panel.
