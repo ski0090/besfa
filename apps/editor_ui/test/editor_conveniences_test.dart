@@ -111,6 +111,19 @@ void main() {
     await tester.tap(find.byTooltip('Remove component'));
     await _control(tester, LogicalKeyboardKey.keyZ);
     expect(game.commands.last, _set(0));
+
+    // Removing one without a value records nothing to undo: the next undo
+    // takes back the entity the game spawned earlier.
+    output(
+      '@besfa {"type":"entity","id":$_cube,"components":['
+      '{"name":"Spin","path":"demo::Spin","mutable":true,"saved":true}]}',
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('Remove component'));
+    final sent = game.sent.length;
+    await _control(tester, LogicalKeyboardKey.keyZ);
+    expect(game.commands.last, {'command': 'delete', 'id': 42});
+    expect(game.sent, hasLength(sent + 1));
   });
 
   testWidgets('places assets and saves prefabs', (WidgetTester tester) async {

@@ -296,7 +296,9 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   /// session, so they do not count as unsaved.
   void _edit(Map<String, Object?> command, {List<Map<String, Object?>>? undo}) {
     _send(command);
-    if (undo != null) {
+    // A change nothing can take back, like removing an unreflected
+    // component, leaves no entry that would undo nothing.
+    if (undo != null && undo.isNotEmpty) {
       _history.add(Edit(undo: undo, redo: [command]));
     }
     if (!_playing) {
