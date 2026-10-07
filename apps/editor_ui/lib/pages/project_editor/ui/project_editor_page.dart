@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -15,6 +16,7 @@ import 'package:editor_ui/shared/native/viewport_texture.dart';
 import 'package:editor_ui/shared/process/cli_process.dart';
 import 'package:editor_ui/widgets/entity_inspector/ui/entity_inspector_panel.dart';
 import 'package:editor_ui/widgets/scene_hierarchy/ui/scene_hierarchy_panel.dart';
+import 'package:editor_ui/widgets/scene_viewport/ui/scene_viewport.dart';
 
 /// Starts the game process in [directory]; tests replace it.
 typedef StartGame =
@@ -69,10 +71,16 @@ const _captionColor = Color(0xFF15171B);
 // ponytail: fixed log cap, switch to a ring buffer if trimming shows up in profiles.
 const _maxLogLines = 2000;
 
-// ponytail: fixed viewport resolution, resize the shared texture with the
-// panel once the viewport needs to fill it exactly.
-const _viewportWidth = 1280;
-const _viewportHeight = 720;
+/// The viewport texture's size until the panel has been laid out.
+const _defaultViewport = Size(1280, 720);
+
+/// The scene view's handle tools, by the name the game takes, with their
+/// icons and keys.
+const _tools = [
+  ('translate', Icons.open_with, 'Move (W)', LogicalKeyboardKey.keyW),
+  ('rotate', Icons.rotate_right, 'Rotate (E)', LogicalKeyboardKey.keyE),
+  ('scale', Icons.open_in_full, 'Scale (R)', LogicalKeyboardKey.keyR),
+];
 
 /// The game runs in one of two states: paused in edit mode, where the
 /// viewport shows the scene as Startup built it, or playing. Stop ends play by
@@ -85,6 +93,20 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   final _scene = Scene();
   CliProcess? _game;
   ViewportTexture? _viewport;
+
+  /// The viewport panel's size in physical pixels, which the texture follows.
+  Size? _wantedViewport;
+  Timer? _resizeTimer;
+
+  /// Textures replaced by a resize. A running game may still render into
+  /// one until it reads the `viewport` command, so they go when the next
+  /// game launches.
+  // ponytail: kept until the next launch; dispose on a game acknowledgment
+  // if long sessions with many resizes hold too much GPU memory.
+  final _retiredViewports = <ViewportTexture>[];
+
+  /// The scene view's handle tool.
+  String _tool = 'translate';
 
   /// Waiting for a game process: launching one, or stopping play.
   bool _starting = false;
@@ -112,8 +134,10 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onKey);
     widget.prebuild?.removeListener(_onPrebuildChanged);
+    _resizeTimer?.cancel();
     _game?.stop();
     _viewport?.dispose();
+    _disposeRetiredViewports();
     _scene.dispose();
     super.dispose();
   }
@@ -170,6 +194,8 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   Future<void> _launch({bool play = false}) async {
     setState(() => _starting = true);
     _scene.reset();
+    // The previous game has exited, so nothing renders into them any more.
+    _disposeRetiredViewports();
     final CliProcess game;
     try {
       final viewport = await _ensureViewport();
@@ -206,6 +232,9 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     // The scene is rebuilt from the same file, so the selection carries over.
     if (_scene.selected case final id?) {
       game.send(jsonEncode({'command': 'select', 'id': id}));
+    }
+    if (_tool != 'translate') {
+      game.send(jsonEncode({'command': 'tool', 'tool': _tool}));
     }
     setState(() {
       _game = game;
@@ -275,6 +304,11 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     }
   }
 
+  void _setTool(String tool) {
+    setState(() => _tool = tool);
+    _send({'command': 'tool', 'tool': tool});
+  }
+
   /// Scene shortcuts. Delete and Ctrl+D leave text fields alone, and a
   /// focused field is committed before Ctrl+S saves.
   bool _onKey(KeyEvent event) {
@@ -304,6 +338,19 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     }
     if (key == LogicalKeyboardKey.delete) {
       _delete();
+      return true;
+    }
+    if (_playing || control) {
+      return false;
+    }
+    for (final (tool, _, _, toolKey) in _tools) {
+      if (key == toolKey) {
+        _setTool(tool);
+        return true;
+      }
+    }
+    if (key == LogicalKeyboardKey.keyF) {
+      _send({'command': 'focus'});
       return true;
     }
     return false;
@@ -386,10 +433,11 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     if (_viewport != null) {
       return _viewport;
     }
+    final size = _wantedViewport ?? _defaultViewport;
     try {
       final viewport = await ViewportTexture.create(
-        width: _viewportWidth,
-        height: _viewportHeight,
+        width: size.width.round(),
+        height: size.height.round(),
       );
       if (!mounted) {
         await viewport.dispose();
@@ -404,6 +452,59 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
       );
       return null;
     }
+  }
+
+  /// Follows the viewport panel's size, [physical] pixels, once it settles.
+  void _fitViewport(Size physical) {
+    final size = Size(
+      physical.width.clamp(16, 4096).roundToDouble(),
+      physical.height.clamp(16, 4096).roundToDouble(),
+    );
+    if (size == _wantedViewport) {
+      return;
+    }
+    _wantedViewport = size;
+    _resizeTimer?.cancel();
+    _resizeTimer = Timer(
+      const Duration(milliseconds: 250),
+      () => _resizeViewport(size),
+    );
+  }
+
+  /// Makes a texture of [size], shows it, and tells the game to render into
+  /// it. The old texture is kept until the next launch.
+  Future<void> _resizeViewport(Size size) async {
+    final old = _viewport;
+    if (old == null ||
+        (old.width == size.width.round() &&
+            old.height == size.height.round())) {
+      return;
+    }
+    final ViewportTexture viewport;
+    try {
+      viewport = await ViewportTexture.create(
+        width: size.width.round(),
+        height: size.height.round(),
+      );
+    } on PlatformException catch (error) {
+      _log('Could not resize the viewport: ${error.message}');
+      return;
+    }
+    // Disposed meanwhile, or resized again while this one was made.
+    if (!mounted || size != _wantedViewport || _viewport != old) {
+      await viewport.dispose();
+      return;
+    }
+    _retiredViewports.add(old);
+    setState(() => _viewport = viewport);
+    _send({'command': 'viewport', 'name': viewport.sharedName});
+  }
+
+  void _disposeRetiredViewports() {
+    for (final viewport in _retiredViewports) {
+      viewport.dispose();
+    }
+    _retiredViewports.clear();
   }
 
   @override
@@ -477,6 +578,8 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
             busy: _starting || _prebuilding,
             onPlay: _play,
             onStop: _stop,
+            tool: _tool,
+            onTool: _setTool,
             plugin: PluginUpdateView(
               project: _pluginRevision,
               latest: _latestPluginRevision,
@@ -501,16 +604,37 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
                 ),
                 const _PanelDivider(),
                 Expanded(
-                  child: Center(
-                    child: _game != null && viewport != null
-                        ? AspectRatio(
-                            aspectRatio: viewport.width / viewport.height,
-                            child: Texture(textureId: viewport.textureId),
-                          )
-                        : const Text(
-                            'Viewport',
-                            style: TextStyle(color: Color(0xFF7E8795)),
-                          ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      _fitViewport(
+                        constraints.biggest *
+                            MediaQuery.devicePixelRatioOf(context),
+                      );
+                      return Center(
+                        child: _game != null && viewport != null
+                            ? AspectRatio(
+                                aspectRatio: viewport.width / viewport.height,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    SceneViewport(
+                                      textureId: viewport.textureId,
+                                      textureSize: Size(
+                                        viewport.width.toDouble(),
+                                        viewport.height.toDouble(),
+                                      ),
+                                      onCommand: _send,
+                                    ),
+                                    if (!_playing) const _ViewportHint(),
+                                  ],
+                                ),
+                              )
+                            : const Text(
+                                'Viewport',
+                                style: TextStyle(color: Color(0xFF7E8795)),
+                              ),
+                      );
+                    },
                   ),
                 ),
                 const _PanelDivider(),
@@ -552,6 +676,8 @@ class _RunToolbar extends StatelessWidget {
     required this.busy,
     required this.onPlay,
     required this.onStop,
+    required this.tool,
+    required this.onTool,
     required this.plugin,
     this.prebuild,
   });
@@ -560,6 +686,8 @@ class _RunToolbar extends StatelessWidget {
   final bool busy;
   final VoidCallback onPlay;
   final VoidCallback onStop;
+  final String tool;
+  final ValueChanged<String> onTool;
   final Widget plugin;
   final BevyPrebuild? prebuild;
 
@@ -586,6 +714,25 @@ class _RunToolbar extends StatelessWidget {
                   icon: const Icon(Icons.play_arrow, size: 18),
                   label: const Text('Play'),
                 ),
+          const SizedBox(width: 12),
+          for (final (name, icon, tooltip, _) in _tools)
+            IconButton(
+              icon: Icon(icon, size: 18),
+              tooltip: tooltip,
+              isSelected: tool == name,
+              visualDensity: VisualDensity.compact,
+              style:
+                  IconButton.styleFrom(
+                    foregroundColor: const Color(0xFF7E8795),
+                  ).copyWith(
+                    backgroundColor: WidgetStateProperty.resolveWith(
+                      (states) => states.contains(WidgetState.selected)
+                          ? const Color(0x338CB4FF)
+                          : null,
+                    ),
+                  ),
+              onPressed: playing ? null : () => onTool(name),
+            ),
           Expanded(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
@@ -603,6 +750,28 @@ class _RunToolbar extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// How to move around the scene view, over its corner.
+class _ViewportHint extends StatelessWidget {
+  const _ViewportHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return const IgnorePointer(
+      child: Align(
+        alignment: Alignment.bottomLeft,
+        child: Padding(
+          padding: EdgeInsets.all(8),
+          child: Text(
+            'Click select  ·  Right-drag orbit  ·  Middle-drag pan  ·  '
+            'Scroll zoom  ·  F focus',
+            style: TextStyle(fontSize: 11, color: Color(0x99FFFFFF)),
+          ),
+        ),
       ),
     );
   }

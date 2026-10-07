@@ -17,6 +17,8 @@ use crate::{
     edit::{self, SpawnKind},
     inspect::{Selected, report_saved, select},
     scene::{SCENE_PATH, save, scene_file},
+    scene_view::{self, PointerEvent, SceneView, Tool},
+    viewport,
 };
 
 pub(crate) fn requested() -> bool {
@@ -62,7 +64,8 @@ fn pause(mut time: ResMut<Time<Virtual>>) {
 #[derive(Deserialize, Debug, PartialEq)]
 #[serde(tag = "command", rename_all = "snake_case")]
 enum Command {
-    /// Unpauses virtual time once, so a game that pauses itself stays paused.
+    /// Unpauses virtual time once, so a game that pauses itself stays
+    /// paused, and hands the view to the game's cameras.
     Play,
     /// Picks the entity whose components `inspect` reports; no id clears it.
     Select {
@@ -94,6 +97,18 @@ enum Command {
     Despawn {
         id: u64,
     },
+    /// The viewport's pointer, for the scene view.
+    Pointer(PointerEvent),
+    /// What dragging a handle does.
+    Tool {
+        tool: Tool,
+    },
+    /// Frames the selected entity in the scene view.
+    Focus,
+    /// Renders into the editor's new viewport texture of this name.
+    Viewport {
+        name: String,
+    },
 }
 
 /// Exclusive, because commands change and save the whole world.
@@ -115,6 +130,7 @@ fn run(world: &mut World, command: Command) {
     let result = match command {
         Command::Play => {
             world.resource_mut::<Time<Virtual>>().unpause();
+            scene_view::stop(world);
             info!("Playing.");
             Ok(())
         }
@@ -151,6 +167,25 @@ fn run(world: &mut World, command: Command) {
             .and_then(|entity| edit::duplicate(world, entity))
             .map(|copy| select(world, Some(copy))),
         Command::Despawn { id } => entity(id).and_then(|entity| edit::despawn(world, entity)),
+        Command::Pointer(event) => {
+            if let Some(mut view) = world.get_resource_mut::<SceneView>() {
+                view.events.push(event);
+            }
+            Ok(())
+        }
+        Command::Tool { tool } => {
+            if let Some(mut view) = world.get_resource_mut::<SceneView>() {
+                view.tool = tool;
+            }
+            Ok(())
+        }
+        Command::Focus => {
+            if let Some(mut view) = world.get_resource_mut::<SceneView>() {
+                view.focus = true;
+            }
+            Ok(())
+        }
+        Command::Viewport { name } => viewport::reopen(world, &name),
     };
     if let Err(error) = result {
         error!("Could not apply the editor's change: {error}");
@@ -231,6 +266,14 @@ mod tests {
             }
         );
         assert_eq!(command(r#"{"command":"save"}"#), Command::Save);
+        assert_eq!(
+            command(r#"{"command":"pointer","event":"scroll","delta":-120}"#),
+            Command::Pointer(PointerEvent::Scroll { delta: -120.0 })
+        );
+        assert_eq!(
+            command(r#"{"command":"tool","tool":"rotate"}"#),
+            Command::Tool { tool: Tool::Rotate }
+        );
         assert!(serde_json::from_str::<Command>("play").is_err());
     }
 

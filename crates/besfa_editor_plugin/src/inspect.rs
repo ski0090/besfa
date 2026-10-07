@@ -22,7 +22,10 @@ use bevy::{
 };
 use serde_json::{Value, json};
 
-use crate::scene::{SceneEntity, left_out};
+use crate::{
+    scene::{SceneEntity, left_out},
+    scene_view::EditorOnly,
+};
 
 /// The entity whose components are reported.
 #[derive(Resource, Default)]
@@ -31,12 +34,22 @@ pub(crate) struct Selected(pub(crate) Option<Entity>);
 /// Selects `entity` from the game's side, telling the editor.
 pub(crate) fn select(world: &mut World, entity: Option<Entity>) {
     world.resource_mut::<Selected>().0 = entity;
-    write(&json!({ "type": "selected", "id": entity.map(Entity::to_bits) }).to_string());
+    report_selection(entity);
+}
+
+/// Tells the editor the game changed the selection.
+pub(crate) fn report_selection(entity: Option<Entity>) {
+    send_report(json!({ "type": "selected", "id": entity.map(Entity::to_bits) }));
 }
 
 /// Tells the editor whether the scene file was written.
 pub(crate) fn report_saved(error: Option<String>) {
-    write(&json!({ "type": "saved", "error": error }).to_string());
+    send_report(json!({ "type": "saved", "error": error }));
+}
+
+/// Writes one report line.
+pub(crate) fn send_report(report: Value) {
+    write(&report.to_string());
 }
 
 pub(crate) struct InspectPlugin;
@@ -100,6 +113,7 @@ fn entities(world: &mut World) -> Value {
     let mut entities: Vec<_> = world
         .query_filtered::<(Entity, Option<&Name>, Option<&ChildOf>, Has<SceneEntity>), (
             Or<(With<Name>, With<Transform>, With<ChildOf>)>,
+            Without<EditorOnly>,
             Allow<Disabled>,
         )>()
         .iter(world)

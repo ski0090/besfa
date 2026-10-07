@@ -20,9 +20,11 @@ mod edit;
 mod edit_mode;
 mod inspect;
 mod scene;
+mod scene_view;
 mod viewport;
 
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
+pub use scene_view::EditorOnly;
 
 /// `DefaultPlugins` plus the scene file, adjusted to start in edit mode and
 /// render into the editor viewport when the editor launched the game.
@@ -31,7 +33,8 @@ pub fn default_plugins() -> PluginGroupBuilder {
     if edit_mode::requested() {
         plugins = plugins
             .add(edit_mode::EditModePlugin)
-            .add(inspect::InspectPlugin);
+            .add(inspect::InspectPlugin)
+            .add(scene_view::SceneViewPlugin);
     }
     let Some(config) = viewport::ViewportConfig::from_env() else {
         return plugins;

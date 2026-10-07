@@ -2,7 +2,9 @@
 //!
 //! The editor creates a D3D11 texture, publishes it under a named NT handle
 //! and passes the name in `BESFA_VIEWPORT`. This module opens that texture on
-//! Bevy's D3D12 device and points every window camera at it.
+//! Bevy's D3D12 device and points every window camera at it. When the editor
+//! resizes its viewport it makes a new texture and sends its name in a
+//! `viewport` command, and [`reopen`] switches to it.
 
 use bevy::{
     camera::{ManualTextureViewHandle, RenderTarget},
@@ -71,6 +73,13 @@ fn open_viewport(
         }
     };
 
+    let size = show(&mut views, &texture);
+    commands.insert_resource(ViewportTexture(texture));
+    info!("Rendering into the editor viewport {}x{}.", size.x, size.y);
+}
+
+/// Makes `texture` what the viewport's cameras render into.
+fn show(views: &mut ManualTextureViews, texture: &wgpu::Texture) -> UVec2 {
     let size = UVec2::new(texture.width(), texture.height());
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     views.insert(
@@ -81,8 +90,27 @@ fn open_viewport(
             view_format: VIEWPORT_FORMAT,
         },
     );
-    commands.insert_resource(ViewportTexture(texture));
+    size
+}
+
+/// Switches to the editor's texture `name`, after the editor resized the
+/// viewport. The old texture is dropped once nothing renders into it.
+pub(crate) fn reopen(world: &mut World, name: &str) -> Result<(), String> {
+    if world.get_resource::<ViewportTexture>().is_none() {
+        return Err("the game was not started in the editor viewport".into());
+    }
+    let device = world.resource::<RenderDevice>().clone();
+    let texture = shared::open(device.wgpu_device(), name)?;
+    let size = show(&mut world.resource_mut::<ManualTextureViews>(), &texture);
+    world.insert_resource(ViewportTexture(texture));
+    world.resource_mut::<ViewportConfig>().name = name.into();
+    // Cameras recompute their target's size when their projection changes.
+    let mut projections = world.query_filtered::<&mut Projection, With<Camera>>();
+    for mut projection in projections.iter_mut(world) {
+        projection.set_changed();
+    }
     info!("Rendering into the editor viewport {}x{}.", size.x, size.y);
+    Ok(())
 }
 
 /// Sends cameras that would render to the (absent) primary window into the

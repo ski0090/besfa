@@ -188,6 +188,9 @@ class Scene extends ChangeNotifier {
         if (report['error'] == null) {
           dirty = false;
         }
+      // A drag in the scene view changed a component.
+      case 'edited':
+        dirty = true;
     }
   }
 
