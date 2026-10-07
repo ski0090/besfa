@@ -326,6 +326,14 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
                       SubmenuButton(
                         menuChildren: [
                           MenuItemButton(
+                            leadingIcon: const Icon(Icons.save, size: 16),
+                            // Only the edit session's scene is worth keeping.
+                            onPressed: _game != null && !_playing
+                                ? () => _game!.send('save')
+                                : null,
+                            child: const Text('Save scene'),
+                          ),
+                          MenuItemButton(
                             leadingIcon: const Icon(Icons.arrow_back, size: 16),
                             onPressed: () => Navigator.of(context).pop(),
                             child: const Text('Back to Project Hub'),

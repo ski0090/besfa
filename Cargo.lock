@@ -430,6 +430,8 @@ name = "besfa_editor_plugin"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ron",
+ "serde",
  "serde_json",
  "wgpu",
  "windows",

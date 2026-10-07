@@ -208,6 +208,12 @@ fn create_project_with(directory: &Path, shared: Option<&Path>) -> Result<PathBu
 
 const TEMPLATE_MAIN: &str = include_str!("../template/main.rs");
 
+/// The cube, light and camera scene; `{{crate}}` becomes the game's crate.
+const TEMPLATE_SCENE: &str = include_str!("../template/main.scn.ron");
+
+/// Where the game and the editor read and write the scene.
+const SCENE_FILE: &str = "assets/scenes/main.scn.ron";
+
 /// Appended to the `[dependencies]` table that ends Cargo's generated manifest.
 const TEMPLATE_DEPENDENCIES: &str = r#"bevy = "0.19.1"
 besfa_editor_plugin = { git = "https://github.com/ski0090/besfa" }
@@ -220,7 +226,8 @@ opt-level = 1
 opt-level = 3
 "#;
 
-/// Turns Cargo's hello-world project into a Bevy game with a cube scene.
+/// Turns Cargo's hello-world project into a Bevy game that loads a cube
+/// scene from `assets/scenes/main.scn.ron`.
 ///
 /// With a machine-wide `shared` directory, the game also builds into
 /// `<shared>/target` and starts from `<shared>/prebuild/Cargo.lock`, so every
@@ -244,6 +251,20 @@ fn write_bevy_template(project: &Path, shared: Option<&Path>) -> Result<(), Crea
     .map_err(|error| filesystem_error("Failed to write Cargo.toml.", error))?;
     fs::write(project.join("src").join("main.rs"), TEMPLATE_MAIN)
         .map_err(|error| filesystem_error("Failed to write src/main.rs.", error))?;
+
+    // The scene names the game's own components by crate: `my_game::Spin`.
+    let crate_name = project
+        .file_name()
+        .map(|name| name.to_string_lossy().replace('-', "_"))
+        .unwrap_or_default();
+    let scene_file = project.join(SCENE_FILE);
+    fs::create_dir_all(scene_file.parent().expect("the scene file has a directory"))
+        .map_err(|error| filesystem_error("Failed to create assets/scenes.", error))?;
+    fs::write(
+        &scene_file,
+        TEMPLATE_SCENE.replace("{{crate}}", &crate_name),
+    )
+    .map_err(|error| filesystem_error(format!("Failed to write {SCENE_FILE}."), error))?;
 
     let Some(shared) = shared else {
         return Ok(());
@@ -339,6 +360,7 @@ mod tests {
         let manifest = fs::read_to_string(destination.join("Cargo.toml"));
         let has_cargo_config = destination.join(".cargo").exists();
         let main = fs::read_to_string(destination.join("src").join("main.rs"));
+        let scene = fs::read_to_string(destination.join(SCENE_FILE));
         fs::remove_dir_all(&parent).expect("test directory should be removed");
 
         assert_eq!(
@@ -350,6 +372,9 @@ mod tests {
         assert!(manifest.contains("[dependencies]\nbevy = \"0.19.1\""));
         assert!(manifest.contains("besfa_editor_plugin = { git ="));
         assert_eq!(main.expect("main.rs should be created"), TEMPLATE_MAIN);
+        let scene = scene.expect("the scene file should be created");
+        assert!(scene.contains("\"demo_game::Spin\": ()"), "{scene}");
+        assert!(!scene.contains("{{crate}}"));
         assert!(!has_cargo_config, "no shared directory means no config");
     }
 

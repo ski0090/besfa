@@ -21,7 +21,8 @@ cargo new --bin <프로젝트 이름>
 프로젝트 이름은 `DIRECTORY`의 마지막 경로 구성 요소에서 결정한다. Cargo가 프로젝트를 만든 뒤, `besfa`는 내장 Bevy 시작 코드를 적용한다.
 
 - `Cargo.toml`의 `[dependencies]`에 `bevy = "0.19.1"`과 `besfa_editor_plugin`(이 저장소의 git 의존성)을 추가하고, Bevy 권장 `dev` 프로필 최적화 설정을 붙인다.
-- `src/main.rs`를 카메라, 조명, 회전하는 큐브가 있는 씬으로 바꾼다. 원본은 `crates/besfa_cli/template/main.rs`다.
+- `src/main.rs`를 씬 파일을 읽고 큐브를 돌리는 게임으로 바꾼다. 원본은 `crates/besfa_cli/template/main.rs`다.
+- `assets/scenes/main.scn.ron`에 카메라, 조명, 회전하는 큐브가 있는 씬을 쓴다. 원본은 `crates/besfa_cli/template/main.scn.ron`이고, `{{crate}}`를 프로젝트의 크레이트 이름(디렉터리 이름의 `-`를 `_`로)으로 바꾼다. 형식은 [DATA_FORMAT.md](./DATA_FORMAT.md)의 '씬 파일'을 따른다.
 
 `%LOCALAPPDATA%`가 있으면 모든 게임이 Bevy 빌드를 공유하도록 두 가지를 더 한다.
 

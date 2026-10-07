@@ -5,14 +5,17 @@
 //! paused: Startup systems build the scene, `Update` sees no time pass and
 //! `FixedUpdate` does not run. The editor writes one command per line to
 //! stdin: `play` unpauses once, `select <id>` picks the entity that `inspect`
-//! reports and `select` alone clears it. The editor ends a play session by
-//! killing the process, which resets the scene.
+//! reports, `select` alone clears it and `save` writes the scene file. The
+//! editor ends a play session by killing the process, which resets the scene.
 
 use std::sync::{Mutex, PoisonError, mpsc};
 
 use bevy::prelude::*;
 
-use crate::inspect::Selected;
+use crate::{
+    inspect::Selected,
+    scene::{SCENE_PATH, save, scene_file},
+};
 
 pub(crate) fn requested() -> bool {
     std::env::var_os("BESFA_EDIT_MODE").is_some()
@@ -52,25 +55,31 @@ fn pause(mut time: ResMut<Time<Virtual>>) {
     time.pause();
 }
 
-fn run_commands(
-    commands: Res<EditorCommands>,
-    mut time: ResMut<Time<Virtual>>,
-    mut selected: ResMut<Selected>,
-) {
-    let receiver = commands.0.lock().unwrap_or_else(PoisonError::into_inner);
-    for line in receiver.try_iter() {
+/// Exclusive, because saving reads the whole world.
+fn run_commands(world: &mut World) {
+    let lines: Vec<String> = {
+        let commands = world.resource::<EditorCommands>();
+        let receiver = commands.0.lock().unwrap_or_else(PoisonError::into_inner);
+        receiver.try_iter().collect()
+    };
+    for line in lines {
         let line = line.trim();
         let (command, argument) = line.split_once(' ').unwrap_or((line, ""));
         match command {
             // Unpauses once per request, so a game that pauses itself stays paused.
             "play" => {
-                time.unpause();
+                world.resource_mut::<Time<Virtual>>().unpause();
                 info!("Playing.");
             }
             // An id the editor got from `inspect`; anything else clears.
             "select" => {
-                selected.0 = argument.trim().parse().ok().and_then(Entity::try_from_bits);
+                world.resource_mut::<Selected>().0 =
+                    argument.trim().parse().ok().and_then(Entity::try_from_bits);
             }
+            "save" => match save(world, &scene_file()) {
+                Ok(()) => info!("Saved {SCENE_PATH}"),
+                Err(error) => error!("Could not save {SCENE_PATH}: {error}"),
+            },
             _ => warn!("Unknown editor command: {line}"),
         }
     }

@@ -176,6 +176,13 @@ void main() {
     expect(game.sent.last, 'select');
     expect(find.text('Select an entity in the Hierarchy'), findsOneWidget);
 
+    // The game writes the scene file on request.
+    await tester.tap(find.text('File'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save scene'));
+    await tester.pumpAndSettle();
+    expect(game.sent.last, 'save');
+
     // The stopped game's last lines arrive after the page is gone.
     await tester.pumpWidget(const SizedBox());
     output('@besfa {"type":"entities","entities":[]}');

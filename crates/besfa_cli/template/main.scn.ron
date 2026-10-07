@@ -1,0 +1,53 @@
+// The game's scene: besfa_editor_plugin spawns it at startup and the Besfa
+// editor saves it back here. Bevy's world format; a component is only here
+// when its entity has it, and fields left out keep their defaults. Meshes
+// and materials are built from MeshShape and MeshColor when the scene loads.
+(
+  resources: {},
+  entities: {
+    4294967295: (
+      components: {
+        "bevy_ecs::name::Name": "Cube",
+        "bevy_transform::components::transform::Transform": (
+          translation: (0.0, 0.0, 0.0),
+          rotation: (0.0, 0.0, 0.0, 1.0),
+          scale: (1.0, 1.0, 1.0),
+        ),
+        "besfa_editor_plugin::scene::MeshShape": Cuboid(
+          size: (1.0, 1.0, 1.0),
+        ),
+        "besfa_editor_plugin::scene::MeshColor": (Srgba((
+          red: 0.55,
+          green: 0.7,
+          blue: 1.0,
+          alpha: 1.0,
+        ))),
+        "{{crate}}::Spin": (),
+      },
+    ),
+    4294967294: (
+      components: {
+        "bevy_ecs::name::Name": "Light",
+        "bevy_light::point_light::PointLight": (
+          shadow_maps_enabled: true,
+        ),
+        "bevy_transform::components::transform::Transform": (
+          translation: (4.0, 8.0, 4.0),
+          rotation: (0.0, 0.0, 0.0, 1.0),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+    4294967293: (
+      components: {
+        "bevy_ecs::name::Name": "Camera",
+        "bevy_camera::components::Camera3d": (),
+        "bevy_transform::components::transform::Transform": (
+          translation: (-2.5, 4.5, 9.0),
+          rotation: (-0.22055435, -0.13167094, -0.030063398, 0.9659786),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+  },
+)

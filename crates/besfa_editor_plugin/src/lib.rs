@@ -1,10 +1,11 @@
 //! Connects a Bevy game to the Besfa editor.
 //!
 //! Games use [`default_plugins`] in place of `DefaultPlugins`. Run on its own,
-//! the game behaves exactly like `DefaultPlugins`. Launched by the editor, it
-//! renders into the editor's viewport instead of opening a window, starts
-//! paused in edit mode until the editor says play, and reports its entities,
-//! components and systems to the editor.
+//! the game behaves like `DefaultPlugins` and loads its scene from
+//! `assets/scenes/main.scn.ron`. Launched by the editor, it renders into the
+//! editor's viewport instead of opening a window, starts paused in edit mode
+//! until the editor says play, reports its entities, components and systems
+//! to the editor, and saves the scene back when asked.
 
 use std::time::Duration;
 
@@ -17,12 +18,15 @@ use bevy::{
 
 mod edit_mode;
 mod inspect;
+mod scene;
 mod viewport;
 
-/// `DefaultPlugins`, adjusted to start in edit mode and render into the
-/// editor viewport when the editor launched the game.
+pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
+
+/// `DefaultPlugins` plus the scene file, adjusted to start in edit mode and
+/// render into the editor viewport when the editor launched the game.
 pub fn default_plugins() -> PluginGroupBuilder {
-    let mut plugins = DefaultPlugins.build();
+    let mut plugins = DefaultPlugins.build().add(scene::ScenePlugin);
     if edit_mode::requested() {
         plugins = plugins
             .add(edit_mode::EditModePlugin)
