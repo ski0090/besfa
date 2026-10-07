@@ -144,6 +144,14 @@ enum Command {
     },
     /// Frames the selected entity in the scene view.
     Focus,
+    /// Which way the scene view flies while the right button is held:
+    /// right, up and forward, each -1 to 1.
+    Fly {
+        right: f32,
+        up: f32,
+        forward: f32,
+        fast: bool,
+    },
     /// Renders into the editor's new viewport texture of this name.
     Viewport {
         name: String,
@@ -283,6 +291,18 @@ fn run(world: &mut World, command: Command) {
         Command::Focus => {
             if let Some(mut view) = world.get_resource_mut::<SceneView>() {
                 view.focus = true;
+            }
+            Ok(())
+        }
+        Command::Fly {
+            right,
+            up,
+            forward,
+            fast,
+        } => {
+            if let Some(mut view) = world.get_resource_mut::<SceneView>() {
+                view.fly = Vec3::new(right, up, forward);
+                view.fast = fast;
             }
             Ok(())
         }

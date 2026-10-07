@@ -904,11 +904,13 @@ mod tests {
         app.world_mut()
             .entity_mut(rock)
             .insert(DynamicWorldRoot(assets.load("prefabs/tree.scn.ron")));
-        let itself = asset_file("prefabs/tree.scn.ron");
-        assert!(save_instance(app.world_mut(), placed, &itself).is_err());
-        assert!(!itself.exists());
-        assert!(save_instance(app.world_mut(), placed, &scene_file()).is_err());
-        assert!(!scene_file().exists());
+        // Refused before anything is written.
+        let untouched = |path: &Path| std::fs::read(path).ok();
+        for refused in [asset_file("prefabs/tree.scn.ron"), scene_file()] {
+            let before = untouched(&refused);
+            assert!(save_instance(app.world_mut(), placed, &refused).is_err());
+            assert_eq!(untouched(&refused), before, "{}", refused.display());
+        }
     }
 
     #[test]

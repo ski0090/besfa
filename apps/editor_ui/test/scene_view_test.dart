@@ -154,6 +154,64 @@ void main() {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowUp);
   });
 
+  testWidgets('holding the right button, WASD, Q and E fly the scene view', (
+    WidgetTester tester,
+  ) async {
+    final commands = <Map<String, Object?>>[];
+    final looking = <bool>[];
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SceneViewport(
+          textureId: 0,
+          textureSize: const Size(800, 600),
+          onCommand: commands.add,
+          onLooking: looking.add,
+        ),
+      ),
+    );
+    List<Map<String, Object?>> flights() => [
+      for (final command in commands)
+        if (command['command'] == 'fly') command,
+    ];
+    Map<String, Object?> fly(int right, int up, int forward, bool fast) => {
+      'command': 'fly',
+      'right': right,
+      'up': up,
+      'forward': forward,
+      'fast': fast,
+    };
+
+    // Without the right button, keys are the editor's shortcuts.
+    await tester.tapAt(const Offset(100, 100));
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyW);
+    expect(flights(), isEmpty);
+
+    final mouse = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+      buttons: kSecondaryMouseButton,
+    );
+    await mouse.down(const Offset(100, 100));
+    await tester.pump();
+    expect(looking, [true]);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.keyE);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    expect(flights(), [
+      fly(0, 0, 1, false),
+      fly(0, 1, 1, false),
+      fly(0, 1, 1, true),
+      fly(0, 1, 0, true),
+    ]);
+    await mouse.up();
+    await mouse.removePointer();
+    expect(looking, [true, false]);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.keyE);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    expect(flights(), hasLength(4), reason: 'released keys fly nothing');
+  });
+
   testWidgets('while playing, the editor leaves Delete to the game', (
     WidgetTester tester,
   ) async {
@@ -256,6 +314,24 @@ void main() {
       final texture = tester.widget<Texture>(find.byType(Texture));
       expect(texture.textureId, 2);
       expect(disposed, isEmpty, reason: 'the game may still render into it');
+
+      // E while the right button is held flies up instead of picking the
+      // rotate tool; once it is up, E picks the tool again.
+      final game = games.single;
+      final mouse = await tester.createGesture(
+        kind: PointerDeviceKind.mouse,
+        buttons: kSecondaryMouseButton,
+      );
+      await mouse.down(tester.getCenter(find.byType(Texture)));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyE);
+      expect(game.commands.where((c) => c['command'] == 'tool'), isEmpty);
+      expect(game.commands.where((c) => c['command'] == 'fly'), isNotEmpty);
+      await mouse.up();
+      await mouse.removePointer();
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyE);
+      expect(game.commands.last, {'command': 'tool', 'tool': 'rotate'});
+      await tester.pumpAndSettle();
 
       // Stop relaunches: the old game is gone, and so is its texture.
       await tester.tap(find.text('Play'));

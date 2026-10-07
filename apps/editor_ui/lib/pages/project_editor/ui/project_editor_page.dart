@@ -111,6 +111,9 @@ class _ProjectEditorPageState extends State<ProjectEditorPage>
   /// The scene view's handle tool.
   String _tool = 'translate';
 
+  /// The right button is held in the scene view, whose keys fly it then.
+  bool _looking = false;
+
   /// Waiting for a game process: launching one, or stopping play.
   bool _starting = false;
 
@@ -498,6 +501,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage>
   bool _onKey(KeyEvent event) {
     if (event is! KeyDownEvent ||
         _playing ||
+        _looking ||
         !mounted ||
         !(ModalRoute.of(context)?.isCurrent ?? false)) {
       return false;
@@ -889,6 +893,8 @@ class _ProjectEditorPageState extends State<ProjectEditorPage>
                                         ),
                                         onCommand: _send,
                                         playing: _playing,
+                                        onLooking: (looking) =>
+                                            _looking = looking,
                                       ),
                                       if (!_playing) const _ViewportHint(),
                                       if (dragged.isNotEmpty)
@@ -1185,8 +1191,8 @@ class _ViewportHint extends StatelessWidget {
         child: Padding(
           padding: EdgeInsets.all(8),
           child: Text(
-            'Click select  ·  Right-drag orbit  ·  Middle-drag pan  ·  '
-            'Scroll zoom  ·  F focus',
+            'Click select  ·  Right-drag orbit  ·  Right-hold + WASD/QE fly  ·  '
+            'Middle-drag pan  ·  Scroll zoom  ·  F focus',
             style: TextStyle(fontSize: 11, color: Color(0x99FFFFFF)),
           ),
         ),

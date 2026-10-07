@@ -68,6 +68,13 @@ pub(crate) struct SceneView {
     pub(crate) events: Vec<PointerEvent>,
     /// Frame the selected entity on the next frame.
     pub(crate) focus: bool,
+    /// Which way to fly while the right button is held: right, up and
+    /// forward, each -1 to 1, and whether fast.
+    pub(crate) fly: Vec3,
+    pub(crate) fast: bool,
+    /// Flew during this right-button hold, so dragging looks around the
+    /// eye instead of orbiting the focus.
+    looking: bool,
     pointer: Vec2,
     /// The button held down and where it went down.
     pressed: Option<(Button, Vec2)>,
@@ -83,6 +90,9 @@ impl Default for SceneView {
             tool: Tool::default(),
             events: Vec::new(),
             focus: false,
+            fly: Vec3::ZERO,
+            fast: false,
+            looking: false,
             pointer: Vec2::ZERO,
             pressed: None,
             hovered: None,
@@ -158,7 +168,7 @@ impl Plugin for SceneViewPlugin {
             .add_systems(Startup, spawn_editor_camera)
             .add_systems(
                 Update,
-                (adopt_game_camera, handle_pointer)
+                (adopt_game_camera, fly, handle_pointer)
                     .chain()
                     .run_if(|view: Res<SceneView>| view.active),
             )
@@ -203,6 +213,10 @@ pub(crate) fn stop(world: &mut World) {
 /// Takes the game's cameras that render where the scene view shows, the
 /// viewport or the window, off it until the game plays. Cameras rendering
 /// into images keep rendering, so what they show stays in the scene.
+#[allow(
+    clippy::type_complexity,
+    reason = "a system's query: game cameras not parked yet"
+)]
 fn park_game_cameras(
     mut commands: Commands,
     mut cameras: Query<
@@ -266,6 +280,24 @@ impl EditorCamera {
             * 0.0015;
     }
 
+    /// Turns the view the way orbiting does, but about the eye.
+    fn look(&mut self, delta: Vec2) {
+        let eye = self.transform().translation;
+        self.orbit(delta);
+        self.focus = eye - self.rotation() * Vec3::Z * self.distance;
+    }
+
+    /// Moves along the view for `seconds`: `direction` is right, up and
+    /// forward, and up is the world's. Faster the farther out the view is.
+    fn fly(&mut self, direction: Vec3, fast: bool, seconds: f32) {
+        let rotation = self.rotation();
+        let way = rotation * Vec3::X * direction.x
+            + Vec3::Y * direction.y
+            + rotation * Vec3::NEG_Z * direction.z;
+        let speed = self.distance.clamp(1.0, 100.0) * if fast { 3.0 } else { 1.0 };
+        self.focus += way.normalize_or_zero() * speed * seconds;
+    }
+
     fn zoom(&mut self, scroll: f32) {
         self.distance = (self.distance * (1.0 + scroll * 0.001)).clamp(0.05, 5000.0);
     }
@@ -301,6 +333,20 @@ fn adopt_game_camera(
             adopted: true,
             ..EditorCamera::looking(pose)
         };
+    }
+}
+
+/// Flies the editor camera while the right button is held. Real time: the
+/// game's clock stands still in edit mode.
+fn fly(mut view: ResMut<SceneView>, time: Res<Time<Real>>, mut cameras: Query<&mut EditorCamera>) {
+    if !matches!(view.pressed, Some((Button::Right, _))) || view.fly == Vec3::ZERO {
+        return;
+    }
+    view.looking = true;
+    // A hitch would otherwise throw the camera far.
+    let seconds = time.delta_secs().min(0.1);
+    for mut camera in &mut cameras {
+        camera.fly(view.fly, view.fast, seconds);
     }
 }
 
@@ -406,12 +452,15 @@ fn handle_pointer(
                         *transform = dragged(tool, drag, ray);
                     }
                 }
+                (None, Some((Button::Right, _))) if view.looking => camera.look(delta),
                 (None, Some((Button::Right, _))) => camera.orbit(delta),
                 (None, Some((Button::Middle, _))) => camera.pan(delta),
                 (None, _) => view.hovered = grab(pointer),
             },
             PointerEvent::Up { button, .. } => {
                 let pressed = view.pressed.take();
+                view.looking = false;
+                view.fly = Vec3::ZERO;
                 if let Some(drag) = view.drag.take() {
                     if let Ok((transform, ..)) = targets.get(drag.entity) {
                         report_edited(&registry, drag.entity, &drag.start, transform);
@@ -732,6 +781,21 @@ mod tests {
         assert!((camera.distance - pose.translation.length() * 0.5).abs() < 1e-3);
         camera.pan(Vec2::new(0.0, 100.0));
         assert!(camera.focus.y > 0.0, "dragging down moves the view up");
+
+        let eye = camera.transform().translation;
+        camera.look(Vec2::new(200.0, -80.0));
+        assert!(camera.transform().translation.abs_diff_eq(eye, 1e-3));
+        let forward = camera.transform().forward();
+        camera.fly(Vec3::Z, false, 0.5);
+        let moved = camera.transform().translation - eye;
+        assert!(moved.normalize().abs_diff_eq(*forward, 1e-3), "{moved}");
+        assert!((moved.length() - camera.distance * 0.5).abs() < 1e-3);
+        camera.fly(Vec3::Y, true, 1.0);
+        assert!(
+            (camera.transform().translation.y - eye.y - moved.y - camera.distance * 3.0).abs()
+                < 1e-3,
+            "up is the world's, and fast is three times"
+        );
     }
 
     #[test]
