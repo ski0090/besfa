@@ -239,10 +239,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Back to Project Hub'));
     await tester.pumpAndSettle();
-    expect(find.text('Discard unsaved changes?'), findsOneWidget);
+    expect(find.text('Save changes to the scene?'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
-    expect(find.text('Discard unsaved changes?'), findsNothing);
+    expect(find.text('Save changes to the scene?'), findsNothing);
 
     await tester.tap(find.text('Play'));
     await tester.pump();
@@ -250,6 +250,36 @@ void main() {
       {'command': 'save'},
       {'command': 'play'},
     ]);
+  });
+
+  testWidgets('closing the window asks first and can save', (
+    WidgetTester tester,
+  ) async {
+    final (game, output) = await openWithCube(tester);
+    expect(windowCalls, contains('setPreventClose'));
+
+    // Nothing unsaved: the window closes right away.
+    await closeWindow(tester);
+    expect(windowCalls.last, 'destroy');
+    windowCalls.clear();
+
+    await tester.tap(field(0));
+    await tester.enterText(field(0), '4');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    await closeWindow(tester);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(windowCalls, isNot(contains('destroy')));
+
+    await closeWindow(tester);
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    expect(game.commands.last, {'command': 'save'});
+    expect(windowCalls, isNot(contains('destroy')), reason: 'not saved yet');
+    output('@besfa {"type":"saved","error":null}');
+    await tester.pumpAndSettle();
+    expect(windowCalls.last, 'destroy');
   });
 
   test('numbers are shown with up to three decimals', () {

@@ -10,18 +10,36 @@ import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/pages/project_editor/ui/project_editor_page.dart';
 import 'package:editor_ui/shared/process/cli_process.dart';
 
+/// The window manager's calls; tests have no window.
+final windowCalls = <String>[];
+
 /// Stands in for the window manager and the native viewport, which tests
 /// do not have.
 void mockEditorChannels(WidgetTester tester) {
   final messenger = tester.binding.defaultBinaryMessenger;
-  messenger.setMockMethodCallHandler(
-    const MethodChannel('window_manager'),
-    (call) async => call.method == 'isMaximized' ? false : null,
-  );
+  windowCalls.clear();
+  messenger.setMockMethodCallHandler(const MethodChannel('window_manager'), (
+    call,
+  ) async {
+    windowCalls.add(call.method);
+    return call.method == 'isMaximized' ? false : null;
+  });
   messenger.setMockMethodCallHandler(
     const MethodChannel('besfa/viewport'),
     (call) async => throw PlatformException(code: 'unavailable'),
   );
+}
+
+/// Clicks the window's close button, the way the window manager tells it.
+Future<void> closeWindow(WidgetTester tester) async {
+  await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+    'window_manager',
+    const StandardMethodCodec().encodeMethodCall(
+      const MethodCall('onEvent', {'eventName': 'close'}),
+    ),
+    (_) {},
+  );
+  await tester.pumpAndSettle();
 }
 
 /// A game that runs until stopped and records what the editor sends it.

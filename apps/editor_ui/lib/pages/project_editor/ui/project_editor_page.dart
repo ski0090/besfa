@@ -90,7 +90,8 @@ const _tools = [
 /// changes. In both states the game reports its entities, which the
 /// hierarchy and inspector panels show and change through commands on its
 /// stdin, one JSON object per line.
-class _ProjectEditorPageState extends State<ProjectEditorPage> {
+class _ProjectEditorPageState extends State<ProjectEditorPage>
+    with WindowListener {
   final _logs = <String>[];
   final _scene = Scene();
   CliProcess? _game;
@@ -137,6 +138,10 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_onKey);
+    // Closing the window asks about unsaved changes first.
+    windowManager
+      ..addListener(this)
+      ..setPreventClose(true);
     _scene.onReport = _onReport;
     _watchSource();
     _readPluginRevisions();
@@ -150,6 +155,9 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onKey);
+    windowManager
+      ..removeListener(this)
+      ..setPreventClose(false);
     widget.prebuild?.removeListener(_onPrebuildChanged);
     _sourceWatch?.cancel();
     _rebuildTimer?.cancel();
@@ -541,34 +549,57 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   }
 
   Future<void> _leave() async {
-    if (_scene.dirty) {
-      final discard = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Discard unsaved changes?'),
-          content: const Text(
-            'The scene has changes that are not saved to '
-            'scenes/main.scn.ron.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Discard'),
-            ),
-          ],
-        ),
-      );
-      if (discard != true) {
-        return;
-      }
-    }
-    if (mounted) {
+    if (await _mayLeave() && mounted) {
       Navigator.of(context).pop();
     }
+  }
+
+  @override
+  Future<void> onWindowClose() async {
+    if (await _mayLeave()) {
+      await windowManager.destroy();
+    }
+  }
+
+  /// Whether the editor may go: nothing is unsaved, or the user saved or
+  /// discarded it.
+  Future<bool> _mayLeave() async {
+    if (!_scene.dirty) {
+      return true;
+    }
+    // The changes live in the edit session; without it they are gone.
+    final canSave = _game != null && !_playing;
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Save changes to the scene?'),
+        content: const Text(
+          'The scene has changes that are not saved to '
+          'scenes/main.scn.ron.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop('discard'),
+            child: const Text('Discard'),
+          ),
+          if (canSave)
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop('save'),
+              child: const Text('Save'),
+            ),
+        ],
+      ),
+    );
+    if (choice == 'save') {
+      await _saveAndWait();
+      // A failed save keeps the changes unsaved; the log says why.
+      return !_scene.dirty;
+    }
+    return choice == 'discard';
   }
 
   /// Moves the project's plugin to the latest commit and restarts the edit
