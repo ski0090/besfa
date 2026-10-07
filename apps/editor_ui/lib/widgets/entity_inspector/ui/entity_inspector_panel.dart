@@ -120,6 +120,8 @@ class EntityInspectorPanel extends StatelessWidget {
         ),
       if (placed != null &&
           placed.asset!.endsWith('.scn.ron') &&
+          // The scene placed in itself is saved with Save scene.
+          placed.asset != 'scenes/main.scn.ron' &&
           onApplyPrefab != null)
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),

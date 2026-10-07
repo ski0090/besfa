@@ -558,10 +558,21 @@ class _ProjectEditorPageState extends State<ProjectEditorPage>
 
   @override
   Future<void> onWindowClose() async {
-    if (await _mayLeave()) {
-      await windowManager.destroy();
+    // A second click on close while the question is up asks nothing more.
+    if (_closing) {
+      return;
+    }
+    _closing = true;
+    try {
+      if (await _mayLeave()) {
+        await windowManager.destroy();
+      }
+    } finally {
+      _closing = false;
     }
   }
+
+  bool _closing = false;
 
   /// Whether the editor may go: nothing is unsaved, or the user saved or
   /// discarded it.

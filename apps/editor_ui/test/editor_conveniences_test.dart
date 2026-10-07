@@ -159,7 +159,8 @@ void main() {
       '{"id":2,"name":"Trunk","parent":1,"scene":false},'
       '{"id":3,"name":"Rock","scene":true,"asset":"models/rock.glb"},'
       '{"id":4,"name":"Stone","parent":3,"scene":false},'
-      '{"id":5,"name":"Bullet","scene":false}]}',
+      '{"id":5,"name":"Bullet","scene":false},'
+      '{"id":6,"name":"main","scene":true,"asset":"scenes/main.scn.ron"}]}',
     );
     await tester.pump();
     Future<void> select(String name) async {
@@ -192,6 +193,10 @@ void main() {
       find.text('Spawned by the game while it runs; Save scene skips it.'),
       findsOneWidget,
     );
+
+    // Applying the scene placed in itself would replace the scene.
+    await select('main');
+    expect(find.text('Apply to prefab'), findsNothing);
   });
 
   testWidgets('places assets and saves prefabs', (WidgetTester tester) async {

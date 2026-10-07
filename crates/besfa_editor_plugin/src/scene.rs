@@ -233,6 +233,11 @@ pub(crate) fn instance_prefab(world: &World, root: Entity) -> Result<String, Str
 /// instance reach the prefab. Instances inside it are written as their
 /// paths, as the scene file does.
 pub(crate) fn save_instance(world: &mut World, root: Entity, path: &Path) -> Result<(), String> {
+    // Writing the scene placed in itself would replace the scene with it,
+    // and reloading would respawn the whole scene from that.
+    if path == scene_file() {
+        return Err(format!("{SCENE_PATH} is saved with Save scene"));
+    }
     // Copies the editor made inside the instance are the scene's own.
     let content = |world: &World, entity: Entity| {
         let children = world.get::<Children>(entity).into_iter().flatten();
@@ -902,6 +907,8 @@ mod tests {
         let itself = asset_file("prefabs/tree.scn.ron");
         assert!(save_instance(app.world_mut(), placed, &itself).is_err());
         assert!(!itself.exists());
+        assert!(save_instance(app.world_mut(), placed, &scene_file()).is_err());
+        assert!(!scene_file().exists());
     }
 
     #[test]

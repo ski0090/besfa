@@ -268,6 +268,8 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
     await closeWindow(tester);
+    await closeWindow(tester);
+    expect(find.text('Save changes to the scene?'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(windowCalls, isNot(contains('destroy')));
