@@ -18,6 +18,7 @@ use bevy::{
 
 mod edit;
 mod edit_mode;
+mod input;
 mod inspect;
 mod scene;
 mod scene_view;

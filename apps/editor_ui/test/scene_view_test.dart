@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:editor_ui/entities/project/model/project.dart';
 import 'package:editor_ui/pages/project_editor/ui/project_editor_page.dart';
+import 'package:editor_ui/widgets/scene_viewport/lib/bevy_key.dart';
 import 'package:editor_ui/widgets/scene_viewport/ui/scene_viewport.dart';
 
 import 'support/editor_harness.dart';
@@ -74,6 +75,100 @@ void main() {
       'event': 'scroll',
       'delta': 120.0,
     });
+  });
+
+  test('keys are named the way Bevy names its key codes', () {
+    expect(bevyKeyCode(PhysicalKeyboardKey.keyW), 'KeyW');
+    expect(bevyKeyCode(PhysicalKeyboardKey.keyZ), 'KeyZ');
+    expect(bevyKeyCode(PhysicalKeyboardKey.digit1), 'Digit1');
+    expect(bevyKeyCode(PhysicalKeyboardKey.digit0), 'Digit0');
+    expect(bevyKeyCode(PhysicalKeyboardKey.f12), 'F12');
+    expect(bevyKeyCode(PhysicalKeyboardKey.metaLeft), 'SuperLeft');
+    expect(bevyKeyCode(PhysicalKeyboardKey.arrowUp), 'ArrowUp');
+    expect(bevyKeyCode(PhysicalKeyboardKey.fn), isNull);
+  });
+
+  testWidgets('a playing game gets the keys while the viewport has them', (
+    WidgetTester tester,
+  ) async {
+    final commands = <Map<String, Object?>>[];
+    Future<void> show({required bool playing}) => tester.pumpWidget(
+      MaterialApp(
+        home: Column(
+          children: [
+            SizedBox(
+              width: 640,
+              height: 360,
+              child: SceneViewport(
+                textureId: 0,
+                textureSize: const Size(640, 360),
+                onCommand: commands.add,
+                playing: playing,
+              ),
+            ),
+            const Text('Elsewhere'),
+          ],
+        ),
+      ),
+    );
+    List<Map<String, Object?>> keys() => [
+      for (final command in commands)
+        if (command['command'] != 'pointer') command,
+    ];
+
+    await show(playing: false);
+    await tester.tapAt(const Offset(100, 100));
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyW);
+    expect(keys(), isEmpty, reason: 'the edit mode keeps its shortcuts');
+
+    // Play hands the keyboard to the viewport.
+    await tester.tap(find.text('Elsewhere'));
+    await show(playing: true);
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    expect(keys(), [
+      {'command': 'key', 'code': 'KeyW', 'pressed': true, 'text': 'w'},
+      {'command': 'key', 'code': 'KeyW', 'pressed': false},
+    ]);
+
+    // Clicking elsewhere takes the keyboard back and lets held keys go.
+    commands.clear();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.space);
+    await tester.tap(find.text('Elsewhere'));
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    expect(keys(), [
+      {'command': 'key', 'code': 'Space', 'pressed': true, 'text': ' '},
+      {'command': 'focus_lost'},
+    ]);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.space);
+
+    // Clicking the viewport gives it back.
+    commands.clear();
+    await tester.tapAt(const Offset(100, 100));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowUp);
+    expect(keys(), [
+      {'command': 'key', 'code': 'ArrowUp', 'pressed': true},
+    ]);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowUp);
+  });
+
+  testWidgets('while playing, the editor leaves Delete to the game', (
+    WidgetTester tester,
+  ) async {
+    final (game, output) = await openEditor(tester, dir);
+    output(
+      '@besfa {"type":"entities","entities":['
+      '{"id":7,"name":"Cube","parent":null,"scene":true}]}',
+    );
+    await tester.pump();
+    await tester.tap(find.text('Cube'));
+    await tester.tap(find.text('Play'));
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+    expect(game.commands.where((c) => c['command'] == 'delete'), isEmpty);
   });
 
   testWidgets('W, E and R pick the tool; F frames; drags mark unsaved', (

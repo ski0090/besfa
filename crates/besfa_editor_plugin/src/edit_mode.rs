@@ -9,12 +9,13 @@
 
 use std::sync::{Mutex, PoisonError, mpsc};
 
-use bevy::prelude::*;
+use bevy::{input::InputSystems, prelude::*};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
     edit::{self, SpawnKind},
+    input,
     inspect::{Changes, Selected, report_saved, select, send_report},
     scene::{
         SCENE_PATH, asset_file, instance_prefab, save, save_instance, save_prefab, scene_file,
@@ -54,7 +55,8 @@ impl Plugin for EditModePlugin {
             .init_resource::<Selected>()
             .init_resource::<Changes>()
             .add_systems(PreStartup, pause)
-            .add_systems(PreUpdate, run_commands);
+            // Before Bevy reads this frame's input, which the commands write.
+            .add_systems(PreUpdate, run_commands.before(InputSystems));
     }
 }
 
@@ -124,8 +126,18 @@ enum Command {
     ApplyPrefab {
         id: u64,
     },
-    /// The viewport's pointer, for the scene view.
+    /// The viewport's pointer: the scene view's in edit mode, the game's
+    /// mouse once it plays.
     Pointer(PointerEvent),
+    /// A key pressed or released in the viewport while the game plays,
+    /// named the way Bevy's `KeyCode` is, with the text it typed.
+    Key {
+        code: String,
+        pressed: bool,
+        text: Option<String>,
+    },
+    /// The viewport lost the keyboard, so held keys are let go.
+    FocusLost,
     /// What dragging a handle does.
     Tool {
         tool: Tool,
@@ -247,9 +259,19 @@ fn run(world: &mut World, command: Command) {
             return;
         }
         Command::Pointer(event) => {
-            if let Some(mut view) = world.get_resource_mut::<SceneView>() {
-                view.events.push(event);
+            match world.get_resource_mut::<SceneView>() {
+                Some(mut view) if view.active => view.events.push(event),
+                _ => input::pointer(world, event),
             }
+            Ok(())
+        }
+        Command::Key {
+            code,
+            pressed,
+            text,
+        } => input::key(world, &code, pressed, text),
+        Command::FocusLost => {
+            input::focus_lost(world);
             Ok(())
         }
         Command::Tool { tool } => {
@@ -374,6 +396,14 @@ mod tests {
         assert_eq!(
             command(r#"{"command":"tool","tool":"rotate"}"#),
             Command::Tool { tool: Tool::Rotate }
+        );
+        assert_eq!(
+            command(r#"{"command":"key","code":"KeyW","pressed":true}"#),
+            Command::Key {
+                code: "KeyW".into(),
+                pressed: true,
+                text: None,
+            }
         );
         assert!(serde_json::from_str::<Command>("play").is_err());
     }

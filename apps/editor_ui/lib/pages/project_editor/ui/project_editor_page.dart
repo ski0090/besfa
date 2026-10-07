@@ -493,9 +493,11 @@ class _ProjectEditorPageState extends State<ProjectEditorPage>
   }
 
   /// Scene shortcuts. Delete, Ctrl+D and undo leave text fields alone, and
-  /// a focused field is committed before Ctrl+S saves.
+  /// a focused field is committed before Ctrl+S saves. While the game
+  /// plays, keys are the game's: the viewport hands them over.
   bool _onKey(KeyEvent event) {
     if (event is! KeyDownEvent ||
+        _playing ||
         !mounted ||
         !(ModalRoute.of(context)?.isCurrent ?? false)) {
       return false;
@@ -532,7 +534,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage>
       _delete();
       return true;
     }
-    if (_playing || control) {
+    if (control) {
       return false;
     }
     for (final (tool, _, _, toolKey) in _tools) {
@@ -875,6 +877,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage>
                                           viewport.height.toDouble(),
                                         ),
                                         onCommand: _send,
+                                        playing: _playing,
                                       ),
                                       if (!_playing) const _ViewportHint(),
                                       if (dragged.isNotEmpty)
