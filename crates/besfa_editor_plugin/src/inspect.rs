@@ -67,8 +67,26 @@ impl Plugin for InspectPlugin {
     // ponytail: systems added while the game runs are not reported; report
     // from `Last` on a system count change if a game needs that.
     fn cleanup(&self, app: &mut App) {
+        hide_internals(app.world_mut());
         write(&systems(app.world()).to_string());
         write(&addable_components(app.world()).to_string());
+    }
+}
+
+/// Keeps out of the Hierarchy what Bevy spawns before the game runs, like
+/// the gizmo renderers' named entities. Only plugins have run so far.
+// ponytail: a game that spawns through `app.world_mut()` before `run` is
+// hidden too; mark Bevy's entities by name if a game does that.
+fn hide_internals(world: &mut World) {
+    let internal: Vec<Entity> = world
+        .query_filtered::<Entity, (
+            Or<(With<Name>, With<Transform>, With<ChildOf>)>,
+            Allow<Disabled>,
+        )>()
+        .iter(world)
+        .collect();
+    for entity in internal {
+        world.entity_mut(entity).insert(EditorOnly);
     }
 }
 
@@ -315,6 +333,26 @@ mod tests {
         assert_eq!(find(parent)["parent"], Value::Null);
         assert_eq!(find(child)["name"], Value::Null);
         assert_eq!(find(child)["parent"], parent.to_bits());
+    }
+
+    #[test]
+    fn hides_entities_bevy_spawns_before_the_game_runs() {
+        let mut app = App::new();
+        app.world_mut().spawn(Name::new("LineGizmoRenderer"));
+        app.add_plugins(InspectPlugin);
+        app.finish();
+        app.cleanup();
+        let cube = app.world_mut().spawn(Name::new("Cube")).id();
+
+        let report = entities(app.world_mut());
+
+        let ids: Vec<u64> = report["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entity| entity["id"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ids, [cube.to_bits()]);
     }
 
     #[test]
