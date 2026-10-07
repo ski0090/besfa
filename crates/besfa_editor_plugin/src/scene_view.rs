@@ -3,14 +3,15 @@
 //! handles that move, rotate and scale it.
 //!
 //! The editor forwards the viewport's pointer in viewport pixels as
-//! `pointer` commands. The editor camera renders on top of the game's
-//! cameras, which keep their settings so saving never sees a change. When
-//! the game plays, the editor camera goes and everything here stops.
+//! `pointer` commands. The editor camera is the only one drawing into the
+//! viewport: the game's cameras render nowhere until the game plays, which
+//! changes only their render target, a component the scene file leaves out.
+//! When the game plays, the editor camera goes and everything here stops.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
 use bevy::{
-    camera::primitives::Aabb,
+    camera::{CameraUpdateSystems, RenderTarget, primitives::Aabb},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
     prelude::*,
     reflect::{TypePath, serde::TypedReflectSerializer},
@@ -119,6 +120,13 @@ pub(crate) struct EditorCamera {
 /// After every game camera, so the editor's view is the one left.
 const EDITOR_CAMERA_ORDER: isize = 1_000_000;
 
+/// Where a game camera renders once the game plays. In edit mode it renders
+/// nowhere: a second camera drawing into the viewport starts from the first
+/// one's picture (Bevy's MSAA writeback), so both views would show. Clone,
+/// so a duplicated camera keeps it.
+#[derive(Component, Clone)]
+pub(crate) struct PlayTarget(RenderTarget);
+
 /// How far, in pixels, the pointer may be from a handle and still grab it,
 /// and may move between press and release and still click.
 const GRAB_PIXELS: f32 = 8.0;
@@ -156,7 +164,11 @@ impl Plugin for SceneViewPlugin {
             )
             .add_systems(
                 PostUpdate,
-                draw.after(TransformSystems::Propagate)
+                (
+                    draw.after(TransformSystems::Propagate),
+                    // Once Bevy knows the target's size, which the camera keeps.
+                    park_game_cameras.after(CameraUpdateSystems),
+                )
                     .run_if(|view: Res<SceneView>| view.active),
             );
     }
@@ -174,6 +186,41 @@ pub(crate) fn stop(world: &mut World) {
         .collect();
     for camera in cameras {
         world.despawn(camera);
+    }
+    let parked: Vec<(Entity, PlayTarget)> = world
+        .query::<(Entity, &PlayTarget)>()
+        .iter(world)
+        .map(|(entity, target)| (entity, target.clone()))
+        .collect();
+    for (entity, PlayTarget(target)) in parked {
+        world
+            .entity_mut(entity)
+            .insert(target)
+            .remove::<PlayTarget>();
+    }
+}
+
+/// Takes the game's cameras that render where the scene view shows, the
+/// viewport or the window, off it until the game plays. Cameras rendering
+/// into images keep rendering, so what they show stays in the scene.
+fn park_game_cameras(
+    mut commands: Commands,
+    mut cameras: Query<
+        (Entity, &Camera, &mut RenderTarget),
+        (Without<EditorCamera>, Without<PlayTarget>),
+    >,
+) {
+    for (entity, camera, mut target) in &mut cameras {
+        if !matches!(
+            *target,
+            RenderTarget::Window(_) | RenderTarget::TextureView(_)
+        ) {
+            continue;
+        }
+        // The size the camera had, so effects sized from it keep working.
+        let size = camera.physical_target_size().unwrap_or(UVec2::splat(64));
+        let play = std::mem::replace(&mut *target, RenderTarget::None { size });
+        commands.entity(entity).insert(PlayTarget(play));
     }
 }
 
@@ -685,6 +732,37 @@ mod tests {
         assert!((camera.distance - pose.translation.length() * 0.5).abs() < 1e-3);
         camera.pan(Vec2::new(0.0, 100.0));
         assert!(camera.focus.y > 0.0, "dragging down moves the view up");
+    }
+
+    #[test]
+    fn game_cameras_render_nowhere_until_play() {
+        let mut app = App::new();
+        app.add_systems(Update, park_game_cameras);
+        let game = app.world_mut().spawn(Camera3d::default()).id();
+        let minimap = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                RenderTarget::None {
+                    size: UVec2::splat(8),
+                },
+            ))
+            .id();
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        assert!(matches!(
+            world.get::<RenderTarget>(game),
+            Some(RenderTarget::None { .. })
+        ));
+        assert!(world.get::<PlayTarget>(minimap).is_none(), "left alone");
+        stop(world);
+        assert!(matches!(
+            world.get::<RenderTarget>(game),
+            Some(RenderTarget::Window(_))
+        ));
+        assert!(world.get::<PlayTarget>(game).is_none());
     }
 
     #[test]
