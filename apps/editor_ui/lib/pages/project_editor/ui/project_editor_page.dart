@@ -11,9 +11,11 @@ import 'package:editor_ui/entities/scene/model/scene.dart';
 import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
 import 'package:editor_ui/features/prebuild_bevy/ui/bevy_prebuild_status_view.dart';
 import 'package:editor_ui/features/update_plugin/model/plugin_update.dart';
+import 'package:editor_ui/features/undo/model/edit_history.dart';
 import 'package:editor_ui/features/update_plugin/ui/plugin_update_view.dart';
 import 'package:editor_ui/shared/native/viewport_texture.dart';
 import 'package:editor_ui/shared/process/cli_process.dart';
+import 'package:editor_ui/widgets/asset_browser/ui/asset_browser.dart';
 import 'package:editor_ui/widgets/entity_inspector/ui/entity_inspector_panel.dart';
 import 'package:editor_ui/widgets/scene_hierarchy/ui/scene_hierarchy_panel.dart';
 import 'package:editor_ui/widgets/scene_viewport/ui/scene_viewport.dart';
@@ -118,10 +120,25 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   String? _pluginRevision;
   String? _latestPluginRevision;
 
+  /// Scene changes of this edit session, for undo and redo.
+  final _history = EditHistory();
+
+  /// Completes when the game reports the save in flight.
+  Completer<void>? _pendingSave;
+
+  /// Rebuilds the game when its code changes.
+  StreamSubscription<FileSystemEvent>? _sourceWatch;
+  Timer? _rebuildTimer;
+
+  /// The bottom panel's tab: 0 for the log, 1 for assets.
+  int _bottomTab = 0;
+
   @override
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_onKey);
+    _scene.onReport = _onReport;
+    _watchSource();
     _readPluginRevisions();
     if (_prebuilding) {
       widget.prebuild!.addListener(_onPrebuildChanged);
@@ -134,6 +151,9 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onKey);
     widget.prebuild?.removeListener(_onPrebuildChanged);
+    _sourceWatch?.cancel();
+    _rebuildTimer?.cancel();
+    _history.dispose();
     _resizeTimer?.cancel();
     _game?.stop();
     _viewport?.dispose();
@@ -194,6 +214,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
   Future<void> _launch({bool play = false}) async {
     setState(() => _starting = true);
     _scene.reset();
+    _history.clear();
     // The previous game has exited, so nothing renders into them any more.
     _disposeRetiredViewports();
     final CliProcess game;
@@ -270,12 +291,140 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
 
   void _send(Map<String, Object?> command) => _game?.send(jsonEncode(command));
 
-  /// Sends a command that changes the scene. Changes made while playing
-  /// end with the play session, so they do not count as unsaved.
-  void _edit(Map<String, Object?> command) {
+  /// Sends a command that changes the scene, recording [undo], the commands
+  /// that take it back. Changes made while playing end with the play
+  /// session, so they do not count as unsaved.
+  void _edit(Map<String, Object?> command, {List<Map<String, Object?>>? undo}) {
     _send(command);
+    if (undo != null) {
+      _history.add(Edit(undo: undo, redo: [command]));
+    }
     if (!_playing) {
       _scene.markDirty();
+    }
+  }
+
+  /// Undo and redo replay commands; the game's ids stay valid for the edit
+  /// session, which is where the history lives.
+  void _replay(List<Map<String, Object?>>? Function() take) {
+    if (_playing) {
+      return;
+    }
+    if (take() case final commands?) {
+      commands.forEach(_send);
+      _scene.markDirty();
+    }
+  }
+
+  Map<String, Object?> _setCommand(String component, Object? value) => {
+    'command': 'set',
+    'id': _scene.selected,
+    'component': component,
+    'value': value,
+  };
+
+  /// The selected entity's current value of [component], as reported.
+  Object? _currentValue(String component) => _scene.components
+      .where((reported) => reported.path == component)
+      .firstOrNull
+      ?.value;
+
+  /// Recording what the game did on the editor's behalf, and noticing saves.
+  void _onReport(Map<String, Object?> report) {
+    switch (report['type']) {
+      case 'spawned':
+        final id = report['id'];
+        _history.add(
+          Edit(
+            undo: [
+              {'command': 'delete', 'id': id},
+            ],
+            redo: [
+              {'command': 'restore', 'id': id},
+            ],
+          ),
+        );
+      case 'edited':
+        Map<String, Object?> set(Object? value) => {
+          'command': 'set',
+          'id': report['id'],
+          'component': report['component'],
+          'value': value,
+        };
+        _history.add(
+          Edit(undo: [set(report['before'])], redo: [set(report['after'])]),
+        );
+      case 'saved':
+        _pendingSave?.complete();
+        _pendingSave = null;
+    }
+  }
+
+  /// Saves and waits for the game to say it did, or gives up after a while.
+  Future<void> _saveAndWait() {
+    final saved = _pendingSave ??= Completer<void>();
+    _save();
+    return saved.future.timeout(const Duration(seconds: 5), onTimeout: () {});
+  }
+
+  /// Puts the asset at [path] in the scene; the game reports it as spawned.
+  void _instantiate(String path) =>
+      _edit({'command': 'instantiate', 'path': path});
+
+  Future<void> _savePrefab() async {
+    final entity = _scene.selectedEntity;
+    if (entity == null) {
+      return;
+    }
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => _PrefabNameDialog(initial: entity.name ?? 'Prefab'),
+    );
+    if (name != null) {
+      _send({
+        'command': 'save_prefab',
+        'id': entity.id,
+        'path': 'prefabs/$name.scn.ron',
+      });
+    }
+  }
+
+  /// Rebuilds the game when a Rust file under `src` changes, once the
+  /// changes settle.
+  void _watchSource() {
+    final source = Directory(
+      [widget.project.path, 'src'].join(Platform.pathSeparator),
+    );
+    if (!source.existsSync()) {
+      return;
+    }
+    _sourceWatch = source.watch(recursive: true).listen((event) {
+      if (event.path.endsWith('.rs')) {
+        _rebuildTimer?.cancel();
+        _rebuildTimer = Timer(const Duration(milliseconds: 500), _rebuild);
+      }
+    }, onError: (_) {});
+  }
+
+  /// Restarts the edit session, which rebuilds the game, saving unsaved
+  /// changes first. A play session is left alone: Stop rebuilds anyway.
+  Future<void> _rebuild() async {
+    if (!mounted || _playing || _starting || _prebuilding) {
+      return;
+    }
+    _log('Source changed; rebuilding.');
+    setState(() => _starting = true);
+    final game = _game;
+    if (game != null) {
+      if (_scene.dirty) {
+        await _saveAndWait();
+      }
+      await game.stop();
+      // The running game locks its executable against the rebuild.
+      await game.exitCode;
+    }
+    if (mounted) {
+      _launch();
     }
   }
 
@@ -298,9 +447,15 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     }
   }
 
+  /// The game hides the entity, so undoing brings the same one back.
   void _delete() {
     if (_scene.selectedEntity case final entity?) {
-      _edit({'command': 'despawn', 'id': entity.id});
+      _edit(
+        {'command': 'delete', 'id': entity.id},
+        undo: [
+          {'command': 'restore', 'id': entity.id},
+        ],
+      );
     }
   }
 
@@ -309,8 +464,8 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     _send({'command': 'tool', 'tool': tool});
   }
 
-  /// Scene shortcuts. Delete and Ctrl+D leave text fields alone, and a
-  /// focused field is committed before Ctrl+S saves.
+  /// Scene shortcuts. Delete, Ctrl+D and undo leave text fields alone, and
+  /// a focused field is committed before Ctrl+S saves.
   bool _onKey(KeyEvent event) {
     if (event is! KeyDownEvent ||
         !mounted ||
@@ -334,6 +489,15 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     }
     if (control && key == LogicalKeyboardKey.keyD) {
       _duplicate();
+      return true;
+    }
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+    if (control && key == LogicalKeyboardKey.keyZ) {
+      _replay(shift ? _history.redo : _history.undo);
+      return true;
+    }
+    if (control && key == LogicalKeyboardKey.keyY) {
+      _replay(_history.redo);
       return true;
     }
     if (key == LogicalKeyboardKey.delete) {
@@ -546,6 +710,36 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
                         ],
                         child: const Text('File'),
                       ),
+                      SubmenuButton(
+                        menuChildren: [
+                          ListenableBuilder(
+                            listenable: _history,
+                            builder: (context, _) => Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                MenuItemButton(
+                                  leadingIcon: const Icon(Icons.undo, size: 16),
+                                  trailingIcon: const Text('Ctrl+Z'),
+                                  onPressed: _history.canUndo && !_playing
+                                      ? () => _replay(_history.undo)
+                                      : null,
+                                  child: const Text('Undo'),
+                                ),
+                                MenuItemButton(
+                                  leadingIcon: const Icon(Icons.redo, size: 16),
+                                  trailingIcon: const Text('Ctrl+Y'),
+                                  onPressed: _history.canRedo && !_playing
+                                      ? () => _replay(_history.redo)
+                                      : null,
+                                  child: const Text('Redo'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        child: const Text('Edit'),
+                      ),
                     ],
                   ),
                   Expanded(
@@ -600,6 +794,7 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
                         _edit({'command': 'spawn', 'kind': kind}),
                     onDuplicate: _duplicate,
                     onDelete: _delete,
+                    onSavePrefab: _playing ? null : _savePrefab,
                   ),
                 ),
                 const _PanelDivider(),
@@ -614,19 +809,36 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
                         child: _game != null && viewport != null
                             ? AspectRatio(
                                 aspectRatio: viewport.width / viewport.height,
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    SceneViewport(
-                                      textureId: viewport.textureId,
-                                      textureSize: Size(
-                                        viewport.width.toDouble(),
-                                        viewport.height.toDouble(),
+                                // Assets dragged from the Assets tab land
+                                // in the scene.
+                                child: DragTarget<String>(
+                                  onAcceptWithDetails: (details) =>
+                                      _instantiate(details.data),
+                                  builder: (context, dragged, _) => Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      SceneViewport(
+                                        textureId: viewport.textureId,
+                                        textureSize: Size(
+                                          viewport.width.toDouble(),
+                                          viewport.height.toDouble(),
+                                        ),
+                                        onCommand: _send,
                                       ),
-                                      onCommand: _send,
-                                    ),
-                                    if (!_playing) const _ViewportHint(),
-                                  ],
+                                      if (!_playing) const _ViewportHint(),
+                                      if (dragged.isNotEmpty)
+                                        IgnorePointer(
+                                          child: DecoratedBox(
+                                            decoration: BoxDecoration(
+                                              border: Border.all(
+                                                color: const Color(0xFF8CB4FF),
+                                                width: 2,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
                                 ),
                               )
                             : const Text(
@@ -642,28 +854,55 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
                   width: 320,
                   child: EntityInspectorPanel(
                     scene: _scene,
-                    onSet: (component, value) => _edit({
-                      'command': 'set',
-                      'id': _scene.selected,
-                      'component': component,
-                      'value': value,
-                    }),
-                    onInsert: (component) => _edit({
-                      'command': 'insert',
-                      'id': _scene.selected,
-                      'component': component,
-                    }),
-                    onRemove: (component) => _edit({
-                      'command': 'remove',
-                      'id': _scene.selected,
-                      'component': component,
-                    }),
+                    onSet: (component, value) => _edit(
+                      _setCommand(component, value),
+                      undo: [_setCommand(component, _currentValue(component))],
+                    ),
+                    onInsert: (component) => _edit(
+                      {
+                        'command': 'insert',
+                        'id': _scene.selected,
+                        'component': component,
+                      },
+                      undo: [
+                        {
+                          'command': 'remove',
+                          'id': _scene.selected,
+                          'component': component,
+                        },
+                      ],
+                    ),
+                    // Setting a missing component adds it back with its value.
+                    onRemove: (component) => _edit(
+                      {
+                        'command': 'remove',
+                        'id': _scene.selected,
+                        'component': component,
+                      },
+                      undo: [
+                        if (_currentValue(component) case final value?)
+                          _setCommand(component, value),
+                      ],
+                    ),
                   ),
                 ),
               ],
             ),
           ),
-          SizedBox(height: 200, child: _LogPanel(_logs)),
+          SizedBox(
+            height: 200,
+            child: _BottomPanel(
+              tab: _bottomTab,
+              onTab: (tab) => setState(() => _bottomTab = tab),
+              log: _LogPanel(_logs),
+              assets: AssetBrowser(
+                directory: Directory(
+                  [widget.project.path, 'assets'].join(Platform.pathSeparator),
+                ),
+                onAdd: _playing ? null : _instantiate,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -751,6 +990,116 @@ class _RunToolbar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The log and the asset folder, one at a time.
+class _BottomPanel extends StatelessWidget {
+  const _BottomPanel({
+    required this.tab,
+    required this.onTab,
+    required this.log,
+    required this.assets,
+  });
+
+  final int tab;
+  final ValueChanged<int> onTab;
+  final Widget log;
+  final Widget assets;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          height: 28,
+          decoration: BoxDecoration(
+            color: const Color(0xFF15171B),
+            border: Border(
+              top: BorderSide(color: Colors.white.withValues(alpha: .08)),
+            ),
+          ),
+          child: Row(
+            children: [
+              for (final (index, label) in const [(0, 'Log'), (1, 'Assets')])
+                TextButton(
+                  onPressed: () => onTab(index),
+                  style: TextButton.styleFrom(
+                    foregroundColor: index == tab
+                        ? const Color(0xFFE4E7EC)
+                        : const Color(0xFF7E8795),
+                    textStyle: const TextStyle(fontSize: 12),
+                  ),
+                  child: Text(label),
+                ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: IndexedStack(index: tab, children: [log, assets]),
+        ),
+      ],
+    );
+  }
+}
+
+/// Asks for a prefab's file name, without folders or extension.
+class _PrefabNameDialog extends StatefulWidget {
+  const _PrefabNameDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_PrefabNameDialog> createState() => _PrefabNameDialogState();
+}
+
+class _PrefabNameDialogState extends State<_PrefabNameDialog> {
+  late final _name = TextEditingController(text: widget.initial);
+  final _valid = RegExp(r'^[\w\- ]+$');
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_valid.hasMatch(_name.text.trim())) {
+      Navigator.of(context).pop(_name.text.trim());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Save as prefab'),
+      content: SizedBox(
+        width: 360,
+        child: ValueListenableBuilder(
+          valueListenable: _name,
+          builder: (context, value, _) => TextField(
+            controller: _name,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: 'Prefab name',
+              helperText: 'Saved to assets/prefabs',
+              errorText: _valid.hasMatch(value.text.trim())
+                  ? null
+                  : 'Letters, digits, spaces, - and _ only',
+            ),
+            onSubmitted: (_) => _submit(),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save')),
+      ],
     );
   }
 }

@@ -24,6 +24,7 @@ class SceneHierarchyPanel extends StatelessWidget {
     this.onSpawn,
     this.onDuplicate,
     this.onDelete,
+    this.onSavePrefab,
   });
 
   final Scene scene;
@@ -33,6 +34,7 @@ class SceneHierarchyPanel extends StatelessWidget {
   final ValueChanged<String>? onSpawn;
   final VoidCallback? onDuplicate;
   final VoidCallback? onDelete;
+  final VoidCallback? onSavePrefab;
 
   @override
   Widget build(BuildContext context) {
@@ -67,6 +69,12 @@ class SceneHierarchyPanel extends StatelessWidget {
                 icon: Icons.delete_outline,
                 tooltip: 'Delete (Delete)',
                 onPressed: hasSelection ? onDelete : null,
+              ),
+            if (onSavePrefab != null)
+              PanelAction(
+                icon: Icons.inventory_2_outlined,
+                tooltip: 'Save as prefab',
+                onPressed: hasSelection ? onSavePrefab : null,
               ),
           ],
           child: ListView.builder(

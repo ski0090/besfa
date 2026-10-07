@@ -23,7 +23,8 @@ use bevy::{
 use serde_json::{Value, json};
 
 use crate::{
-    scene::{SceneEntity, left_out},
+    edit::Deleted,
+    scene::{HANDLE_PATHS, SceneEntity, left_out},
     scene_view::EditorOnly,
 };
 
@@ -114,6 +115,7 @@ fn entities(world: &mut World) -> Value {
         .query_filtered::<(Entity, Option<&Name>, Option<&ChildOf>, Has<SceneEntity>), (
             Or<(With<Name>, With<Transform>, With<ChildOf>)>,
             Without<EditorOnly>,
+            Without<Deleted>,
             Allow<Disabled>,
         )>()
         .iter(world)
@@ -164,11 +166,13 @@ fn components(world: &World, entity: Entity) -> Option<Vec<Value>> {
                 .and_then(|type_id| registry.get_type_data::<ReflectComponent>(type_id))
                 .and_then(|reflect| reflect.reflect(entity_ref))
                 .map(|value| {
-                    // Handles and other opaque types do not serialize; show
-                    // them the way Debug prints them.
-                    serde_json::to_value(TypedReflectSerializer::new(
+                    // Handles to loaded assets show their paths. Other
+                    // handles and opaque types do not serialize; show them
+                    // the way Debug prints them.
+                    serde_json::to_value(TypedReflectSerializer::with_processor(
                         value.as_partial_reflect(),
                         &registry,
+                        &HANDLE_PATHS,
                     ))
                     .unwrap_or_else(|_| Value::String(format!("{value:?}")))
                 });

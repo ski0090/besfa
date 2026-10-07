@@ -11,14 +11,17 @@ use std::{
 };
 
 use bevy::{
-    asset::{AssetLoadFailedEvent, io::file::FileAssetReader},
+    asset::{
+        AssetLoadFailedEvent, EphemeralHandleBehavior, HandleSerializeProcessor,
+        io::file::FileAssetReader,
+    },
     camera::{
         CameraMainTextureUsages, Exposure, RenderTarget,
         primitives::{Aabb, CubemapFrusta, Frustum, Sphere as BoundingSphere},
         visibility::{CubemapVisibleEntities, VisibilityClass, VisibleEntities},
     },
     prelude::*,
-    reflect::{TypeRegistry, serde::TypedReflectSerializer},
+    reflect::{PartialReflect, TypeRegistry, serde::TypedReflectSerializer},
     render::{
         camera::CameraRenderGraph,
         sync_world::{RenderEntity, SyncToRenderWorld},
@@ -169,9 +172,12 @@ fn drop_material(remove: On<Remove, MeshColor>, mut commands: Commands) {
 
 /// Where the scene file is on disk: the asset directory the game loads from.
 pub(crate) fn scene_file() -> PathBuf {
-    FileAssetReader::get_base_path()
-        .join("assets")
-        .join(SCENE_PATH)
+    asset_file(SCENE_PATH)
+}
+
+/// Where the asset at `path`, relative to the asset directory, is on disk.
+pub(crate) fn asset_file(path: &str) -> PathBuf {
+    FileAssetReader::get_base_path().join("assets").join(path)
 }
 
 /// Writes the scene entities to `path` in the scene file format.
@@ -182,8 +188,45 @@ pub(crate) fn save(world: &mut World, path: &Path) -> Result<(), String> {
         .collect();
     // Spawn order, so the file does not shuffle between saves.
     entities.sort_unstable_by_key(|entity| (entity.index_u32(), entity.generation().to_bits()));
+    write(world, &entities, None, path)
+}
+
+/// Writes `root` and the scene entities under it to `path` as a prefab.
+/// The root is written at the origin and without its parent, so where the
+/// prefab is placed decides where it shows.
+pub(crate) fn save_prefab(world: &mut World, root: Entity, path: &Path) -> Result<(), String> {
+    let mut entities = vec![root];
+    let mut next = 0;
+    while let Some(&entity) = entities.get(next) {
+        next += 1;
+        if let Some(children) = world.get::<Children>(entity) {
+            entities.extend(children.iter().filter(|&child| {
+                world.get::<SceneEntity>(child).is_some()
+                    && world.get::<crate::edit::Deleted>(child).is_none()
+            }));
+        }
+    }
+    write(world, &entities, Some(root), path)
+}
+
+fn write(
+    world: &World,
+    entities: &[Entity],
+    root: Option<Entity>,
+    path: &Path,
+) -> Result<(), String> {
     let registry = world.resource::<AppTypeRegistry>().read();
-    let ron = dynamic_world(world, &entities, &registry)
+    let mut scene = dynamic_world(world, entities, &registry);
+    if let Some(root) = root.and_then(|root| scene.entities.iter_mut().find(|e| e.entity == root)) {
+        root.components
+            .retain(|component| !is::<ChildOf>(component.as_ref()));
+        for component in &mut root.components {
+            if is::<Transform>(component.as_ref()) {
+                *component = Box::new(Transform::default());
+            }
+        }
+    }
+    let ron = scene
         .serialize(&registry)
         .map_err(|error| error.to_string())?;
     if let Some(directory) = path.parent() {
@@ -191,6 +234,18 @@ pub(crate) fn save(world: &mut World, path: &Path) -> Result<(), String> {
     }
     std::fs::write(path, ron).map_err(|error| error.to_string())
 }
+
+fn is<T: 'static>(component: &dyn PartialReflect) -> bool {
+    component
+        .get_represented_type_info()
+        .is_some_and(|info| info.type_id() == TypeId::of::<T>())
+}
+
+/// Serializes handles to loaded assets as their paths, the way scene files
+/// store them; a handle to an asset made in code has no path and fails.
+pub(crate) const HANDLE_PATHS: HandleSerializeProcessor = HandleSerializeProcessor {
+    ephemeral_handle_behavior: EphemeralHandleBehavior::Error,
+};
 
 /// The entities' components that belong in the file: reflected, not built
 /// at runtime from other components, and serializable. Handles and other
@@ -209,8 +264,11 @@ fn dynamic_world(world: &World, entities: &[Entity], registry: &TypeRegistry) ->
                     let value = registry
                         .get_type_data::<ReflectComponent>(type_id)?
                         .reflect(entity_ref)?;
-                    let serializer =
-                        TypedReflectSerializer::new(value.as_partial_reflect(), registry);
+                    let serializer = TypedReflectSerializer::with_processor(
+                        value.as_partial_reflect(),
+                        registry,
+                        &HANDLE_PATHS,
+                    );
                     if serde_json::to_value(serializer).is_err() {
                         warn!("Not saving {}: it does not serialize.", info.name());
                         return None;
@@ -235,13 +293,15 @@ fn dynamic_world(world: &World, entities: &[Entity], registry: &TypeRegistry) ->
 }
 
 /// Components that do not belong in the file: what the plugin or Bevy
-/// builds from other components when the scene loads, camera settings Bevy
-/// does not make serializable, and the render target, which the editor
-/// points at its viewport after the camera spawns.
+/// builds from other components when the scene loads (`Children` follows
+/// from each child's `ChildOf`), camera settings Bevy does not make
+/// serializable, and the render target, which the editor points at its
+/// viewport after the camera spawns.
 // ponytail: what the template's entities carry; grow it as files show more.
 pub(crate) fn left_out(type_id: TypeId) -> bool {
     [
         TypeId::of::<SceneEntity>(),
+        TypeId::of::<Children>(),
         TypeId::of::<RenderTarget>(),
         TypeId::of::<Mesh3d>(),
         TypeId::of::<MeshMaterial3d<StandardMaterial>>(),
@@ -302,6 +362,7 @@ mod tests {
             .register_type::<MeshShape>()
             .register_type::<MeshColor>()
             .register_type::<Spin>()
+            .register_type::<ChildOf>()
             .add_systems(Update, (build_meshes, build_materials))
             .add_observer(drop_mesh)
             .add_observer(drop_material);
@@ -440,5 +501,96 @@ mod tests {
                 .is_some()
         );
         assert!(world.get::<Camera3d>(entities[1]).is_some());
+    }
+
+    #[test]
+    fn saves_a_prefab_at_the_origin_with_its_scene_children() {
+        let mut app = test_app();
+        let world = app.world_mut();
+        let parent = world.spawn((Name::new("Garden"), SceneEntity)).id();
+        let tree = world
+            .spawn((
+                Name::new("Tree"),
+                Transform::from_xyz(5.0, 0.0, 0.0),
+                SceneEntity,
+                ChildOf(parent),
+            ))
+            .id();
+        world.spawn((
+            Name::new("Leaf"),
+            Transform::from_xyz(0.0, 1.0, 0.0),
+            SceneEntity,
+            ChildOf(tree),
+        ));
+        world.spawn((Name::new("Runtime"), ChildOf(tree)));
+        let dir = std::env::temp_dir().join(format!("besfa-prefab-{}", std::process::id()));
+        let path = dir.join("prefabs/tree.scn.ron");
+
+        save_prefab(app.world_mut(), tree, &path).expect("the prefab should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(!ron.contains("Garden") && !ron.contains("Runtime"), "{ron}");
+        let mut loaded = test_app();
+        let entities = spawn(&mut loaded, &ron);
+        let world = loaded.world();
+        let [tree, leaf] = entities[..] else {
+            panic!("two entities in {ron}");
+        };
+        assert_eq!(world.get::<Name>(tree).unwrap().as_str(), "Tree");
+        assert_eq!(world.get::<Transform>(tree), Some(&Transform::default()));
+        assert!(
+            world.get::<ChildOf>(tree).is_none(),
+            "the root has no parent"
+        );
+        assert_eq!(world.get::<ChildOf>(leaf).map(ChildOf::parent), Some(tree));
+        assert_eq!(
+            world.get::<Transform>(leaf).unwrap().translation,
+            Vec3::new(0.0, 1.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn saves_a_placed_asset_as_its_path_and_loads_it_back() {
+        use bevy::world_serialization::{DynamicWorldRoot, WorldSerializationPlugin};
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            WorldSerializationPlugin,
+        ))
+        .register_type::<Name>();
+        let assets = app.world().resource::<AssetServer>().clone();
+        app.world_mut().spawn((
+            Name::new("Tree"),
+            DynamicWorldRoot(assets.load("prefabs/tree.scn.ron")),
+            SceneEntity,
+        ));
+        let dir = std::env::temp_dir().join(format!("besfa-placed-{}", std::process::id()));
+        let path = dir.join("main.scn.ron");
+
+        save(app.world_mut(), &path).expect("the scene should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(ron.contains("\"prefabs/tree.scn.ron\""), "{ron}");
+
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        let scene = WorldDeserializer {
+            type_registry: &registry.read(),
+            load_from_path: &mut &assets,
+        }
+        .deserialize(&mut ron::de::Deserializer::from_str(&ron).unwrap())
+        .expect("the scene should deserialize");
+        let mut map = EntityHashMap::default();
+        scene
+            .write_to_world(app.world_mut(), &mut map)
+            .expect("the scene should spawn");
+        let placed = *map.values().next().unwrap();
+        let root = app.world().get::<DynamicWorldRoot>(placed).unwrap();
+        assert_eq!(
+            root.0.path().map(ToString::to_string).as_deref(),
+            Some("prefabs/tree.scn.ron")
+        );
     }
 }

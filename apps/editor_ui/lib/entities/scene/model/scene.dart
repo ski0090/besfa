@@ -132,6 +132,10 @@ class Scene extends ChangeNotifier {
   /// The editor changed the scene since it was loaded or last saved.
   bool dirty = false;
 
+  /// Hears every report after it is applied, for what the page does about
+  /// them: recording edits for undo, waiting for a save.
+  ValueChanged<Map<String, Object?>>? onReport;
+
   SceneEntity? get selectedEntity =>
       entities.where((entity) => entity.id == selected).firstOrNull;
 
@@ -141,16 +145,18 @@ class Scene extends ChangeNotifier {
     if (!line.startsWith(_reportPrefix)) {
       return false;
     }
+    final Map<String, Object?> report;
     try {
-      _apply(
-        jsonDecode(line.substring(_reportPrefix.length))
-            as Map<String, Object?>,
-      );
+      report =
+          jsonDecode(line.substring(_reportPrefix.length))
+              as Map<String, Object?>;
+      _apply(report);
     } catch (_) {
       // Game output is not trusted to be well formed.
       return false;
     }
     notifyListeners();
+    onReport?.call(report);
     return true;
   }
 

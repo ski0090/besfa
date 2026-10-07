@@ -15,8 +15,8 @@ use serde_json::Value;
 
 use crate::{
     edit::{self, SpawnKind},
-    inspect::{Selected, report_saved, select},
-    scene::{SCENE_PATH, save, scene_file},
+    inspect::{Selected, report_saved, select, send_report},
+    scene::{SCENE_PATH, asset_file, save, save_prefab, scene_file},
     scene_view::{self, PointerEvent, SceneView, Tool},
     viewport,
 };
@@ -86,16 +86,31 @@ enum Command {
         id: u64,
         component: String,
     },
-    /// Spawns a scene entity and selects it.
+    /// Spawns a scene entity, reports it and selects it.
     Spawn {
         kind: SpawnKind,
     },
-    /// Copies an entity and selects the copy.
+    /// Copies an entity, reports the copy and selects it.
     Duplicate {
         id: u64,
     },
-    Despawn {
+    /// Hides an entity and its children until `restore`.
+    Delete {
         id: u64,
+    },
+    Restore {
+        id: u64,
+    },
+    /// Spawns an entity showing the asset at `path`, relative to the asset
+    /// directory, then reports and selects it.
+    Instantiate {
+        path: String,
+    },
+    /// Writes an entity and its scene children to `path`, relative to the
+    /// asset directory, as a prefab.
+    SavePrefab {
+        id: u64,
+        path: String,
     },
     /// The viewport's pointer, for the scene view.
     Pointer(PointerEvent),
@@ -160,13 +175,39 @@ fn run(world: &mut World, command: Command) {
         }
         Command::Spawn { kind } => {
             let entity = edit::spawn(world, kind);
-            select(world, Some(entity));
+            spawned(world, entity);
             Ok(())
         }
         Command::Duplicate { id } => entity(id)
             .and_then(|entity| edit::duplicate(world, entity))
-            .map(|copy| select(world, Some(copy))),
-        Command::Despawn { id } => entity(id).and_then(|entity| edit::despawn(world, entity)),
+            .map(|copy| spawned(world, copy)),
+        Command::Instantiate { path } => {
+            edit::instantiate(world, &path).map(|entity| spawned(world, entity))
+        }
+        Command::Delete { id } => entity(id)
+            .and_then(|entity| edit::delete(world, entity))
+            .map(|deleted| {
+                let selected = world.resource::<Selected>().0;
+                if selected.is_some_and(|selected| deleted.contains(&selected)) {
+                    select(world, None);
+                }
+            }),
+        Command::Restore { id } => entity(id).and_then(|entity| edit::restore(world, entity)),
+        Command::SavePrefab { id, path } => {
+            let result = asset_path(&path)
+                .and_then(|path| entity(id).map(|entity| (entity, path)))
+                .and_then(|(entity, file)| save_prefab(world, entity, &file));
+            match &result {
+                Ok(()) => info!("Saved {path}"),
+                Err(error) => error!("Could not save {path}: {error}"),
+            }
+            send_report(serde_json::json!({
+                "type": "prefab_saved",
+                "path": path,
+                "error": result.err(),
+            }));
+            return;
+        }
         Command::Pointer(event) => {
             if let Some(mut view) = world.get_resource_mut::<SceneView>() {
                 view.events.push(event);
@@ -189,6 +230,28 @@ fn run(world: &mut World, command: Command) {
     };
     if let Err(error) = result {
         error!("Could not apply the editor's change: {error}");
+    }
+}
+
+/// Tells the editor about an entity it asked for, then selects it.
+fn spawned(world: &mut World, entity: Entity) {
+    send_report(serde_json::json!({ "type": "spawned", "id": entity.to_bits() }));
+    select(world, Some(entity));
+}
+
+/// A file under the asset directory, named the way asset paths are.
+fn asset_path(path: &str) -> Result<std::path::PathBuf, String> {
+    let inside = !path.starts_with('/')
+        && !path.contains(':')
+        && path
+            .split(['/', '\\'])
+            .all(|part| !part.is_empty() && part != "..");
+    if inside && path.ends_with(".scn.ron") {
+        Ok(asset_file(path))
+    } else {
+        Err(format!(
+            "{path} is not a .scn.ron path inside the asset directory"
+        ))
     }
 }
 
@@ -275,6 +338,16 @@ mod tests {
             Command::Tool { tool: Tool::Rotate }
         );
         assert!(serde_json::from_str::<Command>("play").is_err());
+    }
+
+    #[test]
+    fn keeps_prefabs_inside_the_asset_directory() {
+        assert!(asset_path("prefabs/tree.scn.ron").is_ok());
+        assert!(asset_path("../tree.scn.ron").is_err());
+        assert!(asset_path("C:/tree.scn.ron").is_err());
+        assert!(asset_path("/tree.scn.ron").is_err());
+        assert!(asset_path("prefabs/tree.txt").is_err());
+        assert!(asset_path("prefabs//tree.scn.ron").is_err());
     }
 
     #[test]

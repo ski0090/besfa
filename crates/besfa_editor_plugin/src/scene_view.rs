@@ -19,7 +19,10 @@ use bevy::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::inspect::{Selected, report_selection, send_report};
+use crate::{
+    inspect::{Selected, report_selection, send_report},
+    scene::SceneEntity,
+};
 
 /// Kept out of the Hierarchy and the scene file.
 #[derive(Component)]
@@ -280,6 +283,8 @@ fn handle_pointer(
     mut targets: Query<(&mut Transform, &GlobalTransform, Option<&ChildOf>), Without<EditorCamera>>,
     globals: Query<&GlobalTransform>,
     editor_only: Query<(), With<EditorOnly>>,
+    scene_entities: Query<(), With<SceneEntity>>,
+    parents: Query<&ChildOf>,
     mut ray_cast: MeshRayCast,
     registry: Res<AppTypeRegistry>,
 ) {
@@ -370,10 +375,18 @@ fn handle_pointer(
                 {
                     let filter = |entity: Entity| !editor_only.contains(entity);
                     let settings = MeshRayCastSettings::default().with_filter(&filter);
+                    // A model's or prefab's insides select the scene entity
+                    // that holds them.
                     let hit = ray_cast
                         .cast_ray(ray, &settings)
                         .first()
-                        .map(|(entity, _)| *entity);
+                        .map(|(entity, _)| {
+                            std::iter::successors(Some(*entity), |&entity| {
+                                parents.get(entity).ok().map(ChildOf::parent)
+                            })
+                            .find(|&entity| scene_entities.contains(entity))
+                            .unwrap_or(*entity)
+                        });
                     if hit != selected.0 {
                         selected.0 = hit;
                         report_selection(hit);

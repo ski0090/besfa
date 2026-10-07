@@ -139,7 +139,7 @@ void main() {
     expect(game.commands.last, {'command': 'duplicate', 'id': 7});
 
     await tester.sendKeyEvent(LogicalKeyboardKey.delete);
-    expect(game.commands.last, {'command': 'despawn', 'id': 7});
+    expect(game.commands.last, {'command': 'delete', 'id': 7});
 
     // Delete in a text field edits the text, not the scene.
     output(

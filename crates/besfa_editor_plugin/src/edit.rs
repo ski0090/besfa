@@ -1,19 +1,28 @@
 //! Changes the scene on the editor's commands: component values, added and
-//! removed components, and spawned, duplicated and despawned entities.
+//! removed components, and spawned, duplicated, deleted and restored
+//! entities. Deleting hides an entity instead of despawning it, so undoing
+//! brings back the same entity and the editor's history keeps its ids.
 //!
 //! Components are named by their reflected type path, the same path the
 //! scene file and the `entity` report use. Values are JSON in the shape
 //! the `entity` report sends them.
 
 use bevy::{
-    ecs::reflect::ReflectFromWorld,
+    asset::HandleDeserializeProcessor,
+    ecs::{entity_disabling::Disabled, reflect::ReflectFromWorld},
     prelude::*,
     reflect::{TypeRegistration, TypeRegistry, serde::TypedReflectDeserializer},
+    world_serialization::{DynamicWorldRoot, WorldAssetRoot},
 };
 use serde::{Deserialize, de::DeserializeSeed};
 use serde_json::Value;
 
 use crate::scene::{MeshColor, MeshShape, SceneEntity};
+
+/// An entity the editor deleted: disabled, so the game, rendering and
+/// saving skip it, until undoing restores it. The process ending drops it.
+#[derive(Component)]
+pub(crate) struct Deleted;
 
 /// What the Hierarchy's add menu creates.
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -27,8 +36,9 @@ pub(crate) enum SpawnKind {
     Camera,
 }
 
-/// Sets `component` on `entity` to `value`. The editor sends the whole
-/// value: a field left out takes its default when the type has one.
+/// Sets `component` on `entity` to `value`, adding it if the entity has
+/// none, which is how undoing a removal puts it back. The editor sends the
+/// whole value: a field left out takes its default when the type has one.
 pub(crate) fn set(
     world: &mut World,
     entity: Entity,
@@ -46,16 +56,30 @@ pub(crate) fn set(
     if immutable {
         return Err(format!("{component} cannot be changed"));
     }
-    let value = TypedReflectDeserializer::new(registration, &registry)
-        .deserialize(value)
-        .map_err(|error| error.to_string())?;
+    let value = match world.get_resource::<AssetServer>().cloned() {
+        // Handles name their asset by path, the way the scene file does;
+        // changing a prefab's path loads that prefab.
+        Some(assets) => {
+            let mut loader = &assets;
+            let mut processor = HandleDeserializeProcessor {
+                load_from_path: &mut loader,
+            };
+            TypedReflectDeserializer::with_processor(registration, &registry, &mut processor)
+                .deserialize(value)
+        }
+        None => TypedReflectDeserializer::new(registration, &registry).deserialize(value),
+    }
+    .map_err(|error| error.to_string())?;
     let mut entity = entity_mut(world, entity)?;
-    let mut target = reflect
-        .reflect_mut(&mut entity)
-        .ok_or_else(|| format!("the entity has no {component}"))?;
-    target
-        .try_apply(value.as_ref())
-        .map_err(|error| error.to_string())
+    match reflect.reflect_mut(&mut entity) {
+        Some(mut target) => target
+            .try_apply(value.as_ref())
+            .map_err(|error| error.to_string()),
+        None => {
+            reflect.insert(&mut entity, value.as_ref(), &registry);
+            Ok(())
+        }
+    }
 }
 
 /// Adds `component` to `entity` with its default value.
@@ -133,10 +157,62 @@ pub(crate) fn duplicate(world: &mut World, entity: Entity) -> Result<Entity, Str
     Ok(copy)
 }
 
-/// Despawns `entity` and its children.
-pub(crate) fn despawn(world: &mut World, entity: Entity) -> Result<(), String> {
-    entity_mut(world, entity)?.despawn();
+/// Hides `entity` and its children; returns them. Children the game
+/// disabled itself stay as they are when restored.
+pub(crate) fn delete(world: &mut World, entity: Entity) -> Result<Vec<Entity>, String> {
+    entity_mut(world, entity)?;
+    let subtree = subtree(world, entity);
+    for &entity in &subtree {
+        if world.get::<Disabled>(entity).is_none() {
+            world.entity_mut(entity).insert((Disabled, Deleted));
+        }
+    }
+    Ok(subtree)
+}
+
+/// Shows what [`delete`] hid again.
+pub(crate) fn restore(world: &mut World, entity: Entity) -> Result<(), String> {
+    entity_mut(world, entity)?;
+    for entity in subtree(world, entity) {
+        if world.get::<Deleted>(entity).is_some() {
+            world.entity_mut(entity).remove::<(Disabled, Deleted)>();
+        }
+    }
     Ok(())
+}
+
+/// Spawns a scene entity at the origin that shows an asset, named after its
+/// file: a glTF model's first scene, or a scene or prefab file. The asset's
+/// entities become its children; saving keeps only the asset's path.
+pub(crate) fn instantiate(world: &mut World, path: &str) -> Result<Entity, String> {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    let name = file
+        .strip_suffix(".scn.ron")
+        .or_else(|| file.strip_suffix(".glb"))
+        .or_else(|| file.strip_suffix(".gltf"))
+        .ok_or_else(|| format!("{path} is not a glTF model or a scene file"))?
+        .to_string();
+    let assets = world.resource::<AssetServer>().clone();
+    let mut entity = world.spawn((SceneEntity, Name::new(name), Transform::default()));
+    if path.ends_with(".scn.ron") {
+        entity.insert(DynamicWorldRoot(assets.load(path.to_string())));
+    } else {
+        entity.insert(WorldAssetRoot(assets.load(format!("{path}#Scene0"))));
+    }
+    Ok(entity.id())
+}
+
+/// `entity` and everything under it, the entity first.
+pub(crate) fn subtree(world: &World, entity: Entity) -> Vec<Entity> {
+    let mut entities = vec![entity];
+    let mut next = 0;
+    while let Some(&entity) = entities.get(next) {
+        next += 1;
+        if let Some(children) = world.get::<Children>(entity) {
+            entities.extend(children.iter());
+        }
+    }
+    entities
 }
 
 fn component_registration<'a>(
@@ -201,8 +277,6 @@ mod tests {
         assert_eq!(transform.translation, Vec3::new(1.0, 2.0, 3.0));
         assert_eq!(world.get::<Name>(cube).unwrap().as_str(), "Box");
 
-        let bare = world.spawn_empty().id();
-        assert!(set(&mut world, bare, TRANSFORM, &json!({})).is_err());
         assert!(
             set(&mut world, cube, TRANSFORM, &json!({ "scale": "big" })).is_err(),
             "a value of the wrong shape is refused"
@@ -234,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn spawns_duplicates_and_despawns_scene_entities() {
+    fn spawns_duplicates_deletes_and_restores_scene_entities() {
         let mut world = world();
 
         let cube = spawn(&mut world, SpawnKind::Cube);
@@ -249,9 +323,42 @@ mod tests {
         assert_eq!(world.get::<MeshShape>(copy), Some(&MeshShape::default()));
 
         let child = world.spawn(ChildOf(cube)).id();
-        despawn(&mut world, cube).unwrap();
-        assert!(world.get_entity(cube).is_err());
-        assert!(world.get_entity(child).is_err(), "children go too");
-        assert!(despawn(&mut world, cube).is_err());
+        let hidden_by_game = world.spawn((ChildOf(cube), Disabled)).id();
+        let visible = |world: &mut World| {
+            let mut query = world.query::<Entity>();
+            query.iter(world).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            delete(&mut world, cube).unwrap(),
+            [cube, child, hidden_by_game]
+        );
+        let seen = visible(&mut world);
+        assert!(!seen.contains(&cube) && !seen.contains(&child), "hidden");
+        assert!(world.get::<Name>(cube).is_some(), "but kept");
+
+        restore(&mut world, cube).unwrap();
+        let seen = visible(&mut world);
+        assert!(seen.contains(&cube) && seen.contains(&child));
+        assert!(world.get::<Disabled>(hidden_by_game).is_some());
+        assert!(delete(&mut world, Entity::from_bits(u64::MAX >> 1)).is_err());
+    }
+
+    #[test]
+    fn setting_a_missing_component_adds_it() {
+        let mut world = world();
+        let entity = world.spawn_empty().id();
+
+        set(
+            &mut world,
+            entity,
+            TRANSFORM,
+            &json!({ "translation": [1, 2, 3], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            world.get::<Transform>(entity),
+            Some(&Transform::from_xyz(1.0, 2.0, 3.0))
+        );
     }
 }
