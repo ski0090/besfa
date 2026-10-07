@@ -20,6 +20,7 @@ use bevy::{
         primitives::{Aabb, CubemapFrusta, Frustum, Sphere as BoundingSphere},
         visibility::{CubemapVisibleEntities, VisibilityClass, VisibleEntities},
     },
+    ecs::component::{ComponentId, ComponentInfo},
     prelude::*,
     reflect::{PartialReflect, TypeRegistry, serde::TypedReflectSerializer},
     render::{
@@ -28,8 +29,16 @@ use bevy::{
         view::ColorGrading,
     },
     transform::components::TransformTreeChanged,
-    world_serialization::{DynamicEntity, DynamicWorld, InstanceId, WorldInstanceSpawner},
+    world_serialization::{
+        DynamicEntity, DynamicWorld, InstanceId, WorldInstanceSpawner,
+        serde::{
+            ENTITY_FIELD_COMPONENTS, ENTITY_STRUCT, WORLD_ENTITIES, WORLD_RESOURCES, WORLD_STRUCT,
+            WorldMapSerializer,
+        },
+        serialize_ron,
+    },
 };
+use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 /// The scene file, relative to the game's `assets` directory.
 pub const SCENE_PATH: &str = "scenes/main.scn.ron";
@@ -226,13 +235,83 @@ fn write(
             }
         }
     }
-    let ron = scene
-        .serialize(&registry)
-        .map_err(|error| error.to_string())?;
+    let ron = serialize_ron(InOrder {
+        world: &scene,
+        registry: &registry,
+    })
+    .map_err(|error| error.to_string())?;
     if let Some(directory) = path.parent() {
         std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     }
     std::fs::write(path, ron).map_err(|error| error.to_string())
+}
+
+/// Bevy's world format with each entity's components in the order given,
+/// which is the order loading inserts them in. Bevy's own serializer sorts
+/// them by type path.
+struct InOrder<'a> {
+    world: &'a DynamicWorld,
+    registry: &'a TypeRegistry,
+}
+
+impl Serialize for InOrder<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut world = serializer.serialize_struct(WORLD_STRUCT, 2)?;
+        world.serialize_field(
+            WORLD_RESOURCES,
+            &WorldMapSerializer {
+                entries: &self.world.resources,
+                registry: self.registry,
+            },
+        )?;
+        world.serialize_field(WORLD_ENTITIES, &Entities(self))?;
+        world.end()
+    }
+}
+
+struct Entities<'a>(&'a InOrder<'a>);
+
+impl Serialize for Entities<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(
+            self.0
+                .world
+                .entities
+                .iter()
+                .map(|entity| (entity.entity, Components(entity, self.0.registry))),
+        )
+    }
+}
+
+struct Components<'a>(&'a DynamicEntity, &'a TypeRegistry);
+
+impl Serialize for Components<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut entity = serializer.serialize_struct(ENTITY_STRUCT, 1)?;
+        entity.serialize_field(ENTITY_FIELD_COMPONENTS, &ComponentMap(self))?;
+        entity.end()
+    }
+}
+
+struct ComponentMap<'a>(&'a Components<'a>);
+
+impl Serialize for ComponentMap<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let Components(entity, registry) = self.0;
+        serializer.collect_map(entity.components.iter().map(|component| {
+            let path = component
+                .get_represented_type_info()
+                .map_or_else(|| component.reflect_type_path(), |info| info.type_path());
+            (
+                path,
+                TypedReflectSerializer::with_processor(
+                    component.as_partial_reflect(),
+                    registry,
+                    &HANDLE_PATHS,
+                ),
+            )
+        }))
+    }
 }
 
 fn is<T: 'static>(component: &dyn PartialReflect) -> bool {
@@ -247,49 +326,92 @@ pub(crate) const HANDLE_PATHS: HandleSerializeProcessor = HandleSerializeProcess
     ephemeral_handle_behavior: EphemeralHandleBehavior::Error,
 };
 
-/// The entities' components that belong in the file: reflected, not built
-/// at runtime from other components, and serializable. Handles and other
-/// opaque values are left out with a warning.
 fn dynamic_world(world: &World, entities: &[Entity], registry: &TypeRegistry) -> DynamicWorld {
     let entities = entities
         .iter()
-        .map(|&entity| {
-            let entity_ref = world.entity(entity);
-            let components = world
-                .inspect_entity(entity)
-                .into_iter()
-                .flatten()
-                .filter_map(|info| {
-                    let type_id = info.type_id().filter(|id| !left_out(*id))?;
-                    let value = registry
-                        .get_type_data::<ReflectComponent>(type_id)?
-                        .reflect(entity_ref)?;
-                    let serializer = TypedReflectSerializer::with_processor(
-                        value.as_partial_reflect(),
-                        registry,
-                        &HANDLE_PATHS,
-                    );
-                    if serde_json::to_value(serializer).is_err() {
-                        warn!("Not saving {}: it does not serialize.", info.name());
-                        return None;
-                    }
-                    // A concrete clone keeps types that serialize through
-                    // serde, like `Name`, serializable; a dynamic value loses that.
-                    Some(
-                        value
-                            .reflect_clone()
-                            .map(|clone| clone.into_partial_reflect())
-                            .unwrap_or_else(|_| value.to_dynamic()),
-                    )
-                })
-                .collect();
-            DynamicEntity { entity, components }
+        .map(|&entity| DynamicEntity {
+            entity,
+            components: saved_components(world, entity, registry),
         })
         .collect();
     DynamicWorld {
         resources: Vec::new(),
         entities,
     }
+}
+
+/// The entity's components that belong in the file: reflected, not built
+/// at runtime from other components, and serializable. Handles and other
+/// opaque values are left out with a warning. So is a component that
+/// another saved one requires and that still has its default value:
+/// loading brings it back with its requirer.
+///
+/// Requirers come first, because loading inserts components in file order
+/// and a component can look for what its requirer brings: `Camera` warns
+/// about a missing render graph unless `Camera3d` is already there.
+// ponytail: compares with `Default`, so a value set to the default where
+// the requirer brings another one (Camera3d's `DebandDither::Enabled`) is
+// dropped and loads as the requirer's. Build the requirer in a scratch
+// world to compare if that bites.
+fn saved_components(
+    world: &World,
+    entity: Entity,
+    registry: &TypeRegistry,
+) -> Vec<Box<dyn PartialReflect>> {
+    let entity_ref = world.entity(entity);
+    let saved: Vec<(&ComponentInfo, &dyn Reflect)> = world
+        .inspect_entity(entity)
+        .into_iter()
+        .flatten()
+        .filter_map(|info| {
+            let type_id = info.type_id().filter(|id| !left_out(*id))?;
+            let value = registry
+                .get_type_data::<ReflectComponent>(type_id)?
+                .reflect(entity_ref)?;
+            let serializer = TypedReflectSerializer::with_processor(
+                value.as_partial_reflect(),
+                registry,
+                &HANDLE_PATHS,
+            );
+            if serde_json::to_value(serializer).is_err() {
+                warn!("Not saving {}: it does not serialize.", info.name());
+                return None;
+            }
+            Some((info, value))
+        })
+        .collect();
+    let requirers = |id: ComponentId| {
+        saved
+            .iter()
+            .filter(|(other, _)| other.required_components().iter_ids().any(|r| r == id))
+            .count()
+    };
+    let mut kept: Vec<(usize, &dyn Reflect)> = saved
+        .iter()
+        .map(|&(info, value)| (requirers(info.id()), info, value))
+        .filter(|&(requirers, info, value)| requirers == 0 || !is_default(registry, info, value))
+        .map(|(requirers, _, value)| (requirers, value))
+        .collect();
+    // Stable, and `required_components` holds requirements of requirements,
+    // so whatever requires a component has fewer requirers than it.
+    kept.sort_by_key(|&(requirers, _)| requirers);
+    kept.into_iter()
+        .map(|(_, value)| {
+            // A concrete clone keeps types that serialize through serde,
+            // like `Name`, serializable; a dynamic value loses that.
+            value
+                .reflect_clone()
+                .map(|clone| clone.into_partial_reflect())
+                .unwrap_or_else(|_| value.to_dynamic())
+        })
+        .collect()
+}
+
+fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn Reflect) -> bool {
+    info.type_id()
+        .and_then(|id| registry.get_type_data::<ReflectDefault>(id))
+        .and_then(|default| value.reflect_partial_eq(default.default().as_partial_reflect()))
+        == Some(true)
 }
 
 /// Components that do not belong in the file: what the plugin or Bevy
@@ -501,6 +623,57 @@ mod tests {
                 .is_some()
         );
         assert!(world.get::<Camera3d>(entities[1]).is_some());
+    }
+
+    #[test]
+    fn leaves_out_required_defaults_and_writes_requirers_first() {
+        use bevy::{camera::Projection, reflect::TypePath};
+
+        let mut app = test_app();
+        app.register_type::<Camera>().register_type::<Projection>();
+        let camera = app
+            .world_mut()
+            .spawn((
+                Name::new("Camera"),
+                Camera3d::default(),
+                Transform::from_xyz(0.0, 1.0, 5.0),
+                SceneEntity,
+            ))
+            .id();
+        let dir = std::env::temp_dir().join(format!("besfa-required-{}", std::process::id()));
+        let path = dir.join(SCENE_PATH);
+        let quoted = |path: &str| format!("\"{path}\"");
+
+        save(app.world_mut(), &path).expect("the scene should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        assert!(!ron.contains(&quoted(Camera::type_path())), "{ron}");
+        assert!(!ron.contains(&quoted(Projection::type_path())), "{ron}");
+        assert!(
+            ron.contains(&quoted(Transform::type_path())),
+            "not a default"
+        );
+
+        app.world_mut().get_mut::<Camera>(camera).unwrap().order = 3;
+        save(app.world_mut(), &path).expect("the scene should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let at = |path: &str| ron.find(&quoted(path)).unwrap_or_else(|| panic!("{ron}"));
+        assert!(at(Camera3d::type_path()) < at(Camera::type_path()), "{ron}");
+
+        let mut loaded = test_app();
+        loaded
+            .register_type::<Camera>()
+            .register_type::<Projection>();
+        // Bevy's renderer warns from this hook when the render graph that
+        // Camera3d brings is missing.
+        loaded
+            .world_mut()
+            .register_component_hooks::<Camera>()
+            .on_add(|world, context| {
+                assert!(world.entity(context.entity).contains::<Camera3d>());
+            });
+        let entities = spawn(&mut loaded, &ron);
+        assert_eq!(loaded.world().get::<Camera>(entities[0]).unwrap().order, 3);
     }
 
     #[test]
