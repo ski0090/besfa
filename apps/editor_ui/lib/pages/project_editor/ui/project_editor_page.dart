@@ -289,7 +289,12 @@ class _ProjectEditorPageState extends State<ProjectEditorPage> {
     setState(() => _playing = true);
   }
 
-  void _send(Map<String, Object?> command) => _game?.send(jsonEncode(command));
+  void _send(Map<String, Object?> command) {
+    if (_game case final game?) {
+      game.send(jsonEncode(command));
+      _scene.sent(command);
+    }
+  }
 
   /// Sends a command that changes the scene, recording [undo], the commands
   /// that take it back. Changes made while playing end with the play

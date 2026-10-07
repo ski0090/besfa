@@ -82,6 +82,15 @@ class EntityComponent {
 
   String get crate => crateOf(path);
 
+  EntityComponent withValue(Object? value) => EntityComponent(
+    name: name,
+    path: path,
+    mutable: mutable,
+    requiredBy: requiredBy,
+    saved: saved,
+    value: value,
+  );
+
   /// The editor can change it: reflected, mutable, and not computed.
   bool get editable => saved && mutable && value != null;
 }
@@ -132,6 +141,11 @@ class Scene extends ChangeNotifier {
   /// The editor changed the scene since it was loaded or last saved.
   bool dirty = false;
 
+  /// The `set`, `insert` and `remove` commands sent to this game. Its
+  /// `entity` reports count the ones it took, so one written before the
+  /// latest change is skipped instead of taking that change back on screen.
+  int _changes = 0;
+
   /// Hears every report after it is applied, for what the page does about
   /// them: recording edits for undo, waiting for a save.
   ValueChanged<Map<String, Object?>>? onReport;
@@ -168,8 +182,10 @@ class Scene extends ChangeNotifier {
             SceneEntity.fromJson(entity as Map<String, Object?>),
         ];
       case 'entity':
-        // A report for an earlier selection may still be in the pipe.
-        if (report['id'] == selected) {
+        // A report for an earlier selection, or from before the latest
+        // change, may still be in the pipe. Older plugins send no count.
+        final changes = report['changes'] as int? ?? _changes;
+        if (report['id'] == selected && changes >= _changes) {
           components = [
             for (final component in report['components'] as List)
               EntityComponent.fromJson(component as Map<String, Object?>),
@@ -212,6 +228,25 @@ class Scene extends ChangeNotifier {
     }
   }
 
+  /// Notes a [command] sent to the game. A `set` on the selected entity
+  /// shows its value at once, so a change made before the game reports
+  /// back starts from it, and so does the change's undo.
+  void sent(Map<String, Object?> command) {
+    if (!const {'set', 'insert', 'remove'}.contains(command['command'])) {
+      return;
+    }
+    _changes++;
+    if (command['command'] == 'set' && command['id'] == selected) {
+      components = [
+        for (final component in components)
+          component.path == command['component']
+              ? component.withValue(command['value'])
+              : component,
+      ];
+      notifyListeners();
+    }
+  }
+
   void markDirty() {
     if (!dirty) {
       dirty = true;
@@ -229,6 +264,7 @@ class Scene extends ChangeNotifier {
     addable = const [];
     crate = null;
     dirty = false;
+    _changes = 0;
     notifyListeners();
   }
 }

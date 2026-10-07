@@ -129,10 +129,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(game.commands.last, {'command': 'restore', 'id': _cube});
 
-    // Removing a component puts it back with its value on undo.
+    // Removing a component puts it back with its value on undo: the last
+    // one sent, since undoing the drag, even before the game reports it.
     await tester.tap(find.byTooltip('Remove component'));
     await _control(tester, LogicalKeyboardKey.keyZ);
-    expect(game.commands.last, _set(0));
+    expect(game.commands.last, _set(3));
 
     // Removing one without a value records nothing to undo: the next undo
     // takes back the entity the game spawned earlier.

@@ -11,9 +11,11 @@ import 'support/editor_harness.dart';
 const _cube = 4294967295;
 const _transform = 'bevy_transform::components::transform::Transform';
 
-/// The game's report of the cube with its Transform at [translation].
-String _cubeReport(List<double> translation) =>
-    '@besfa {"type":"entity","id":$_cube,"components":['
+/// The game's report of the cube with its Transform at [translation],
+/// after it took [changes] of the editor's changes.
+String _cubeReport(List<double> translation, {int? changes}) =>
+    '@besfa {"type":"entity","id":$_cube,'
+    '${changes == null ? '' : '"changes":$changes,'}"components":['
     '{"name":"Transform","path":"$_transform","mutable":true,"saved":true,'
     '"value":{"translation":$translation,"rotation":[0.0,0.0,0.0,1.0],'
     '"scale":[1.0,1.0,1.0]}}]}';
@@ -43,6 +45,43 @@ void main() {
 
   /// Translation x, y, z, rotation X, Y, Z, then scale x, y, z.
   Finder field(int index) => find.byType(TextField).at(index);
+
+  testWidgets('a change made before the game reports builds on the last', (
+    WidgetTester tester,
+  ) async {
+    final (game, output) = await openWithCube(tester);
+    Map<String, Object?> transform(List<num> translation) => {
+      'translation': translation,
+      'rotation': [0, 0, 0, 1],
+      'scale': [1, 1, 1],
+    };
+    Future<void> type(int index, String text) async {
+      await tester.tap(field(index));
+      await tester.enterText(field(index), text);
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+    }
+
+    await type(0, '2');
+    // The game has not reported x = 2 yet.
+    await type(2, '5');
+    expect(game.commands.last['value'], transform([2, 1, 5]));
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(game.commands.last['value'], transform([2, 1, 0]));
+
+    // A report written after the first change only is behind: skipped.
+    output(_cubeReport([2.0, 1.0, 5.0], changes: 1));
+    await tester.pump();
+    expect(tester.widget<TextField>(field(2)).controller!.text, '0');
+    output(_cubeReport([2.0, 1.0, 0.0], changes: 3));
+    output(_cubeReport([2.0, 9.0, 0.0], changes: 3));
+    await tester.pump();
+    expect(tester.widget<TextField>(field(1)).controller!.text, '9');
+  });
 
   testWidgets('a field keeps what is typed and sends the whole value', (
     WidgetTester tester,

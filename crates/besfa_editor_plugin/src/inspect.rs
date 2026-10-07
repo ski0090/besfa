@@ -32,6 +32,12 @@ use crate::{
 #[derive(Resource, Default)]
 pub(crate) struct Selected(pub(crate) Option<Entity>);
 
+/// How many `set`, `insert` and `remove` commands the game has taken. The
+/// `entity` report carries the count, so the editor can tell a report
+/// written before its latest change from one written after.
+#[derive(Resource, Default)]
+pub(crate) struct Changes(pub(crate) u64);
+
 /// Selects `entity` from the game's side, telling the editor.
 pub(crate) fn select(world: &mut World, entity: Option<Entity>) {
     world.resource_mut::<Selected>().0 = entity;
@@ -58,6 +64,7 @@ pub(crate) struct InspectPlugin;
 impl Plugin for InspectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Selected>()
+            .init_resource::<Changes>()
             // Last: after Update and transform propagation, so values are current.
             .add_systems(Last, report);
     }
@@ -114,9 +121,15 @@ fn report(world: &mut World, mut last_entities: Local<String>, mut last_entity: 
         return;
     };
     match components(world, entity) {
+        // A new count makes a new line, so every change is answered.
         Some(components) => write_if_changed(
             &mut last_entity,
-            json!({ "type": "entity", "id": entity.to_bits(), "components": components }),
+            json!({
+                "type": "entity",
+                "id": entity.to_bits(),
+                "changes": world.resource::<Changes>().0,
+                "components": components,
+            }),
         ),
         // Despawned; the entities report drops it as well.
         None => select(world, None),

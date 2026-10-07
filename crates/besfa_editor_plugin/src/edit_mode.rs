@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::{
     edit::{self, SpawnKind},
-    inspect::{Selected, report_saved, select, send_report},
+    inspect::{Changes, Selected, report_saved, select, send_report},
     scene::{SCENE_PATH, asset_file, save, save_prefab, scene_file},
     scene_view::{self, PointerEvent, SceneView, Tool},
     viewport,
@@ -50,6 +50,7 @@ impl Plugin for EditModePlugin {
 
         app.insert_resource(EditorCommands(Mutex::new(receiver)))
             .init_resource::<Selected>()
+            .init_resource::<Changes>()
             .add_systems(PreStartup, pause)
             .add_systems(PreUpdate, run_commands);
     }
@@ -146,6 +147,13 @@ fn run_commands(world: &mut World) {
 }
 
 fn run(world: &mut World, command: Command) {
+    // Counted whether or not they apply: the editor counts what it sent.
+    if matches!(
+        command,
+        Command::Set { .. } | Command::Insert { .. } | Command::Remove { .. }
+    ) {
+        world.resource_mut::<Changes>().0 += 1;
+    }
     let result = match command {
         Command::Play => {
             world.resource_mut::<Time<Virtual>>().unpause();
@@ -374,10 +382,14 @@ mod tests {
             "value": { "translation": [1, 2, 3] },
         });
         editor.send(set.to_string()).unwrap();
+        editor
+            .send(r#"{"command":"remove","id":1,"component":"no::Such"}"#.into())
+            .unwrap();
         app.update();
         assert_eq!(
             app.world().get::<Transform>(spawned).unwrap().translation,
             Vec3::new(1.0, 2.0, 3.0)
         );
+        assert_eq!(app.world().resource::<Changes>().0, 2, "failures count too");
     }
 }
