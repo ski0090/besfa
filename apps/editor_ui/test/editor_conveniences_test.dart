@@ -136,7 +136,9 @@ void main() {
     expect(game.commands.last, _set(3));
 
     // Removing one without a value records nothing to undo: the next undo
-    // takes back the entity the game spawned earlier.
+    // takes back the entity the game spawned earlier. The game's own
+    // component shows though unreflected.
+    output('@besfa {"type":"systems","crate":"demo","systems":[]}');
     output(
       '@besfa {"type":"entity","id":$_cube,"components":['
       '{"name":"Spin","path":"demo::Spin","mutable":true,"saved":true}]}',

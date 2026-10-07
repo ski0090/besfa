@@ -14,6 +14,7 @@ class ValueEditor extends StatelessWidget {
     required this.value,
     required this.onChanged,
     this.eulerRotation = false,
+    this.hidden = const {},
   });
 
   final Object? value;
@@ -21,6 +22,9 @@ class ValueEditor extends StatelessWidget {
 
   /// Shows the `rotation` quaternion as Euler angles in degrees.
   final bool eulerRotation;
+
+  /// Top-level fields left out of view; a change still sends them back.
+  final Set<String> hidden;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +38,8 @@ class ValueEditor extends StatelessWidget {
     if (node is Map<String, Object?>) {
       final children = [
         for (final MapEntry(:key, :value) in node.entries)
-          ..._fields(value, [...path, key], key),
+          if (path.isNotEmpty || !hidden.contains(key))
+            ..._fields(value, [...path, key], key),
       ];
       if (label == null) {
         return children;

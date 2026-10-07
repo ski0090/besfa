@@ -7,11 +7,21 @@ import 'package:editor_ui/shared/ui/panel.dart';
 import 'package:editor_ui/widgets/entity_inspector/ui/value_editor.dart';
 
 const _transformPath = 'bevy_transform::components::transform::Transform';
+const _namePath = 'bevy_ecs::name::Name';
 
-/// The selected entity's components, and every system of the game, grouped
-/// by crate with the game's own crate first. With the callbacks, component
-/// values become fields and components can be added and removed.
-class EntityInspectorPanel extends StatelessWidget {
+/// Fields Bevy recomputes while the game runs, out of the simple view.
+// ponytail: the template's camera; add types as they show more.
+const _runtimeFields = {
+  'bevy_camera::camera::Camera': {'computed'},
+};
+
+/// The selected entity and the game's systems. Simply, what there is to
+/// edit: the name, the components the scene file keeps with Transform
+/// first, the game's own components, and the game's own systems. In
+/// detail, every component and system grouped by crate, with what Bevy
+/// computes. With the callbacks, component values become fields and
+/// components can be added and removed.
+class EntityInspectorPanel extends StatefulWidget {
   const EntityInspectorPanel({
     super.key,
     required this.scene,
@@ -32,50 +42,84 @@ class EntityInspectorPanel extends StatelessWidget {
   final ValueChanged<int>? onApplyPrefab;
 
   @override
+  State<EntityInspectorPanel> createState() => _EntityInspectorPanelState();
+}
+
+class _EntityInspectorPanelState extends State<EntityInspectorPanel> {
+  bool _details = false;
+
+  Scene get scene => widget.scene;
+
+  @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: scene,
       builder: (context, _) {
         final selected = scene.selected;
         final entity = scene.selectedEntity;
+        final onSet = widget.onSet;
+        // Simply, the name is edited in the header.
+        final name = _details || onSet == null
+            ? null
+            : scene.components
+                  .where((c) => c.path == _namePath && c.editable)
+                  .firstOrNull;
+        Widget tile(EntityComponent component) => _ComponentTile(
+          component,
+          // A new entity starts with fresh fields.
+          key: ValueKey('$selected/${component.path}'),
+          details: _details,
+          onSet: onSet,
+          onRemove: widget.onRemove,
+        );
         return Panel(
           title: 'Inspector',
+          actions: [
+            PanelAction(
+              icon: _details ? Icons.unfold_less : Icons.unfold_more,
+              tooltip: _details ? 'Hide details' : 'Show details',
+              onPressed: () => setState(() => _details = !_details),
+            ),
+          ],
           child: ListView(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-                child: Text(
-                  selected == null
-                      ? 'Select an entity in the Hierarchy'
-                      : entity == null
-                      ? 'Entity $selected is gone'
-                      : entity.label,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: entity == null ? panelMutedText : panelText,
-                  ),
-                ),
+                child: name != null
+                    ? ValueEditor(
+                        key: ValueKey('$selected/name'),
+                        value: name.value,
+                        onChanged: (value) => onSet!(_namePath, value),
+                      )
+                    : Text(
+                        selected == null
+                            ? 'Select an entity in the Hierarchy'
+                            : entity == null
+                            ? 'Entity $selected is gone'
+                            : entity.label,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: entity == null ? panelMutedText : panelText,
+                        ),
+                      ),
               ),
               if (entity != null) ..._placement(entity),
               if (selected != null) ...[
                 const _SectionTitle('Components'),
-                ..._crateGroups(
-                  scene.components,
-                  (component) => component.crate,
-                  scene.crate,
-                  // Groups that hold something the scene file keeps.
-                  (components) =>
-                      components.any((component) => component.saved),
-                  (component) => _ComponentTile(
-                    component,
-                    // A new entity starts with fresh fields.
-                    key: ValueKey('$selected/${component.path}'),
-                    onSet: onSet,
-                    onRemove: onRemove,
-                  ),
-                ),
-                if (onInsert != null && entity != null)
+                if (_details)
+                  ..._crateGroups(
+                    scene.components,
+                    (component) => component.crate,
+                    scene.crate,
+                    // Groups that hold something the scene file keeps.
+                    (components) =>
+                        components.any((component) => component.saved),
+                    tile,
+                  )
+                else
+                  for (final component in _editable(name)) tile(component),
+                if (widget.onInsert != null && entity != null)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: Align(
@@ -88,20 +132,49 @@ class EntityInspectorPanel extends StatelessWidget {
                     ),
                   ),
               ],
-              const _SectionTitle('Systems'),
-              ..._crateGroups(
-                scene.systems,
-                (system) => system.crate,
-                scene.crate,
-                (_) => false,
-                (system) => _SystemRow(system),
-              ),
+              if (_details) ...[
+                const _SectionTitle('Systems'),
+                ..._crateGroups(
+                  scene.systems,
+                  (system) => system.crate,
+                  scene.crate,
+                  (_) => false,
+                  (system) => _SystemRow(system),
+                ),
+              ] else if (_gameSystems case final systems
+                  when systems.isNotEmpty) ...[
+                const _SectionTitle('Systems'),
+                for (final system in systems) _SystemRow(system),
+              ],
             ],
           ),
         );
       },
     );
   }
+
+  /// What there is to edit, Transform first: the components the scene
+  /// file keeps, and the game's own, where an unreflected one is tagged
+  /// so. The [name] edited in the header is left out.
+  List<EntityComponent> _editable(EntityComponent? name) {
+    final shown = [
+      for (final component in scene.components)
+        if (component != name &&
+            (component.saved && component.value != null ||
+                component.crate == scene.crate))
+          component,
+    ];
+    return [
+      ...shown.where((component) => component.path == _transformPath),
+      ...shown.where((component) => component.path != _transformPath),
+    ];
+  }
+
+  /// The game's own systems; Bevy's are in the details.
+  List<GameSystem> get _gameSystems => [
+    for (final system in scene.systems)
+      if (system.crate == scene.crate) system,
+  ];
 
   /// Where the entity comes from when Save scene does not keep it, and a
   /// way to keep changes made inside a placed prefab.
@@ -122,7 +195,7 @@ class EntityInspectorPanel extends StatelessWidget {
           placed.asset!.endsWith('.scn.ron') &&
           // The scene placed in itself is saved with Save scene.
           placed.asset != 'scenes/main.scn.ron' &&
-          onApplyPrefab != null)
+          widget.onApplyPrefab != null)
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Align(
@@ -130,7 +203,7 @@ class EntityInspectorPanel extends StatelessWidget {
             child: TextButton.icon(
               icon: const Icon(Icons.upload_file, size: 16),
               label: const Text('Apply to prefab'),
-              onPressed: () => onApplyPrefab!(placed.id),
+              onPressed: () => widget.onApplyPrefab!(placed.id),
             ),
           ),
         ),
@@ -147,7 +220,7 @@ class EntityInspectorPanel extends StatelessWidget {
       ]),
     );
     if (path != null) {
-      onInsert!(path);
+      widget.onInsert!(path);
     }
   }
 }
@@ -218,11 +291,15 @@ class _ComponentTile extends StatelessWidget {
   const _ComponentTile(
     this.component, {
     super.key,
+    required this.details,
     required this.onSet,
     required this.onRemove,
   });
 
   final EntityComponent component;
+
+  /// With tags for what Bevy computes or requires, and every field.
+  final bool details;
   final void Function(String component, Object? value)? onSet;
   final ValueChanged<String>? onRemove;
 
@@ -251,10 +328,12 @@ class _ComponentTile extends StatelessWidget {
                         color: component.saved ? panelText : panelMutedText,
                       ),
                     ),
-                    if (component.requiredBy case final requiredBy?)
-                      _Tag('required by $requiredBy'),
-                    if (!component.saved) const _Tag('computed'),
-                    if (!component.mutable) const _Tag('immutable'),
+                    if (details) ...[
+                      if (component.requiredBy case final requiredBy?)
+                        _Tag('required by $requiredBy'),
+                      if (!component.saved) const _Tag('computed'),
+                      if (!component.mutable) const _Tag('immutable'),
+                    ],
                     if (value == null) const _Tag('no Reflect'),
                   ],
                 ),
@@ -272,6 +351,9 @@ class _ComponentTile extends StatelessWidget {
                 ? ValueEditor(
                     value: value,
                     eulerRotation: component.path == _transformPath,
+                    hidden: details
+                        ? const {}
+                        : _runtimeFields[component.path] ?? const {},
                     onChanged: (value) => onSet(component.path, value),
                   )
                 : SelectableText(

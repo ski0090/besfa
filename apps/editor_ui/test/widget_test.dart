@@ -11,6 +11,7 @@ import 'package:editor_ui/features/create_project/model/project_creator.dart';
 import 'package:editor_ui/features/prebuild_bevy/model/bevy_prebuild.dart';
 import 'package:editor_ui/pages/project_editor/ui/project_editor_page.dart';
 import 'package:editor_ui/shared/process/cli_process.dart';
+import 'package:editor_ui/widgets/entity_inspector/ui/entity_inspector_panel.dart';
 import 'package:editor_ui/widgets/scene_hierarchy/ui/scene_hierarchy_panel.dart';
 
 import 'support/editor_harness.dart';
@@ -112,7 +113,8 @@ void main() {
     final (game, output) = await openEditor(tester, dir);
     output(
       '@besfa {"type":"systems","crate":"demo_game","systems":['
-      '{"schedule":"Update","name":"demo_game::spin"}]}',
+      '{"schedule":"Update","name":"demo_game::spin"},'
+      '{"schedule":"First","name":"bevy_time::time_system"}]}',
     );
     output(
       '@besfa {"type":"entities","entities":['
@@ -123,7 +125,9 @@ void main() {
     await tester.pump();
 
     expect(find.text('Select an entity in the Hierarchy'), findsOneWidget);
-    expect(find.text('demo_game (1)'), findsOneWidget);
+    // Simply, the game's own systems.
+    expect(find.text('Update  spin'), findsOneWidget);
+    expect(find.textContaining('time_system'), findsNothing);
     expect(find.text('Entity 1v0'), findsOneWidget);
     expect(find.text('INFO demo_game: hello'), findsOneWidget);
     expect(find.textContaining('@besfa'), findsNothing);
@@ -145,19 +149,53 @@ void main() {
       '"mutable":true,"required_by":null,"saved":true,"value":{"translation":[0.0,1.0,0.0]}},'
       '{"name":"Spin","path":"demo_game::Spin","mutable":true,"required_by":null,"saved":true,"value":null},'
       '{"name":"GlobalTransform","path":"bevy_transform::components::global_transform::GlobalTransform",'
-      '"mutable":true,"required_by":"Transform","saved":false,"value":"opaque"}]}',
+      '"mutable":true,"required_by":"Transform","saved":false,"value":"opaque"},'
+      '{"name":"Name","path":"bevy_ecs::name::Name","mutable":true,"saved":true,"value":"Cube"},'
+      '{"name":"Camera","path":"bevy_camera::camera::Camera","mutable":true,"saved":true,'
+      '"value":{"order":0,"computed":{"old_viewport_size":null}}}]}',
     );
     await tester.pumpAndSettle();
 
+    // Simply, what there is to edit: Transform first, the name in the
+    // header, the game's own components, nothing Bevy computes.
     expect(find.text('Spin'), findsOneWidget);
     expect(find.text('no Reflect'), findsOneWidget);
-    // Groups with saved components start open.
-    expect(find.text('bevy_transform (2)'), findsOneWidget);
-    expect(find.text('Transform'), findsOneWidget);
     expect(find.text('translation'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Transform')).dy,
+      lessThan(tester.getTopLeft(find.text('Spin')).dy),
+    );
+    expect(
+      find.descendant(
+        of: find.byType(EntityInspectorPanel),
+        matching: find.widgetWithText(TextField, 'Cube'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Name'), findsNothing);
+    expect(find.text('order'), findsOneWidget);
+    for (final hidden in [
+      'GlobalTransform',
+      'opaque',
+      'computed',
+      'required by Transform',
+      'bevy_transform (2)',
+    ]) {
+      expect(find.text(hidden), findsNothing, reason: hidden);
+    }
+
+    // In detail, everything the game reports.
+    await tester.tap(find.byTooltip('Show details'));
+    await tester.pumpAndSettle();
+    expect(find.text('bevy_transform (2)'), findsOneWidget);
     expect(find.text('required by Transform'), findsOneWidget);
-    expect(find.text('computed'), findsOneWidget);
     expect(find.text('opaque'), findsOneWidget);
+    expect(find.text('Name'), findsOneWidget);
+    expect(find.text('computed'), findsWidgets);
+    // The game's crate groups its component and its system.
+    expect(find.text('demo_game (1)'), findsNWidgets(2));
+    await tester.tap(find.byTooltip('Hide details'));
+    await tester.pumpAndSettle();
 
     await tester.tap(cubeRow);
     await tester.pump();
