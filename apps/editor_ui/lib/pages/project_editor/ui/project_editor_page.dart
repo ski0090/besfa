@@ -1105,9 +1105,16 @@ class _BottomPanel extends StatelessWidget {
                     foregroundColor: index == tab
                         ? const Color(0xFFE4E7EC)
                         : const Color(0xFF7E8795),
-                    textStyle: const TextStyle(fontSize: 12),
                   ),
-                  child: Text(label),
+                  // In the theme's font, which a button text style would
+                  // replace.
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
                 ),
             ],
           ),

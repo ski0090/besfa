@@ -29,27 +29,10 @@ class BesfaEditorApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const colorScheme = ColorScheme.dark(
-      primary: Color(0xFF8CB4FF),
-      onPrimary: Color(0xFF10264C),
-      surface: Color(0xFF20242B),
-      onSurface: Color(0xFFE4E7EC),
-    );
-
     return MaterialApp(
       title: 'Besfa',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorScheme: colorScheme,
-        scaffoldBackgroundColor: const Color(0xFF15171B),
-        cardTheme: const CardThemeData(
-          margin: EdgeInsets.zero,
-          elevation: 0,
-          color: Color(0xFF20242B),
-        ),
-      ),
+      theme: editorTheme(),
       home: ProjectHubPage(
         projectCreator: projectCreator,
         recentProjects: recentProjects,
@@ -74,3 +57,21 @@ class BesfaEditorApp extends StatelessWidget {
     );
   }
 }
+
+/// The editor's dark theme.
+ThemeData editorTheme() => ThemeData(
+  useMaterial3: true,
+  brightness: Brightness.dark,
+  colorScheme: const ColorScheme.dark(
+    primary: Color(0xFF8CB4FF),
+    onPrimary: Color(0xFF10264C),
+    surface: Color(0xFF20242B),
+    onSurface: Color(0xFFE4E7EC),
+  ),
+  scaffoldBackgroundColor: const Color(0xFF15171B),
+  cardTheme: const CardThemeData(
+    margin: EdgeInsets.zero,
+    elevation: 0,
+    color: Color(0xFF20242B),
+  ),
+);

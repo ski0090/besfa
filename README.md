@@ -44,9 +44,51 @@ Restart the editor after installing the CLI so it picks up the PATH change.
 
 The target folder must not exist yet; its name becomes the project name.
 
+## Updating
+
+### The editor and the CLI
+
+```bash
+git pull
+cargo install --path crates/besfa_cli
+```
+
+Then restart the editor (`flutter run -d windows` in `apps/editor_ui`). Reinstalling the CLI matters when `crates/besfa_cli` changed.
+
+When the editor starts, it runs `besfa prebuild` in the background: it moves the shared Bevy build to the latest `besfa_editor_plugin` on GitHub and builds it. The toolbar shows its progress, and **Play** waits until it reads **Bevy is ready**.
+
+### The plugin in a game project
+
+A game depends on `besfa_editor_plugin` from GitHub, and its `Cargo.lock` pins one commit, so the game keeps that plugin until you update it. The icon at the right of the editor toolbar compares the project's commit with the one the Bevy prebuild uses:
+
+- Green check: the same commit.
+- Amber warning: a different commit. Hover over it to see what clicking does.
+
+![The amber icon in the toolbar, with its tooltip](docs/images/plugin-update-available.png)
+
+Click the icon to update. The editor runs `cargo update -p besfa_editor_plugin` in the project, which leaves every other dependency alone, then stops the game and rebuilds it with the new plugin. Cargo's output appears in the **Log** panel (`Process exited with code 1.` is the old game being stopped), and the icon turns green.
+
+![The green icon after the update, and cargo's output in the Log panel](docs/images/plugin-updated.png)
+
+Without the editor, run the same command in the project folder:
+
+```bash
+cargo update -p besfa_editor_plugin
+```
+
+The icon is hidden for a project with no `Cargo.lock` yet, or one that uses the plugin from a local path.
+
+Plugin changes reach games only after they are pushed to `main` on GitHub. After a push, restart the editor so the prebuild moves to the new commit, then click the icon in each project.
+
 ## Tests
 
 ```bash
 cargo test
 cd apps/editor_ui && flutter test
+```
+
+The README screenshots are rendered by a test; after changing the UI, retake them (written to `docs/images`):
+
+```bash
+cd apps/editor_ui && flutter test tool/readme_screenshots_test.dart
 ```
