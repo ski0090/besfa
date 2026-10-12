@@ -4,9 +4,9 @@
 
 Besfa는 Bevy 게임 엔진을 위한 데스크톱 에디터 프로젝트다.
 
-에디터 UI는 Flutter로 만들고, 게임 프로젝트의 Bevy 런타임과는 별도 프로세스로 연결한다. Flutter는 도킹 UI, 프로젝트 관리, 씬 편집 도구를 담당한다. Bevy는 게임 실행, ECS 상태, 씬 렌더링을 담당한다.
+에디터 UI는 Rust와 egui로 만들고, 게임 프로젝트의 Bevy 런타임과는 별도 프로세스로 연결한다. 에디터는 패널 UI, 프로젝트 관리, 씬 편집 도구를 담당한다. Bevy는 게임 실행, ECS 상태, 씬 렌더링을 담당한다.
 
-Windows에서는 Bevy가 렌더링한 뷰포트를 D3D 공유 텍스처로 Flutter에 전달하는 방식을 목표로 한다. 연결 경로와 프로세스 수명은 [ARCHITECTURE.md](./ARCHITECTURE.md)를 참고한다.
+Windows에서는 Bevy가 에디터의 D3D12 공유 텍스처에 뷰포트를 렌더링한다. 연결 경로와 프로세스 수명은 [ARCHITECTURE.md](./ARCHITECTURE.md)를 참고한다.
 
 ## 프로젝트 경계
 
@@ -29,17 +29,9 @@ my-game/                       # 에디터가 생성하는 별도 사용자 프�
 
 ## 현재 구성
 
-### `apps/editor_ui`
+### `crates/besfa_editor`
 
-Flutter 기반 Windows 데스크톱 에디터 UI다.
-
-UI의 역할은 [EDITOR_UI.md](./EDITOR_UI.md), FSD-lite 구조와 의존성 규칙은 [FSD.md](./FSD.md)를 참고한다.
-
-- 프로젝트 생성과 열기를 위한 시작 허브 화면
-- Windows 최소 창 크기: 900 × 640
-- FSD-lite 구조 적용
-
-새 프로젝트 생성은 `besfa new <DIRECTORY> --output json`을 실행하도록 연결되어 있다. 프로젝트 열기와 생성된 프로젝트를 에디터에서 여는 흐름은 아직 구현되지 않았다.
+egui(eframe, wgpu DX12) 기반 Windows 데스크톱 에디터다. 프로젝트 허브와, 게임을 뷰포트에서 실행하며 씬을 고치는 편집 화면이 있다. 역할과 동작은 [EDITOR_UI.md](./EDITOR_UI.md)를 참고한다.
 
 ### `crates/besfa_cli`
 
@@ -60,24 +52,14 @@ besfa --version
 
 ```text
 besfa/
-├─ apps/
-│  └─ editor_ui/                   # Flutter 데스크톱 에디터
-│     └─ lib/
-│        ├─ app/                    # 앱 조립, 테마, 창 초기화
-│        ├─ pages/                  # 전체 화면 단위 UI
-│        ├─ features/               # 사용자 액션 단위 기능
-│        ├─ entities/               # 프로젝트, 씬 등 도메인 모델
-│        ├─ widgets/                # 여러 기능을 조합한 큰 UI
-│        └─ shared/                 # 공통 UI, FFI, 범용 유틸
-│
 ├─ crates/
+│  ├─ besfa_editor/                 # egui 데스크톱 에디터
 │  ├─ besfa_cli/                    # `besfa` 명령행 도구
 │  ├─ besfa_project/                # 프로젝트 생성, 검증, 템플릿 처리
 │  ├─ besfa_data/                   # .besfa 파일 포맷, 파싱, 검증, 마이그레이션
 │  ├─ besfa_protocol/               # 에디터와 게임 런타임 간 통신 규약
 │  ├─ besfa_editor_plugin/          # 게임 프로젝트에 추가하는 Bevy Plugin
-│  ├─ besfa_viewport_windows/       # D3D 공유 텍스처 기반 Windows 뷰포트
-│  └─ besfa_bridge/                 # Flutter FFI와 IPC 연결
+│  └─ besfa_viewport_windows/       # D3D 공유 텍스처 기반 Windows 뷰포트
 │
 ├─ templates/
 │  └─ basic_3d/                     # 첫 게임 프로젝트 템플릿
@@ -93,19 +75,18 @@ besfa/
 
 | 구성 요소 | 책임 |
 | --- | --- |
-| `editor_ui` | UI 표시, 사용자 입력, 프로젝트 생성 요청 |
+| `besfa_editor` | UI 표시, 사용자 입력, 프로젝트 생성 요청, 게임 프로세스 관리 |
 | `besfa_cli` | 터미널과 CI에서 실행하는 명령 인터페이스 |
 | `besfa_project` | 프로젝트 생성과 파일 시스템 작업의 실제 규칙 |
 | `besfa_data` | 에디터 데이터 파일의 읽기, 쓰기, 검증 |
 | `besfa_editor_plugin` | `.besfa` 데이터와 Bevy ECS/Asset의 연결 |
 | `besfa_protocol` | 에디터와 실행 중 게임 사이의 메시지 타입 |
-| `besfa_viewport_windows` | Bevy 렌더 타깃과 Flutter 뷰포트의 GPU 연결 |
+| `besfa_viewport_windows` | Bevy 렌더 타깃과 에디터 뷰포트의 GPU 연결 |
 
 ## 설계 문서
 
 - [아키텍처](./ARCHITECTURE.md)
 - [Editor UI](./EDITOR_UI.md)
-- [Feature-Sliced Design](./FSD.md)
 - [CLI 계약](./CLI_CONTRACT.md)
 - [에디터 데이터 포맷](./DATA_FORMAT.md)
 - [TODO](./TODO.md)

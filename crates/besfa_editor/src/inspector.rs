@@ -1,0 +1,697 @@
+//! The selected entity and the game's systems. Simply, what there is to
+//! edit: the name, the components the scene file keeps with Transform
+//! first, the game's own components, and the game's own systems. In detail,
+//! every component and system grouped by crate, with what Bevy computes.
+
+use std::collections::BTreeMap;
+
+use eframe::egui::{self, Id, Label, RichText, ScrollArea, TextEdit, Ui};
+use serde_json::{Value, json};
+
+use crate::{
+    panels::{MUTED, TEXT, panel_header, section, tag},
+    scene::{ComponentType, EntityComponent, GameSystem, Scene, SceneEntity, crate_of},
+};
+
+const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
+const NAME: &str = "bevy_ecs::name::Name";
+
+/// Fields Bevy recomputes while the game runs, out of the simple view.
+// ponytail: the template's camera; add types as they show more.
+const RUNTIME_FIELDS: &[(&str, &[&str])] = &[("bevy_camera::camera::Camera", &["computed"])];
+
+/// What the inspector asks of the game.
+pub enum Action {
+    /// A component's type path and its whole new value.
+    Set(String, Value),
+    Insert(String),
+    Remove(String),
+    /// Writes the placed prefab of this id back to its file.
+    ApplyPrefab(u64),
+}
+
+#[derive(Default)]
+pub struct Inspector {
+    details: bool,
+    /// The Add component search, while it is open.
+    adding: Option<String>,
+}
+
+impl Inspector {
+    pub fn ui(&mut self, ui: &mut Ui, scene: &Scene, can_apply_prefab: bool) -> Option<Action> {
+        let mut action = None;
+        panel_header(ui, "Inspector", |ui| {
+            let (icon, tip) = if self.details {
+                ("⏶", "Hide details")
+            } else {
+                ("⏷", "Show details")
+            };
+            if ui.small_button(icon).on_hover_text(tip).clicked() {
+                self.details = !self.details;
+            }
+        });
+        let selected = scene.selected;
+        let entity = scene.selected_entity();
+        // Simply, the name is edited in the header.
+        let name = scene
+            .components
+            .iter()
+            .find(|component| component.path == NAME && component.editable())
+            .filter(|_| !self.details);
+        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            ui.add_space(8.0);
+            match name.and_then(|name| name.value.as_ref()) {
+                Some(value) => {
+                    if let Some(value) =
+                        value_editor(ui, Id::new((selected, NAME)), value, false, &[])
+                    {
+                        action = Some(Action::Set(NAME.into(), value));
+                    }
+                }
+                None => {
+                    let text = match (selected, entity) {
+                        (None, _) => "Select an entity in the Hierarchy".into(),
+                        (Some(id), None) => format!("Entity {id} is gone"),
+                        (_, Some(entity)) => entity.label(),
+                    };
+                    let color = if entity.is_some() { TEXT } else { MUTED };
+                    ui.label(RichText::new(text).strong().color(color));
+                }
+            }
+            if let Some(entity) = entity {
+                placement(ui, scene, entity, can_apply_prefab, &mut action);
+            }
+            if selected.is_some() {
+                section(ui, "Components");
+                let mut tile = |ui: &mut Ui, component: &EntityComponent| {
+                    if let Some(change) = component_tile(ui, selected, component, self.details) {
+                        action = Some(change);
+                    }
+                };
+                if self.details {
+                    // Groups that hold something the scene file keeps start open.
+                    let expand =
+                        |components: &[&EntityComponent]| components.iter().any(|c| c.saved);
+                    crate_groups(
+                        ui,
+                        &scene.components,
+                        |c| c.crate_name(),
+                        scene,
+                        expand,
+                        &mut tile,
+                    );
+                } else {
+                    for component in editable(scene, name) {
+                        tile(ui, component);
+                    }
+                }
+                if entity.is_some() && ui.button("➕ Add component").clicked() {
+                    self.adding = Some(String::new());
+                }
+            }
+            let system_row = |ui: &mut Ui, system: &GameSystem| {
+                let name = system
+                    .name
+                    .strip_prefix(&format!("{}::", crate_of(&system.name)));
+                ui.horizontal(|ui| {
+                    ui.add_space(12.0);
+                    ui.label(RichText::new(&system.schedule).small().color(MUTED));
+                    ui.label(
+                        RichText::new(name.unwrap_or(&system.name))
+                            .small()
+                            .color(TEXT),
+                    );
+                });
+            };
+            if self.details {
+                section(ui, "Systems");
+                crate_groups(
+                    ui,
+                    &scene.systems,
+                    |s| crate_of(&s.name),
+                    scene,
+                    |_| false,
+                    system_row,
+                );
+            } else {
+                let game = |system: &&GameSystem| {
+                    Some(crate_of(&system.name)) == scene.crate_name.as_deref()
+                };
+                let systems: Vec<_> = scene.systems.iter().filter(game).collect();
+                if !systems.is_empty() {
+                    section(ui, "Systems");
+                    for system in systems {
+                        system_row(ui, system);
+                    }
+                }
+            }
+        });
+        if let Some(path) = self.add_component(ui.ctx(), scene) {
+            action = Some(Action::Insert(path));
+        }
+        action
+    }
+
+    /// Picks a component type the entity does not have by name; returns its
+    /// type path.
+    fn add_component(&mut self, ctx: &egui::Context, scene: &Scene) -> Option<String> {
+        let query = self.adding.as_mut()?;
+        let mut picked = None;
+        let mut cancel = false;
+        let modal = egui::Modal::new(Id::new("add_component")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.heading("Add component");
+            let search = ui.add(
+                TextEdit::singleline(query)
+                    .hint_text("Search components")
+                    .desired_width(f32::INFINITY),
+            );
+            if !search.has_focus() && ui.memory(|m| m.focused().is_none()) {
+                search.request_focus();
+            }
+            let lowercase = query.to_lowercase();
+            let present = |path: &str| {
+                scene
+                    .components
+                    .iter()
+                    .any(|component| component.path == path)
+            };
+            let types: Vec<&ComponentType> = scene
+                .addable
+                .iter()
+                .filter(|t| !present(&t.path) && t.path.to_lowercase().contains(&lowercase))
+                .collect();
+            ScrollArea::vertical()
+                .max_height(360.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for t in types {
+                        let text = format!("{}\n{}", t.name, crate_of(&t.path));
+                        if ui
+                            .selectable_label(false, RichText::new(text).color(TEXT))
+                            .clicked()
+                        {
+                            picked = Some(t.path.clone());
+                        }
+                    }
+                });
+            cancel = ui.button("Cancel").clicked();
+        });
+        if picked.is_some() || cancel || modal.should_close() {
+            self.adding = None;
+        }
+        picked
+    }
+}
+
+/// What there is to edit, Transform first: the components the scene file
+/// keeps, and the game's own, where an unreflected one is tagged so. The
+/// `name` edited in the header is left out.
+fn editable<'a>(scene: &'a Scene, name: Option<&EntityComponent>) -> Vec<&'a EntityComponent> {
+    let mut shown: Vec<_> = scene
+        .components
+        .iter()
+        .filter(|c| !name.is_some_and(|name| name.path == c.path))
+        .filter(|c| {
+            c.saved && c.value.is_some() || Some(c.crate_name()) == scene.crate_name.as_deref()
+        })
+        .collect();
+    shown.sort_by_key(|c| c.path != TRANSFORM);
+    shown
+}
+
+/// Where the entity comes from when Save scene does not keep it, and a way
+/// to keep changes made inside a placed prefab.
+fn placement(
+    ui: &mut Ui,
+    scene: &Scene,
+    entity: &SceneEntity,
+    can_apply: bool,
+    action: &mut Option<Action>,
+) {
+    let placed = scene.placement(entity);
+    if !entity.scene {
+        tag(
+            ui,
+            &match placed.and_then(|p| p.asset.as_deref()) {
+                Some(asset) => format!("Part of {asset}; Save scene skips it."),
+                None => "Spawned by the game while it runs; Save scene skips it.".into(),
+            },
+        );
+    }
+    if let Some(placed) = placed {
+        let asset = placed.asset.as_deref().unwrap_or_default();
+        // The scene placed in itself is saved with Save scene.
+        if can_apply
+            && asset.ends_with(".scn.ron")
+            && asset != "scenes/main.scn.ron"
+            && ui.button("⮉ Apply to prefab").clicked()
+        {
+            *action = Some(Action::ApplyPrefab(placed.id));
+        }
+    }
+}
+
+/// One collapsible group per crate, the game's crate first. The game's crate
+/// and groups `expand` picks start open.
+fn crate_groups<T>(
+    ui: &mut Ui,
+    items: &[T],
+    crate_of: impl Fn(&T) -> &str,
+    scene: &Scene,
+    expand: impl Fn(&[&T]) -> bool,
+    mut show: impl FnMut(&mut Ui, &T),
+) {
+    let mut groups: BTreeMap<&str, Vec<&T>> = BTreeMap::new();
+    for item in items {
+        groups.entry(crate_of(item)).or_default().push(item);
+    }
+    let game = scene.crate_name.as_deref();
+    let mut crates: Vec<_> = groups.into_iter().collect();
+    crates.sort_by_key(|(name, _)| Some(*name) != game);
+    for (name, items) in crates {
+        egui::CollapsingHeader::new(
+            RichText::new(format!("{name} ({})", items.len()))
+                .small()
+                .color(TEXT),
+        )
+        .id_salt(name)
+        .default_open(Some(name) == game || expand(&items))
+        .show(ui, |ui| {
+            for item in items {
+                show(ui, item);
+            }
+        });
+    }
+}
+
+fn component_tile(
+    ui: &mut Ui,
+    selected: Option<u64>,
+    component: &EntityComponent,
+    details: bool,
+) -> Option<Action> {
+    let mut action = None;
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        let color = if component.saved { TEXT } else { MUTED };
+        ui.label(RichText::new(&component.name).strong().color(color));
+        if details {
+            if let Some(required_by) = &component.required_by {
+                tag(ui, &format!("required by {required_by}"));
+            }
+            if !component.saved {
+                tag(ui, "computed");
+            }
+            if !component.mutable {
+                tag(ui, "immutable");
+            }
+        }
+        if component.value.is_none() {
+            tag(ui, "no Reflect");
+        }
+        if component.saved {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("🗙")
+                    .on_hover_text("Remove component")
+                    .clicked()
+                {
+                    action = Some(Action::Remove(component.path.clone()));
+                }
+            });
+        }
+    });
+    let value = component.value.as_ref()?;
+    if component.editable() {
+        let hidden = RUNTIME_FIELDS
+            .iter()
+            .find(|(path, _)| !details && *path == component.path)
+            .map_or(&[][..], |(_, fields)| fields);
+        // A new selection starts with fresh fields.
+        let id = Id::new((selected, &component.path));
+        if let Some(value) = value_editor(ui, id, value, component.path == TRANSFORM, hidden) {
+            action = Some(Action::Set(component.path.clone(), value));
+        }
+    } else {
+        let text = match value {
+            Value::Object(_) | Value::Array(_) => serde_json::to_string_pretty(value).unwrap(),
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+        ui.label(RichText::new(text).monospace().small().color(MUTED));
+    }
+    action
+}
+
+/// Edits a component's reflected JSON value: numbers, text and flags become
+/// fields, nested structs indent under their field name. Returns the whole
+/// new value once a field commits, since the game replaces the component
+/// with it. With `euler_rotation`, the `rotation` quaternion shows as Euler
+/// angles in degrees; `hidden` top-level fields are left out of view and
+/// still sent back.
+pub fn value_editor(
+    ui: &mut Ui,
+    id: Id,
+    value: &Value,
+    euler_rotation: bool,
+    hidden: &[&str],
+) -> Option<Value> {
+    let mut fields = Fields {
+        id,
+        euler_rotation,
+        hidden,
+        change: None,
+    };
+    fields.node(ui, value, &mut Vec::new(), None);
+    let (path, leaf) = fields.change?;
+    Some(replace(value, &path, leaf))
+}
+
+struct Fields<'a> {
+    id: Id,
+    euler_rotation: bool,
+    hidden: &'a [&'a str],
+    /// The field that committed: its path and new value.
+    change: Option<(Vec<String>, Value)>,
+}
+
+impl Fields<'_> {
+    fn node(&mut self, ui: &mut Ui, node: &Value, path: &mut Vec<String>, label: Option<&str>) {
+        let Value::Object(map) = node else {
+            return row(ui, label, |ui| self.leaf(ui, node, path));
+        };
+        let mut children = |ui: &mut Ui| {
+            for (key, value) in map {
+                if !path.is_empty() || !self.hidden.contains(&key.as_str()) {
+                    path.push(key.clone());
+                    self.node(ui, value, path, Some(key));
+                    path.pop();
+                }
+            }
+        };
+        match label {
+            None => children(ui),
+            Some(label) => {
+                row(ui, Some(label), |_| {});
+                ui.indent(label, children);
+            }
+        }
+    }
+
+    fn leaf(&mut self, ui: &mut Ui, node: &Value, path: &[String]) {
+        let id = self.id.with(path);
+        let euler_rotation = self.euler_rotation && path == ["rotation"];
+        let mut change = |leaf: Value| self.change = Some((path.to_vec(), leaf));
+        match node {
+            Value::Number(number) => {
+                if let Some(value) = number_field(ui, id, number, None) {
+                    change(value);
+                }
+            }
+            Value::Bool(checked) => {
+                let mut checked = *checked;
+                if ui.checkbox(&mut checked, "").changed() {
+                    change(json!(checked));
+                }
+            }
+            Value::String(text) => {
+                if let Some(text) = commit_field(ui, id, text, None) {
+                    change(json!(text));
+                }
+            }
+            Value::Array(items)
+                if (2..=4).contains(&items.len()) && items.iter().all(Value::is_number) =>
+            {
+                let numbers: Vec<_> = items.iter().filter_map(Value::as_f64).collect();
+                if euler_rotation && numbers.len() == 4 {
+                    let quat = [numbers[0], numbers[1], numbers[2], numbers[3]];
+                    let angles = quat_to_euler(quat).map(|angle| json!(angle));
+                    if let Some(v) = vector(ui, id, &angles, &["X", "Y", "Z"]) {
+                        change(json!(euler_to_quat([v[0], v[1], v[2]])));
+                    }
+                } else if let Some(values) = vector(ui, id, items, &["x", "y", "z", "w"]) {
+                    change(json!(values));
+                }
+            }
+            Value::Null => read_only(ui, "None"),
+            other => read_only(ui, &other.to_string()),
+        }
+    }
+}
+
+/// One field per component; returns the whole new vector, as floats.
+fn vector(ui: &mut Ui, id: Id, items: &[Value], labels: &[&str]) -> Option<Vec<f64>> {
+    let mut changed = None;
+    ui.horizontal(|ui| {
+        let gap = ui.spacing().item_spacing.x;
+        let width = (ui.available_width() - gap * (items.len() - 1) as f32) / items.len() as f32;
+        for (i, item) in items.iter().enumerate() {
+            let Value::Number(number) = item else {
+                continue;
+            };
+            ui.allocate_ui(egui::vec2(width, ui.spacing().interact_size.y), |ui| {
+                if let Some(value) = number_field(ui, id.with(i), number, Some(labels[i])) {
+                    let mut values: Vec<f64> = items.iter().filter_map(Value::as_f64).collect();
+                    values[i] = value.as_f64().unwrap_or_default();
+                    changed = Some(values);
+                }
+            });
+        }
+    });
+    changed
+}
+
+/// A number field: an integer stays an integer, a float takes whatever is
+/// typed. Text that is no such number puts the old value back.
+fn number_field(
+    ui: &mut Ui,
+    id: Id,
+    number: &serde_json::Number,
+    label: Option<&str>,
+) -> Option<Value> {
+    let shown = format_number(number);
+    let text = commit_field(ui, id, &shown, label)?;
+    let typed = text.trim().parse::<f64>().ok().filter(|n| n.is_finite())?;
+    let value = if number.is_f64() {
+        json!(typed)
+    } else if typed.fract() != 0.0 {
+        return None;
+    } else if typed < 0.0 {
+        json!(typed as i64)
+    } else {
+        json!(typed as u64)
+    };
+    let Value::Number(parsed) = &value else {
+        unreachable!()
+    };
+    (format_number(parsed) != shown).then_some(value)
+}
+
+/// Three decimals, without trailing zeros: what fits in a field.
+pub fn format_number(number: &serde_json::Number) -> String {
+    match number.as_f64().filter(|_| number.is_f64()) {
+        Some(float) => {
+            let text = format!("{float:.3}");
+            let text = text.trim_end_matches('0').trim_end_matches('.');
+            if text == "-0" {
+                "0".into()
+            } else {
+                text.into()
+            }
+        }
+        None => number.to_string(),
+    }
+}
+
+/// A text field that commits when it loses focus, Enter included, and shows
+/// `value`, the game's newest, while nobody is typing in it. Returns the
+/// typed text when it differs from `value`.
+fn commit_field(ui: &mut Ui, id: Id, value: &str, label: Option<&str>) -> Option<String> {
+    let typing = ui.data(|data| data.get_temp::<String>(id));
+    let was_typing = typing.is_some();
+    let mut text = typing.unwrap_or_else(|| value.to_owned());
+    let mut field = TextEdit::singleline(&mut text)
+        .id(id)
+        .font(egui::TextStyle::Monospace)
+        .desired_width(f32::INFINITY);
+    if let Some(label) = label {
+        field = field.prefix(RichText::new(label).small().color(MUTED));
+    }
+    if ui.add(field).has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, text));
+        return None;
+    }
+    ui.data_mut(|data| data.remove_temp::<String>(id));
+    (was_typing && text != value).then_some(text)
+}
+
+fn read_only(ui: &mut Ui, text: &str) {
+    ui.add(Label::new(RichText::new(text).monospace().color(TEXT)).wrap());
+}
+
+/// A field's name in a fixed column, then the field.
+fn row(ui: &mut Ui, label: Option<&str>, add: impl FnOnce(&mut Ui)) {
+    let Some(label) = label else {
+        return add(ui);
+    };
+    ui.horizontal(|ui| {
+        let size = egui::vec2(84.0, ui.spacing().interact_size.y);
+        ui.allocate_ui_with_layout(
+            size,
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_width(size.x);
+                ui.add(Label::new(RichText::new(label).small().color(MUTED)).truncate());
+            },
+        );
+        add(ui);
+    });
+}
+
+/// A copy of `node` with the value at `path` replaced by `leaf`.
+fn replace(node: &Value, path: &[String], leaf: Value) -> Value {
+    match (node, path.split_first()) {
+        (Value::Object(map), Some((head, rest))) => {
+            let mut map = map.clone();
+            let child = replace(map.get(head).unwrap_or(&Value::Null), rest, leaf);
+            map.insert(head.clone(), child);
+            Value::Object(map)
+        }
+        _ => leaf,
+    }
+}
+
+/// A quaternion `[x, y, z, w]` as Euler angles in degrees `[x, y, z]`:
+/// Bevy's `EulerRot::YXZ`, yaw about Y, then pitch about X, then roll about
+/// Z, the order Bevy's own examples use.
+pub fn quat_to_euler([x, y, z, w]: [f64; 4]) -> [f64; 3] {
+    // The rotation matrix entries the angles come from.
+    let m02 = 2.0 * (x * z + w * y);
+    let m22 = 1.0 - 2.0 * (x * x + y * y);
+    let m12 = 2.0 * (y * z - w * x);
+    let m10 = 2.0 * (x * y + w * z);
+    let m11 = 1.0 - 2.0 * (x * x + z * z);
+    [
+        (-m12).clamp(-1.0, 1.0).asin(),
+        m02.atan2(m22),
+        m10.atan2(m11),
+    ]
+    .map(f64::to_degrees)
+}
+
+/// The quaternion `[x, y, z, w]` of [`quat_to_euler`]'s angles.
+pub fn euler_to_quat(degrees: [f64; 3]) -> [f64; 4] {
+    let [pitch, yaw, roll] = degrees.map(|angle| angle.to_radians() / 2.0);
+    let multiply = |[ax, ay, az, aw]: [f64; 4], [bx, by, bz, bw]: [f64; 4]| {
+        [
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz,
+        ]
+    };
+    multiply(
+        multiply(
+            [0.0, yaw.sin(), 0.0, yaw.cos()],
+            [pitch.sin(), 0.0, 0.0, pitch.cos()],
+        ),
+        [0.0, 0.0, roll.sin(), roll.cos()],
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(a: &[f64], b: &[f64], epsilon: f64) -> bool {
+        a.iter().zip(b).all(|(a, b)| (a - b).abs() < epsilon)
+    }
+
+    #[test]
+    fn reads_bevy_rotations_as_yaw_pitch_and_roll_in_degrees() {
+        // Quat::from_rotation_y(90°) and Quat::from_rotation_x(90°).
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        assert!(close(
+            &quat_to_euler([0.0, half, 0.0, half]),
+            &[0.0, 90.0, 0.0],
+            1e-4
+        ));
+        assert!((quat_to_euler([half, 0.0, 0.0, half])[0] - 90.0).abs() < 1e-3);
+        assert_eq!(quat_to_euler([0.0, 0.0, 0.0, 1.0]), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn turns_angles_back_into_the_same_rotation() {
+        for angles in [[10.0, 20.0, 30.0], [-45.0, 170.0, -5.0], [0.0, -90.0, 0.0]] {
+            assert!(
+                close(&quat_to_euler(euler_to_quat(angles)), &angles, 1e-6),
+                "{angles:?}"
+            );
+        }
+        // The template camera's looking_at rotation survives a round trip.
+        let camera = [-0.22055435, -0.13167094, -0.030063398, 0.9659786];
+        assert!(close(&euler_to_quat(quat_to_euler(camera)), &camera, 1e-6));
+    }
+
+    #[test]
+    fn shows_three_decimals_and_replaces_one_field() {
+        let number = |value: Value| format_number(value.as_number().unwrap());
+        assert_eq!(number(json!(1.0)), "1");
+        assert_eq!(number(json!(10.5)), "10.5");
+        assert_eq!(number(json!(-0.0001)), "0");
+        assert_eq!(number(json!(0.12345)), "0.123");
+        assert_eq!(number(json!(7)), "7");
+
+        let value = json!({"translation": [0.0, 1.0, 2.0], "inner": {"flag": true, "n": 1}});
+        let changed = replace(&value, &["inner".into(), "n".into()], json!(5));
+        assert_eq!(
+            changed,
+            json!({"translation": [0.0, 1.0, 2.0], "inner": {"flag": true, "n": 5}})
+        );
+        let keys: Vec<_> = changed.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["translation", "inner"], "field order is kept");
+    }
+
+    #[test]
+    fn commits_a_field_once_when_it_loses_focus() {
+        let ctx = egui::Context::default();
+        let id = Id::new("component");
+        let mut value = json!({"n": 1.0, "flag": true});
+        let frame = |events: Vec<egui::Event>, value: &Value| {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let mut changed = None;
+            let _ = ctx.run_ui(input, |ui| {
+                changed = value_editor(ui, id, value, false, &[])
+            });
+            changed
+        };
+        let field = id.with(&["n".to_string()][..]);
+        ctx.memory_mut(|memory| memory.request_focus(field));
+        assert_eq!(frame(vec![], &value), None);
+        assert_eq!(
+            frame(vec![egui::Event::Text("5".into())], &value),
+            None,
+            "typing"
+        );
+        // The game's newer value does not replace what is being typed.
+        value["n"] = json!(3.0);
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        let committed = frame(vec![enter], &value);
+        assert_eq!(
+            committed,
+            Some(json!({"n": 15.0, "flag": true})),
+            "Enter commits"
+        );
+        assert_eq!(frame(vec![], &committed.unwrap()), None, "once");
+    }
+}

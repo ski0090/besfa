@@ -1,0 +1,1035 @@
+//! The editor for one project. The game runs in one of two states: paused
+//! in edit mode, where the viewport shows the scene as Startup built it, or
+//! playing. Stop ends play by relaunching the game in edit mode, which
+//! resets the scene and picks up code changes. In both states the game
+//! reports its entities, which the hierarchy and inspector panels show and
+//! change through commands on its stdin, one JSON object per line.
+
+use std::{
+    collections::VecDeque,
+    fs,
+    path::{Path, PathBuf},
+    time::{Duration, Instant, SystemTime},
+};
+
+use eframe::{
+    egui::{
+        self, Button, Color32, Key, KeyboardShortcut, Modifiers, RichText, Ui, ViewportCommand,
+    },
+    egui_wgpu::RenderState,
+};
+use serde_json::{Value, json};
+
+use crate::{
+    inspector::{Action, Inspector},
+    panels::{self, ACCENT, AssetBrowser, GOOD, HierarchyAction, MUTED, WARNING, prebuild_status},
+    process::{CliProcess, Output, Prebuild},
+    project::{self, Project},
+    scene::{Edit, EditHistory, Scene},
+    viewport::{ViewportInput, ViewportTexture, adapter_name},
+};
+
+/// The log keeps the latest lines.
+const MAX_LOG_LINES: usize = 2000;
+
+/// The viewport texture's size until the panel has been laid out.
+const DEFAULT_VIEWPORT: [u32; 2] = [1280, 720];
+
+/// How long the viewport panel keeps its size before the texture follows.
+const RESIZE_DELAY: Duration = Duration::from_millis(250);
+
+/// How long the editor waits for the game to report a save.
+const SAVE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The scene view's handle tools, by the name the game takes, with their
+/// icons, tooltips and keys.
+const TOOLS: [(&str, &str, &str, Key); 3] = [
+    ("translate", "✚", "Move (W)", Key::W),
+    ("rotate", "⟳", "Rotate (E)", Key::E),
+    ("scale", "⬈", "Scale (R)", Key::R),
+];
+
+/// What follows a save once the game reports it, or gives up waiting.
+#[derive(Clone, Copy)]
+enum AfterSave {
+    Rebuild,
+    Leave,
+    Close,
+}
+
+enum Dialog {
+    /// Asks for a prefab's file name, without folders or extension.
+    PrefabName(String),
+    /// Asks about unsaved changes before what follows.
+    Unsaved(AfterSave),
+}
+
+pub struct Editor {
+    project: Project,
+    render: Option<RenderState>,
+    logs: VecDeque<String>,
+    scene: Scene,
+    /// Scene changes of this edit session, for undo and redo.
+    history: EditHistory,
+    game: Option<CliProcess>,
+    /// `cargo update` of the plugin, while it runs.
+    update: Option<CliProcess>,
+    viewport: Option<ViewportTexture>,
+    /// Textures replaced by a resize. A running game may still render into
+    /// one until it reads the `viewport` command, so they go when the next
+    /// game launches.
+    // ponytail: kept until the next launch; drop them on a game
+    // acknowledgment if long sessions with many resizes hold too much GPU
+    // memory.
+    retired: Vec<ViewportTexture>,
+    /// The viewport panel's size in physical pixels, which the texture
+    /// follows once it settles.
+    wanted_viewport: Option<[u32; 2]>,
+    resize_at: Option<Instant>,
+    input: ViewportInput,
+    tool: &'static str,
+    /// Waiting for a game process: stopping one to launch the next, or
+    /// updating the plugin first.
+    starting: bool,
+    /// The game was told to play; otherwise it sits paused in edit mode.
+    playing: bool,
+    /// Launch an edit session once the game exits.
+    relaunch: bool,
+    /// The prebuild holds the shared build directory; the edit session
+    /// starts once it is done.
+    waiting_for_prebuild: bool,
+    /// `besfa_editor_plugin` revisions: the project's and the prebuild's.
+    plugin_revision: Option<String>,
+    latest_plugin_revision: Option<String>,
+    /// A save in flight, until when it is waited for, and what follows it.
+    pending_save: Option<(Instant, AfterSave)>,
+    /// Save once this frame's fields have committed.
+    save_after_ui: bool,
+    source: SourceWatch,
+    inspector: Inspector,
+    assets: AssetBrowser,
+    assets_tab: bool,
+    dialog: Option<Dialog>,
+    /// The window may close: nothing is unsaved, or the user chose.
+    closing: bool,
+    leave: bool,
+}
+
+impl Editor {
+    pub fn new(
+        project: Project,
+        render: Option<RenderState>,
+        prebuild: &Prebuild,
+        ctx: &egui::Context,
+    ) -> Self {
+        let mut editor = Self {
+            source: SourceWatch::new(project.file("src")),
+            assets: AssetBrowser::new(project.file("assets")),
+            project,
+            render,
+            logs: VecDeque::new(),
+            scene: Scene::default(),
+            history: EditHistory::default(),
+            game: None,
+            update: None,
+            viewport: None,
+            retired: Vec::new(),
+            wanted_viewport: None,
+            resize_at: None,
+            input: ViewportInput::default(),
+            tool: "translate",
+            starting: false,
+            playing: false,
+            relaunch: false,
+            waiting_for_prebuild: prebuild.running(),
+            plugin_revision: None,
+            latest_plugin_revision: None,
+            pending_save: None,
+            save_after_ui: false,
+            inspector: Inspector::default(),
+            assets_tab: false,
+            dialog: None,
+            closing: false,
+            leave: false,
+        };
+        editor.read_plugin_revisions();
+        if !editor.waiting_for_prebuild {
+            editor.launch(false, ctx);
+        }
+        editor
+    }
+
+    /// The window title: the project, marked while the scene has unsaved
+    /// changes.
+    pub fn title(&self) -> String {
+        let dirty = if self.scene.dirty { " *" } else { "" };
+        format!("{}{dirty} - Besfa Editor", self.project.name())
+    }
+
+    /// Shows the editor; true once it should go back to the hub.
+    pub fn ui(&mut self, ui: &mut Ui, prebuild: &Prebuild) -> bool {
+        let ctx = ui.ctx().clone();
+        self.poll_game(&ctx);
+        self.poll_update(&ctx);
+        if self.waiting_for_prebuild && !prebuild.running() {
+            self.waiting_for_prebuild = false;
+            // The prebuild moved its lock to the latest plugin.
+            self.read_plugin_revisions();
+            self.launch(false, &ctx);
+        }
+        if let Some((deadline, then)) = self.pending_save
+            && Instant::now() >= deadline
+        {
+            self.pending_save = None;
+            self.after_save(then, &ctx);
+        }
+        if self.source.settled(&ctx) {
+            self.rebuild(prebuild, &ctx);
+        }
+        if self.resize_at.is_some_and(|at| Instant::now() >= at) {
+            self.resize_viewport();
+        }
+        if self.dialog.is_none() {
+            self.shortcuts(&ctx);
+        }
+        if ctx.input(|i| i.viewport().close_requested()) && !self.closing && self.scene.dirty {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            // A second click on close while the question is up asks nothing more.
+            if self.dialog.is_none() {
+                self.dialog = Some(Dialog::Unsaved(AfterSave::Close));
+            }
+        }
+
+        self.menu_bar(ui);
+        self.toolbar(ui, prebuild, &ctx);
+        egui::Panel::bottom("bottom")
+            .default_size(200.0)
+            .resizable(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.assets_tab, false, "Log");
+                    ui.selectable_value(&mut self.assets_tab, true, "Assets");
+                });
+                ui.separator();
+                if !self.assets_tab {
+                    panels::log(ui, &self.logs);
+                } else if let Some(path) = self.assets.ui(ui, !self.playing) {
+                    self.instantiate(path);
+                }
+            });
+        egui::Panel::left("hierarchy")
+            .default_size(220.0)
+            .show(ui, |ui| {
+                if let Some(action) = panels::hierarchy(ui, &self.scene, !self.playing) {
+                    self.on_hierarchy(action);
+                }
+            });
+        egui::Panel::right("inspector")
+            .default_size(320.0)
+            .show(ui, |ui| {
+                if let Some(action) = self.inspector.ui(ui, &self.scene, !self.playing) {
+                    self.on_inspector(action);
+                }
+            });
+        egui::CentralPanel::default().show(ui, |ui| self.viewport_ui(ui, &ctx));
+        self.dialogs(&ctx);
+
+        if std::mem::take(&mut self.save_after_ui) {
+            self.save();
+        }
+        // The game renders on its own; show its newest frame every frame.
+        if let (Some(_), Some(viewport), Some(render)) = (&self.game, &self.viewport, &self.render)
+        {
+            viewport.copy_frame(render);
+            ctx.request_repaint();
+        }
+        std::mem::take(&mut self.leave)
+    }
+
+    /// Reports from the game go to the scene, everything else to the log.
+    fn poll_game(&mut self, ctx: &egui::Context) {
+        let Some(game) = &self.game else {
+            return;
+        };
+        for output in game.poll() {
+            match output {
+                Output::Line(line) => match self.scene.handle(&line) {
+                    Some(report) => self.on_report(&report, ctx),
+                    None => self.log(line),
+                },
+                Output::Exit(code) => {
+                    self.log(format!("Process exited with code {code}."));
+                    self.game = None;
+                    self.playing = false;
+                    if std::mem::take(&mut self.relaunch) {
+                        self.launch(false, ctx);
+                    }
+                }
+            }
+        }
+    }
+
+    fn poll_update(&mut self, ctx: &egui::Context) {
+        let Some(update) = &self.update else {
+            return;
+        };
+        for output in update.poll() {
+            match output {
+                Output::Line(line) => self.log(line),
+                Output::Exit(code) => {
+                    if code != 0 {
+                        self.log(format!("cargo update exited with code {code}."));
+                    }
+                    self.update = None;
+                    self.after_update(ctx);
+                }
+            }
+        }
+    }
+
+    fn log(&mut self, line: impl Into<String>) {
+        self.logs.push_back(line.into());
+        if self.logs.len() > MAX_LOG_LINES {
+            self.logs.pop_front();
+        }
+    }
+
+    fn read_plugin_revisions(&mut self) {
+        self.plugin_revision = project::plugin_revision(&self.project.file("Cargo.lock"));
+        self.latest_plugin_revision = project::prebuild_plugin_revision();
+    }
+
+    /// Starts the game paused in edit mode, or already playing with `play`.
+    fn launch(&mut self, play: bool, ctx: &egui::Context) {
+        self.starting = false;
+        self.scene.reset();
+        self.history.clear();
+        // The previous game has exited, so nothing renders into them any more.
+        self.retired.clear();
+        self.ensure_viewport();
+        let shared = self.viewport.as_ref().zip(self.render.as_ref());
+        let shared = shared.map(|(viewport, render)| (viewport.name.clone(), adapter_name(render)));
+        // Read by besfa_editor_plugin: start paused, play on `play`.
+        let mut env = vec![("BESFA_EDIT_MODE", "1")];
+        if let Some((name, adapter)) = &shared {
+            // The plugin takes the size from the texture itself. It opens the
+            // texture on D3D12, on the editor's GPU.
+            env.extend([
+                ("BESFA_VIEWPORT", name.as_str()),
+                ("WGPU_BACKEND", "dx12"),
+                ("WGPU_ADAPTER_NAME", adapter),
+            ]);
+        }
+        // Dynamic linking makes rebuilds after a code change much faster.
+        // Only the editor turns it on, so a plain `cargo build` stays
+        // standalone.
+        let args = ["run", "--features", "bevy/dynamic_linking"];
+        let mut game =
+            match CliProcess::start(Path::new(&self.project.path), "cargo", &args, &env, ctx) {
+                Ok(game) => game,
+                Err(error) => return self.log(format!("Could not start cargo: {error}")),
+            };
+        // Sent while cargo still builds, these wait in the pipe for the game.
+        if play {
+            game.send(&json!({"command": "play"}).to_string());
+        }
+        // The scene is rebuilt from the same file, so the selection carries over.
+        if let Some(id) = self.scene.selected {
+            game.send(&json!({"command": "select", "id": id}).to_string());
+        }
+        if self.tool != "translate" {
+            game.send(&json!({"command": "tool", "tool": self.tool}).to_string());
+        }
+        self.game = Some(game);
+        self.playing = play;
+    }
+
+    /// Unsaved changes are saved first: Stop restarts from the file.
+    fn play(&mut self, ctx: &egui::Context) {
+        self.logs.clear();
+        self.input.focus_next = true;
+        if self.game.is_none() {
+            // The edit session is gone, e.g. it failed to build or crashed.
+            return self.launch(true, ctx);
+        }
+        if self.scene.dirty {
+            self.save();
+        }
+        self.send(json!({"command": "play"}));
+        self.playing = true;
+    }
+
+    /// Stops the game and starts a new edit session once it has exited: the
+    /// running game locks its executable against the next build.
+    fn restart(&mut self, ctx: &egui::Context) {
+        match &self.game {
+            Some(game) => {
+                self.starting = true;
+                self.relaunch = true;
+                game.stop();
+            }
+            None => self.launch(false, ctx),
+        }
+    }
+
+    fn send(&mut self, command: Value) {
+        if let Some(game) = &mut self.game {
+            game.send(&command.to_string());
+            self.scene.sent(&command);
+        }
+    }
+
+    /// Sends a command that changes the scene, recording `undo`, the
+    /// commands that take it back. A change nothing can take back, like
+    /// removing an unreflected component, leaves no entry. Changes made while
+    /// playing end with the play session, so they do not count as unsaved.
+    fn edit(&mut self, command: Value, undo: Vec<Value>) {
+        self.send(command.clone());
+        if !undo.is_empty() {
+            self.record(Edit {
+                undo,
+                redo: vec![command],
+            });
+        }
+        if !self.playing {
+            self.scene.mark_dirty();
+        }
+    }
+
+    /// Adds `edit` to the history. An undone change it forgets may have left
+    /// an entity hidden for redo; nothing can restore that entity now, so the
+    /// game despawns it.
+    fn record(&mut self, edit: Edit) {
+        for forgotten in self.history.add(edit) {
+            for command in forgotten.undo {
+                if command["command"] == "delete" {
+                    self.send(json!({"command": "despawn", "id": command["id"]}));
+                }
+            }
+        }
+    }
+
+    /// Undo and redo replay commands; the game's ids stay valid for the edit
+    /// session, which is where the history lives.
+    fn replay(&mut self, undo: bool) {
+        if self.playing {
+            return;
+        }
+        let commands = if undo {
+            self.history.undo()
+        } else {
+            self.history.redo()
+        };
+        for command in commands.into_iter().flatten() {
+            self.send(command);
+            self.scene.mark_dirty();
+        }
+    }
+
+    /// Records what the game did on the editor's behalf, and notices saves.
+    fn on_report(&mut self, report: &Value, ctx: &egui::Context) {
+        match report["type"].as_str() {
+            Some("spawned") => {
+                let id = &report["id"];
+                self.record(Edit {
+                    undo: vec![json!({"command": "delete", "id": id})],
+                    redo: vec![json!({"command": "restore", "id": id})],
+                });
+            }
+            Some("edited") => {
+                let set = |value: &Value| json!({"command": "set", "id": report["id"], "component": report["component"], "value": value});
+                self.record(Edit {
+                    undo: vec![set(&report["before"])],
+                    redo: vec![set(&report["after"])],
+                });
+            }
+            Some("saved") => {
+                if let Some((_, then)) = self.pending_save.take() {
+                    self.after_save(then, ctx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The game reports whether saving worked, which clears the dirty mark.
+    fn save(&mut self) {
+        if self.game.is_some() && !self.playing {
+            self.send(json!({"command": "save"}));
+        }
+    }
+
+    /// Saves and does `then` once the game says it did, or after a while.
+    fn save_then(&mut self, then: AfterSave, ctx: &egui::Context) {
+        self.save();
+        self.pending_save = Some((Instant::now() + SAVE_TIMEOUT, then));
+        ctx.request_repaint_after(SAVE_TIMEOUT);
+    }
+
+    fn after_save(&mut self, then: AfterSave, ctx: &egui::Context) {
+        match then {
+            AfterSave::Rebuild => self.restart(ctx),
+            // A failed save keeps the changes unsaved; the log says why.
+            AfterSave::Leave => self.leave = !self.scene.dirty,
+            AfterSave::Close if !self.scene.dirty => self.close(ctx),
+            AfterSave::Close => {}
+        }
+    }
+
+    fn close(&mut self, ctx: &egui::Context) {
+        self.closing = true;
+        ctx.send_viewport_cmd(ViewportCommand::Close);
+    }
+
+    /// Goes back to the hub, asking about unsaved changes first.
+    fn request_leave(&mut self) {
+        if self.scene.dirty {
+            self.dialog = Some(Dialog::Unsaved(AfterSave::Leave));
+        } else {
+            self.leave = true;
+        }
+    }
+
+    /// Restarts the edit session when the game's code changed, which
+    /// rebuilds the game, saving unsaved changes first. A play session is
+    /// left alone: Stop rebuilds anyway.
+    fn rebuild(&mut self, prebuild: &Prebuild, ctx: &egui::Context) {
+        if self.playing || self.starting || prebuild.running() {
+            return;
+        }
+        self.log("Source changed; rebuilding.");
+        if self.game.is_some() && self.scene.dirty {
+            self.starting = true;
+            self.save_then(AfterSave::Rebuild, ctx);
+        } else {
+            self.restart(ctx);
+        }
+    }
+
+    /// Moves the project's plugin to the latest commit and restarts the edit
+    /// session, which rebuilds the game against it.
+    fn update_plugin(&mut self, ctx: &egui::Context) {
+        self.starting = true;
+        let args = ["update", "-p", "besfa_editor_plugin"];
+        match CliProcess::start(Path::new(&self.project.path), "cargo", &args, &[], ctx) {
+            Ok(update) => self.update = Some(update),
+            Err(error) => {
+                self.log(format!("Could not start cargo: {error}"));
+                self.after_update(ctx);
+            }
+        }
+    }
+
+    fn after_update(&mut self, ctx: &egui::Context) {
+        self.read_plugin_revisions();
+        self.restart(ctx);
+    }
+
+    fn set_command(&self, component: &str, value: Value) -> Value {
+        json!({"command": "set", "id": self.scene.selected, "component": component, "value": value})
+    }
+
+    /// The selected entity's current value of `component`, as reported.
+    fn current_value(&self, component: &str) -> Option<Value> {
+        let reported = self
+            .scene
+            .components
+            .iter()
+            .find(|reported| reported.path == component);
+        reported.and_then(|reported| reported.value.clone())
+    }
+
+    fn on_inspector(&mut self, action: Action) {
+        let id = self.scene.selected;
+        match action {
+            Action::Set(component, value) => {
+                let undo = self.set_command(
+                    &component,
+                    self.current_value(&component).unwrap_or_default(),
+                );
+                self.edit(self.set_command(&component, value), vec![undo]);
+            }
+            Action::Insert(component) => self.edit(
+                json!({"command": "insert", "id": id, "component": component}),
+                vec![json!({"command": "remove", "id": id, "component": component})],
+            ),
+            // Setting a missing component adds it back with its value.
+            Action::Remove(component) => {
+                let undo = self
+                    .current_value(&component)
+                    .map(|value| self.set_command(&component, value));
+                self.edit(
+                    json!({"command": "remove", "id": id, "component": component}),
+                    undo.into_iter().collect(),
+                );
+            }
+            // Writes a file, not the scene: nothing to undo or save.
+            Action::ApplyPrefab(id) => self.send(json!({"command": "apply_prefab", "id": id})),
+        }
+    }
+
+    fn on_hierarchy(&mut self, action: HierarchyAction) {
+        match action {
+            // The game reports the selected entity's components back.
+            HierarchyAction::Select(id) => {
+                self.scene.select(id);
+                self.send(json!({"command": "select", "id": id}));
+            }
+            // The game reports what it spawns, which records the undo.
+            HierarchyAction::Spawn(kind) => {
+                self.edit(json!({"command": "spawn", "kind": kind}), vec![])
+            }
+            HierarchyAction::Duplicate => self.duplicate(),
+            HierarchyAction::Delete => self.delete(),
+            HierarchyAction::SavePrefab => {
+                if let Some(entity) = self.scene.selected_entity() {
+                    self.dialog = Some(Dialog::PrefabName(
+                        entity.name.clone().unwrap_or("Prefab".into()),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn duplicate(&mut self) {
+        if let Some(entity) = self.scene.selected_entity() {
+            self.edit(json!({"command": "duplicate", "id": entity.id}), vec![]);
+        }
+    }
+
+    /// The game hides the entity, so undoing brings the same one back.
+    fn delete(&mut self) {
+        if let Some(entity) = self.scene.selected_entity() {
+            let id = entity.id;
+            self.edit(
+                json!({"command": "delete", "id": id}),
+                vec![json!({"command": "restore", "id": id})],
+            );
+        }
+    }
+
+    /// Puts the asset at `path` in the scene; the game reports it as spawned.
+    fn instantiate(&mut self, path: String) {
+        self.edit(json!({"command": "instantiate", "path": path}), vec![]);
+    }
+
+    fn set_tool(&mut self, tool: &'static str) {
+        self.tool = tool;
+        self.send(json!({"command": "tool", "tool": tool}));
+    }
+
+    /// Scene shortcuts. Delete, Ctrl+D and undo leave text fields alone,
+    /// and a focused field is committed before Ctrl+S saves. While the game
+    /// plays, keys are the game's: the viewport hands them over.
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        if self.playing || self.input.looking(self.playing) {
+            return;
+        }
+        let pressed = |modifiers, key| {
+            ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(modifiers, key)))
+        };
+        if pressed(Modifiers::COMMAND, Key::S) {
+            // The focused field commits as it loses focus this frame.
+            ctx.memory_mut(|memory| memory.stop_text_input());
+            self.save_after_ui = true;
+            return;
+        }
+        if ctx.text_edit_focused() {
+            return;
+        }
+        if pressed(Modifiers::COMMAND, Key::D) {
+            self.duplicate();
+        } else if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
+            || pressed(Modifiers::COMMAND, Key::Y)
+        {
+            self.replay(false);
+        } else if pressed(Modifiers::COMMAND, Key::Z) {
+            self.replay(true);
+        } else if pressed(Modifiers::NONE, Key::Delete) {
+            self.delete();
+        } else if pressed(Modifiers::NONE, Key::F) {
+            self.send(json!({"command": "focus"}));
+        } else if let Some((tool, ..)) = TOOLS
+            .into_iter()
+            .find(|(.., key)| pressed(Modifiers::NONE, *key))
+        {
+            self.set_tool(tool);
+        }
+    }
+
+    fn menu_bar(&mut self, ui: &mut Ui) {
+        egui::Panel::top("menu").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    // Only the edit session's scene is worth keeping.
+                    let can_save = self.game.is_some() && !self.playing;
+                    if ui
+                        .add_enabled(can_save, Button::new("Save scene").shortcut_text("Ctrl+S"))
+                        .clicked()
+                    {
+                        self.save_after_ui = true;
+                    }
+                    if ui.button("Back to Project Hub").clicked() {
+                        self.request_leave();
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    let undo = Button::new("Undo").shortcut_text("Ctrl+Z");
+                    if ui
+                        .add_enabled(self.history.can_undo() && !self.playing, undo)
+                        .clicked()
+                    {
+                        self.replay(true);
+                    }
+                    let redo = Button::new("Redo").shortcut_text("Ctrl+Y");
+                    if ui
+                        .add_enabled(self.history.can_redo() && !self.playing, redo)
+                        .clicked()
+                    {
+                        self.replay(false);
+                    }
+                });
+            });
+        });
+    }
+
+    fn toolbar(&mut self, ui: &mut Ui, prebuild: &Prebuild, ctx: &egui::Context) {
+        let busy = self.starting || prebuild.running();
+        egui::Panel::top("toolbar").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let (label, play) = if self.playing {
+                    ("⏹ Stop", false)
+                } else {
+                    ("▶ Play", true)
+                };
+                if ui.add_enabled(!busy, Button::new(label)).clicked() {
+                    if play {
+                        self.play(ctx)
+                    } else {
+                        self.restart(ctx)
+                    }
+                }
+                ui.add_space(12.0);
+                for (tool, icon, tooltip, _) in TOOLS {
+                    let button = Button::selectable(self.tool == tool, icon);
+                    if ui
+                        .add_enabled(!self.playing, button)
+                        .on_hover_text(tooltip)
+                        .clicked()
+                    {
+                        self.set_tool(tool);
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    prebuild_status(ui, prebuild);
+                    ui.add_space(16.0);
+                    self.plugin_status(ui, busy, ctx);
+                });
+            });
+        });
+    }
+
+    /// Whether the project's `besfa_editor_plugin` matches the one the Bevy
+    /// prebuild has, as an icon that updates the plugin when pressed. Hidden
+    /// for projects whose lock does not pin the plugin to a git revision.
+    fn plugin_status(&mut self, ui: &mut Ui, busy: bool, ctx: &egui::Context) {
+        let Some(project) = &self.plugin_revision else {
+            return;
+        };
+        // Different, not necessarily older: a push made while the editor
+        // runs leaves the project ahead of the prebuild.
+        let differs = self
+            .latest_plugin_revision
+            .as_ref()
+            .is_some_and(|latest| latest != project);
+        let (icon, color, state) = if differs {
+            ("⚠", WARNING, "differs from")
+        } else {
+            ("✔", GOOD, "matches")
+        };
+        let tooltip = format!(
+            "The plugin {state} the Bevy prebuild. Click to update it to the latest commit."
+        );
+        let button = Button::new(RichText::new(icon).color(color)).frame(false);
+        if ui
+            .add_enabled(!busy, button)
+            .on_hover_text(tooltip)
+            .clicked()
+        {
+            self.update_plugin(ctx);
+        }
+    }
+
+    fn viewport_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        let panel = ui.available_rect_before_wrap();
+        self.fit_viewport(panel.size() * ui.pixels_per_point(), ctx);
+        let shown = self.viewport.as_ref().filter(|_| self.game.is_some());
+        let Some((texture, size)) =
+            shown.map(|v| (v.texture_id, egui::vec2(v.width as f32, v.height as f32)))
+        else {
+            ui.centered_and_justified(|ui| ui.label(RichText::new("Viewport").color(MUTED)));
+            return;
+        };
+        let scale = (panel.width() / size.x).min(panel.height() / size.y);
+        let rect = egui::Rect::from_center_size(panel.center(), size * scale);
+        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        ui.painter().image(texture, rect, uv, Color32::WHITE);
+        let mut commands = Vec::new();
+        let response = self.input.ui(ui, rect, size, self.playing, &mut |command| {
+            commands.push(command)
+        });
+        for command in commands {
+            self.send(command);
+        }
+        if !self.playing {
+            ui.painter().text(
+                rect.left_bottom() + egui::vec2(8.0, -8.0),
+                egui::Align2::LEFT_BOTTOM,
+                "Click select  ·  Right-drag orbit  ·  Right-hold + WASD/QE fly  ·  Middle-drag pan  ·  Scroll zoom  ·  F focus",
+                egui::FontId::proportional(11.0),
+                Color32::from_white_alpha(0x99),
+            );
+        }
+        // Assets dragged from the Assets tab land in the scene.
+        if response.dnd_hover_payload::<String>().is_some() {
+            ui.painter()
+                .rect_stroke(rect, 0.0, (2.0, ACCENT), egui::StrokeKind::Inside);
+        }
+        if let Some(path) = response.dnd_release_payload::<String>() {
+            self.instantiate((*path).clone());
+        }
+    }
+
+    /// Creates the viewport texture once per editor. Without it the game
+    /// opens its own window, so failures are logged rather than fatal.
+    fn ensure_viewport(&mut self) {
+        if self.viewport.is_some() {
+            return;
+        }
+        let [width, height] = self.wanted_viewport.unwrap_or(DEFAULT_VIEWPORT);
+        let created = match &self.render {
+            Some(render) => ViewportTexture::create(render, width, height),
+            None => Err("the editor is not rendering with wgpu".into()),
+        };
+        match created {
+            Ok(viewport) => self.viewport = Some(viewport),
+            Err(error) => self.log(format!(
+                "Viewport unavailable, the game opens its own window: {error}"
+            )),
+        }
+    }
+
+    /// Follows the viewport panel's size, `physical` pixels, once it settles.
+    fn fit_viewport(&mut self, physical: egui::Vec2, ctx: &egui::Context) {
+        let size = [physical.x, physical.y].map(|side| side.round().clamp(16.0, 4096.0) as u32);
+        if Some(size) != self.wanted_viewport {
+            self.wanted_viewport = Some(size);
+            self.resize_at = Some(Instant::now() + RESIZE_DELAY);
+            ctx.request_repaint_after(RESIZE_DELAY);
+        }
+    }
+
+    /// Makes a texture of the wanted size, shows it, and tells the game to
+    /// render into it. The old texture is kept until the next launch.
+    fn resize_viewport(&mut self) {
+        self.resize_at = None;
+        let (Some(old), Some([width, height]), Some(render)) =
+            (&self.viewport, self.wanted_viewport, &self.render)
+        else {
+            return;
+        };
+        if [old.width, old.height] == [width, height] {
+            return;
+        }
+        match ViewportTexture::create(render, width, height) {
+            Ok(viewport) => {
+                let name = viewport.name.clone();
+                self.retired.extend(self.viewport.replace(viewport));
+                self.send(json!({"command": "viewport", "name": name}));
+            }
+            Err(error) => self.log(format!("Could not resize the viewport: {error}")),
+        }
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        match &mut self.dialog {
+            Some(Dialog::PrefabName(name)) => {
+                let mut submit = false;
+                let mut cancel = false;
+                let valid = {
+                    let name = name.trim();
+                    !name.is_empty()
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || "_- ".contains(c))
+                };
+                let modal = egui::Modal::new(egui::Id::new("prefab_name")).show(ctx, |ui| {
+                    ui.set_width(360.0);
+                    ui.heading("Save as prefab");
+                    ui.label("Prefab name");
+                    let field =
+                        ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
+                    if ui.memory(|memory| memory.focused().is_none()) {
+                        field.request_focus();
+                    }
+                    submit = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if valid {
+                        ui.label(
+                            RichText::new("Saved to assets/prefabs")
+                                .small()
+                                .color(MUTED),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("Letters, digits, spaces, - and _ only")
+                                .small()
+                                .color(panels::ERROR),
+                        );
+                    }
+                    ui.horizontal(|ui| {
+                        cancel = ui.button("Cancel").clicked();
+                        submit |= ui.button("Save").clicked();
+                    });
+                });
+                if submit && valid {
+                    let path = format!("prefabs/{}.scn.ron", name.trim());
+                    self.dialog = None;
+                    if let Some(id) = self.scene.selected {
+                        self.send(json!({"command": "save_prefab", "id": id, "path": path}));
+                    }
+                } else if cancel || modal.should_close() {
+                    self.dialog = None;
+                }
+            }
+            Some(Dialog::Unsaved(then)) => {
+                let then = *then;
+                // The changes live in the edit session; without it they are gone.
+                let can_save = self.game.is_some() && !self.playing;
+                let mut choice = None;
+                let modal = egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
+                    ui.set_width(380.0);
+                    ui.heading("Save changes to the scene?");
+                    ui.label("The scene has changes that are not saved to scenes/main.scn.ron.");
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            choice = Some("cancel");
+                        }
+                        if ui.button("Discard").clicked() {
+                            choice = Some("discard");
+                        }
+                        if can_save && ui.button("Save").clicked() {
+                            choice = Some("save");
+                        }
+                    });
+                });
+                if modal.should_close() {
+                    choice = choice.or(Some("cancel"));
+                }
+                if let Some(choice) = choice {
+                    self.dialog = None;
+                    match (choice, then) {
+                        ("save", _) => self.save_then(then, ctx),
+                        ("discard", AfterSave::Close) => self.close(ctx),
+                        ("discard", _) => self.leave = true,
+                        _ => {}
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+impl Drop for Editor {
+    fn drop(&mut self) {
+        for process in self.game.iter().chain(&self.update) {
+            process.stop();
+        }
+    }
+}
+
+/// How often the game's source folder is checked for changes.
+const SOURCE_POLL: Duration = Duration::from_millis(500);
+
+/// Notices when a Rust file under the game's `src` changes, once the changes
+/// settle.
+// ponytail: polls modification times; watch the folder (notify) if that
+// ever costs.
+struct SourceWatch {
+    directory: PathBuf,
+    files: Vec<(PathBuf, SystemTime)>,
+    polled: Instant,
+    changed: Option<Instant>,
+}
+
+impl SourceWatch {
+    fn new(directory: PathBuf) -> Self {
+        Self {
+            files: rust_files(&directory),
+            directory,
+            polled: Instant::now(),
+            changed: None,
+        }
+    }
+
+    /// True once, after a change has stood still for a poll.
+    fn settled(&mut self, ctx: &egui::Context) -> bool {
+        ctx.request_repaint_after(SOURCE_POLL);
+        if self.polled.elapsed() < SOURCE_POLL {
+            return false;
+        }
+        self.polled = Instant::now();
+        let files = rust_files(&self.directory);
+        if files != self.files {
+            self.files = files;
+            self.changed = Some(Instant::now());
+            return false;
+        }
+        self.changed.take().is_some()
+    }
+}
+
+/// The `.rs` files under `directory` with their modification times.
+fn rust_files(directory: &Path) -> Vec<(PathBuf, SystemTime)> {
+    let mut files = Vec::new();
+    let mut folders = vec![directory.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let modified = entry.metadata().and_then(|metadata| metadata.modified());
+                files.push((path, modified.unwrap_or(SystemTime::UNIX_EPOCH)));
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notices_a_source_change_once_it_settles() {
+        let dir = std::env::temp_dir().join(format!("besfa_source_{}", std::process::id()));
+        fs::create_dir_all(dir.join("nested")).unwrap();
+        fs::write(dir.join("main.rs"), "").unwrap();
+        let ctx = egui::Context::default();
+        let mut watch = SourceWatch::new(dir.clone());
+        let mut poll = || {
+            watch.polled -= SOURCE_POLL;
+            watch.settled(&ctx)
+        };
+        assert!(!poll(), "nothing changed");
+        fs::write(dir.join("nested/lib.rs"), "").unwrap();
+        fs::write(dir.join("notes.txt"), "").unwrap();
+        assert!(!poll(), "still changing");
+        assert!(poll(), "settled");
+        assert!(!poll(), "once");
+        fs::remove_dir_all(dir).unwrap();
+    }
+}

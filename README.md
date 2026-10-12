@@ -2,13 +2,12 @@
 
 **English** | [한국어](README.ko.md)
 
-A desktop editor for the Bevy game engine. The editor UI is built with Flutter, and project management is handled by the `besfa` CLI (Rust). See [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) for details.
+A desktop editor for the Bevy game engine. The editor UI is built with egui, and project management is handled by the `besfa` CLI, both in Rust. See [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) for details.
 
 ## Requirements
 
 - Windows
 - [Rust](https://rustup.rs/) (`cargo` must be on PATH)
-- [Flutter](https://docs.flutter.dev/get-started/install/windows/desktop) (with Windows desktop support set up)
 
 ## Installation
 
@@ -31,8 +30,7 @@ Run the same command again after changing the CLI code.
 ### 2. Run the editor
 
 ```bash
-cd apps/editor_ui
-flutter run -d windows
+cargo run -p besfa_editor
 ```
 
 Restart the editor after installing the CLI so it picks up the PATH change.
@@ -53,7 +51,7 @@ git pull
 cargo install --path crates/besfa_cli
 ```
 
-Then restart the editor (`flutter run -d windows` in `apps/editor_ui`). Reinstalling the CLI matters when `crates/besfa_cli` changed.
+Then restart the editor (`cargo run -p besfa_editor`). Reinstalling the CLI matters when `crates/besfa_cli` changed.
 
 When the editor starts, it runs `besfa prebuild` in the background: it moves the shared Bevy build to the latest `besfa_editor_plugin` on GitHub and builds it. The toolbar shows its progress, and **Play** waits until it reads **Bevy is ready**.
 
@@ -84,11 +82,4 @@ Plugin changes reach games only after they are pushed to `main` on GitHub. After
 
 ```bash
 cargo test
-cd apps/editor_ui && flutter test
-```
-
-The README screenshots are rendered by a test; after changing the UI, retake them (written to `docs/images`):
-
-```bash
-cd apps/editor_ui && flutter test tool/readme_screenshots_test.dart
 ```

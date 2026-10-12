@@ -1,6 +1,6 @@
 //! Renders the game's cameras into a texture the editor shares with it.
 //!
-//! The editor creates a D3D11 texture, publishes it under a named NT handle
+//! The editor creates a D3D12 texture, publishes it under a named NT handle
 //! and passes the name in `BESFA_VIEWPORT`. This module opens that texture on
 //! Bevy's D3D12 device and points every window camera at it. When the editor
 //! resizes its viewport it makes a new texture and sends its name in a
@@ -18,7 +18,7 @@ use bevy::{
 
 const VIEWPORT_HANDLE: ManualTextureViewHandle = ManualTextureViewHandle(0xBE5FA);
 
-/// The editor writes linear-to-sRGB encoded BGRA, which Flutter displays as is.
+/// The game writes linear-to-sRGB encoded BGRA, which the editor shows as is.
 const VIEWPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 
 #[derive(Resource, Clone)]

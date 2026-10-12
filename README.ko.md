@@ -2,13 +2,12 @@
 
 [English](README.md) | **한국어**
 
-Bevy 게임 엔진을 위한 데스크톱 에디터입니다. 에디터 UI는 Flutter, 프로젝트 관리는 `besfa` CLI(Rust)가 담당합니다. 자세한 내용은 [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md)를 참고하세요.
+Bevy 게임 엔진을 위한 데스크톱 에디터입니다. 에디터 UI는 egui, 프로젝트 관리는 `besfa` CLI가 담당하며, 둘 다 Rust로 작성합니다. 자세한 내용은 [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md)를 참고하세요.
 
 ## 요구 사항
 
 - Windows
 - [Rust](https://rustup.rs/) (`cargo`가 PATH에 있어야 합니다)
-- [Flutter](https://docs.flutter.dev/get-started/install/windows/desktop) (Windows 데스크톱 빌드 설정 포함)
 
 ## 설치
 
@@ -31,8 +30,7 @@ CLI 코드를 수정했다면 같은 명령을 다시 실행해 갱신하세요.
 ### 2. 에디터 실행
 
 ```bash
-cd apps/editor_ui
-flutter run -d windows
+cargo run -p besfa_editor
 ```
 
 CLI를 설치한 뒤에는 에디터를 다시 시작해야 PATH 변경이 반영됩니다.
@@ -53,7 +51,7 @@ git pull
 cargo install --path crates/besfa_cli
 ```
 
-그다음 에디터를 다시 시작하세요(`apps/editor_ui`에서 `flutter run -d windows`). CLI 재설치는 `crates/besfa_cli`가 바뀌었을 때 필요합니다.
+그다음 에디터를 다시 시작하세요(`cargo run -p besfa_editor`). CLI 재설치는 `crates/besfa_cli`가 바뀌었을 때 필요합니다.
 
 에디터는 시작할 때 백그라운드에서 `besfa prebuild`를 실행합니다. 이 명령은 공유 Bevy 빌드를 GitHub의 최신 `besfa_editor_plugin`으로 올려서 빌드합니다. 진행 상황은 툴바에 나오고, **Bevy is ready**가 뜰 때까지 **Play**는 기다립니다.
 
@@ -84,11 +82,4 @@ cargo update -p besfa_editor_plugin
 
 ```bash
 cargo test
-cd apps/editor_ui && flutter test
-```
-
-README의 스크린샷은 테스트로 그립니다. UI를 바꾼 뒤에는 다시 찍으세요(`docs/images`에 저장됩니다).
-
-```bash
-cd apps/editor_ui && flutter test tool/readme_screenshots_test.dart
 ```

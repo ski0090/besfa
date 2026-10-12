@@ -4,11 +4,11 @@ Besfa에는 수명과 책임이 다른 두 연결 경로가 있다. 프로젝트
 
 ## 프로젝트 생성
 
-`besfa_cli`는 짧게 실행되고 종료되는 자동화 도구다. Flutter UI는 CLI를 자식 프로세스로 실행하며, 실제 파일 생성 규칙은 향후 `besfa_project` crate가 담당한다.
+`besfa_cli`는 짧게 실행되고 종료되는 자동화 도구다. 에디터는 CLI를 자식 프로세스로 실행하며, 실제 파일 생성 규칙은 향후 `besfa_project` crate가 담당한다.
 
 ```mermaid
 sequenceDiagram
-    participant UI as Flutter Editor UI
+    participant UI as Editor (egui)
     participant CLI as besfa CLI
     participant Project as besfa_project
     participant FS as File System
@@ -28,7 +28,7 @@ CLI는 프로젝트 생성, 검증, 마이그레이션, 빌드 자동화와 CI �
 
 ```mermaid
 sequenceDiagram
-    participant UI as Flutter Editor UI
+    participant UI as Editor (egui)
     participant Bridge as Bridge and Protocol
     participant Game as Bevy Game Process
 
@@ -42,13 +42,13 @@ sequenceDiagram
 
 ## 뷰포트 표시
 
-Windows에서는 `besfa_viewport_windows`가 Bevy의 렌더 타깃을 공유 가능한 D3D 텍스처로 노출한다. Flutter Windows 네이티브 플러그인은 이를 외부 텍스처로 등록하고, Dart는 텍스처 ID를 통해 표시한다.
+Windows에서는 에디터가 wgpu의 D3D12 장치에 공유 가능한 텍스처를 만들고 이름 붙은 NT 핸들로 게임에 넘긴다. 게임의 `besfa_editor_plugin`은 같은 이름으로 텍스처를 열어 카메라의 렌더 타깃으로 쓴다. 텍스처는 sRGB 포맷이라 게임의 셰이더가 쓸 때 색을 인코딩하고, egui는 감마 인코딩된 바이트를 그대로 그리므로, 에디터는 매 프레임 같은 바이트를 sRGB가 아닌 텍스처로 복사해 보여 준다.
 
 ```mermaid
 flowchart LR
-    Bevy[Bevy RenderTarget] --> Shared[D3D shared texture]
-    Shared --> Plugin[Flutter Windows native plugin]
-    Plugin --> Texture[Flutter Texture widget]
+    Bevy[Bevy RenderTarget] --> Shared[D3D12 shared texture]
+    Shared --> Copy[Editor copy each frame]
+    Copy --> Image[egui image]
 ```
 
 이 경로는 게임 IPC와 별도다. D3D 핸들 전달과 동기화는 뷰포트 전용 계약으로 다룬다. 리사이즈만 예외로, 에디터가 새 크기의 텍스처를 만들어 그 이름을 `viewport` 명령으로 보내면 게임이 새 텍스처를 열어 카메라들을 옮긴다.
