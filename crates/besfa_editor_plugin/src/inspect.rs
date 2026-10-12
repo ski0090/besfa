@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use crate::{
     edit::Deleted,
     scene::{HANDLE_PATHS, SceneEntity, left_out},
-    scene_view::EditorOnly,
+    scene_view::{EditorOnly, Parked},
 };
 
 /// The entity whose components are reported.
@@ -202,10 +202,11 @@ fn components(world: &World, entity: Entity) -> Option<Vec<Value>> {
     };
     let registry = world.resource::<AppTypeRegistry>().read();
     let entity_ref = world.entity(entity);
+    let parked = world.get::<Parked>(entity).map(|parked| parked.active);
     let components = infos
         .iter()
         .map(|&(id, info)| {
-            let value = info
+            let mut value = info
                 .type_id()
                 .and_then(|type_id| registry.get_type_data::<ReflectComponent>(type_id))
                 .and_then(|reflect| reflect.reflect(entity_ref))
@@ -220,6 +221,12 @@ fn components(world: &World, entity: Entity) -> Option<Vec<Value>> {
                     ))
                     .unwrap_or_else(|_| Value::String(format!("{value:?}")))
                 });
+            // A game camera is off in edit mode; show the switch it plays with.
+            if let (Some(active), Some(Value::Object(fields))) = (parked, &mut value)
+                && info.type_id() == Some(std::any::TypeId::of::<Camera>())
+            {
+                fields.insert("is_active".into(), active.into());
+            }
             // The registry's path is what `set` and the scene file use;
             // the type name can differ from it.
             let registration = info.type_id().and_then(|id| registry.get(id));

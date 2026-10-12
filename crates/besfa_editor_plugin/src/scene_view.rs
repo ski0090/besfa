@@ -4,14 +4,15 @@
 //!
 //! The editor forwards the viewport's pointer in viewport pixels as
 //! `pointer` commands. The editor camera is the only one drawing into the
-//! viewport: the game's cameras render nowhere until the game plays, which
-//! changes only their render target, a component the scene file leaves out.
+//! viewport: the game's cameras are switched off until the game plays, and
+//! the scene file, the Inspector and the editor's changes see the switch the
+//! game left them with.
 //! When the game plays, the editor camera goes and everything here stops.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
 use bevy::{
-    camera::{CameraUpdateSystems, RenderTarget, primitives::Aabb},
+    camera::{RenderTarget, primitives::Aabb},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
     prelude::*,
     reflect::{TypePath, serde::TypedReflectSerializer},
@@ -130,12 +131,16 @@ pub(crate) struct EditorCamera {
 /// After every game camera, so the editor's view is the one left.
 const EDITOR_CAMERA_ORDER: isize = 1_000_000;
 
-/// Where a game camera renders once the game plays. In edit mode it renders
-/// nowhere: a second camera drawing into the viewport starts from the first
-/// one's picture (Bevy's MSAA writeback), so both views would show. Clone,
+/// A game camera switched off in edit mode, with the switch it gets back once
+/// the game plays. Two active cameras would both show: a second camera
+/// drawing into the viewport starts from the first one's picture (Bevy's
+/// MSAA writeback), and Bevy 0.20 draws no meshes for the editor camera
+/// while another active camera sees them, even one rendering nowhere. Clone,
 /// so a duplicated camera keeps it.
 #[derive(Component, Clone)]
-pub(crate) struct PlayTarget(RenderTarget);
+pub(crate) struct Parked {
+    pub(crate) active: bool,
+}
 
 /// How far, in pixels, the pointer may be from a handle and still grab it,
 /// and may move between press and release and still click.
@@ -174,11 +179,7 @@ impl Plugin for SceneViewPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (
-                    draw.after(TransformSystems::Propagate),
-                    // Once Bevy knows the target's size, which the camera keeps.
-                    park_game_cameras.after(CameraUpdateSystems),
-                )
+                (draw.after(TransformSystems::Propagate), park_game_cameras)
                     .run_if(|view: Res<SceneView>| view.active),
             );
     }
@@ -197,22 +198,38 @@ pub(crate) fn stop(world: &mut World) {
     for camera in cameras {
         world.despawn(camera);
     }
-    let parked: Vec<(Entity, PlayTarget)> = world
-        .query::<(Entity, &PlayTarget)>()
+    let parked: Vec<(Entity, bool)> = world
+        .query::<(Entity, &Parked)>()
         .iter(world)
-        .map(|(entity, target)| (entity, target.clone()))
+        .map(|(entity, parked)| (entity, parked.active))
         .collect();
-    for (entity, PlayTarget(target)) in parked {
-        world
-            .entity_mut(entity)
-            .insert(target)
-            .remove::<PlayTarget>();
+    for (entity, active) in parked {
+        let mut entity = world.entity_mut(entity);
+        entity.remove::<Parked>();
+        if let Some(mut camera) = entity.get_mut::<Camera>() {
+            camera.is_active = active;
+        }
     }
 }
 
-/// Takes the game's cameras that render where the scene view shows, the
-/// viewport or the window, off it until the game plays. Cameras rendering
-/// into images keep rendering, so what they show stays in the scene.
+/// After the editor changed a parked camera's `Camera`: the switch it set is
+/// the one the camera gets back, and the camera stays off until then.
+pub(crate) fn keep_parked(world: &mut World, entity: Entity) {
+    let Ok(mut entity) = world.get_entity_mut(entity) else {
+        return;
+    };
+    let Some(active) = entity.get::<Camera>().map(|camera| camera.is_active) else {
+        return;
+    };
+    if let Some(mut parked) = entity.get_mut::<Parked>() {
+        parked.active = active;
+        entity.get_mut::<Camera>().unwrap().is_active = false;
+    }
+}
+
+/// Switches off the game's cameras that render where the scene view shows,
+/// the viewport or the window, until the game plays. Cameras rendering into
+/// images keep rendering, so what they show stays in the scene.
 #[allow(
     clippy::type_complexity,
     reason = "a system's query: game cameras not parked yet"
@@ -220,21 +237,18 @@ pub(crate) fn stop(world: &mut World) {
 fn park_game_cameras(
     mut commands: Commands,
     mut cameras: Query<
-        (Entity, &Camera, &mut RenderTarget),
-        (Without<EditorCamera>, Without<PlayTarget>),
+        (Entity, &mut Camera, &RenderTarget),
+        (Without<EditorCamera>, Without<Parked>),
     >,
 ) {
-    for (entity, camera, mut target) in &mut cameras {
-        if !matches!(
-            *target,
+    for (entity, mut camera, target) in &mut cameras {
+        if matches!(
+            target,
             RenderTarget::Window(_) | RenderTarget::TextureView(_)
         ) {
-            continue;
+            let active = std::mem::replace(&mut camera.is_active, false);
+            commands.entity(entity).insert(Parked { active });
         }
-        // The size the camera had, so effects sized from it keep working.
-        let size = camera.physical_target_size().unwrap_or(UVec2::splat(64));
-        let play = std::mem::replace(&mut *target, RenderTarget::None { size });
-        commands.entity(entity).insert(PlayTarget(play));
     }
 }
 
@@ -799,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn game_cameras_render_nowhere_until_play() {
+    fn game_cameras_stay_off_until_play() {
         let mut app = App::new();
         app.add_systems(Update, park_game_cameras);
         let game = app.world_mut().spawn(Camera3d::default()).id();
@@ -816,17 +830,23 @@ mod tests {
         app.update();
 
         let world = app.world_mut();
-        assert!(matches!(
-            world.get::<RenderTarget>(game),
-            Some(RenderTarget::None { .. })
-        ));
-        assert!(world.get::<PlayTarget>(minimap).is_none(), "left alone");
+        let active = |world: &World, entity| world.get::<Camera>(entity).unwrap().is_active;
+        assert!(!active(world, game));
+        assert!(active(world, minimap), "left alone");
+        assert!(world.get::<Parked>(minimap).is_none());
+
+        // The editor turns it off; that is what it gets back.
+        world.get_mut::<Camera>(game).unwrap().is_active = false;
+        keep_parked(world, game);
+        assert!(!world.get::<Parked>(game).unwrap().active);
+        world.get_mut::<Camera>(game).unwrap().is_active = true;
+        keep_parked(world, game);
+        assert!(!active(world, game), "still off in edit mode");
+        assert!(world.get::<Parked>(game).unwrap().active);
+
         stop(world);
-        assert!(matches!(
-            world.get::<RenderTarget>(game),
-            Some(RenderTarget::Window(_))
-        ));
-        assert!(world.get::<PlayTarget>(game).is_none());
+        assert!(active(world, game));
+        assert!(world.get::<Parked>(game).is_none());
     }
 
     #[test]

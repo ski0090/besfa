@@ -4,7 +4,7 @@
 
 use std::{
     io::{self, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -26,7 +26,7 @@ pub struct CliProcess {
 
 /// Starts console programs without a console window of their own.
 pub fn command(program: &str) -> Command {
-    let mut command = Command::new(program);
+    let mut command = Command::new(on_path(program));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -34,6 +34,20 @@ pub fn command(program: &str) -> Command {
         command.creation_flags(CREATE_NO_WINDOW);
     }
     command
+}
+
+/// `program` as found on PATH, or as given when it is not there. Windows
+/// would look in the editor's own folder first, where a workspace build
+/// leaves a `besfa.exe` that may be older than the one on PATH.
+fn on_path(program: &str) -> PathBuf {
+    let file = format!("{program}{}", std::env::consts::EXE_SUFFIX);
+    std::env::var_os("PATH")
+        .and_then(|paths| {
+            std::env::split_paths(&paths)
+                .map(|dir| dir.join(&file))
+                .find(|path| path.is_file())
+        })
+        .unwrap_or_else(|| program.into())
 }
 
 impl CliProcess {
@@ -307,6 +321,15 @@ mod tests {
             "{statuses:?}"
         );
         assert_eq!(statuses.last(), expected.last());
+    }
+
+    #[test]
+    fn finds_programs_on_path() {
+        assert!(on_path("cmd").is_absolute(), "{:?}", on_path("cmd"));
+        assert_eq!(
+            on_path("besfa-missing-cli"),
+            PathBuf::from("besfa-missing-cli")
+        );
     }
 
     #[test]

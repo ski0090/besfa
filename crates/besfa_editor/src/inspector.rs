@@ -94,6 +94,7 @@ impl Inspector {
                         |components: &[&EntityComponent]| components.iter().any(|c| c.saved);
                     crate_groups(
                         ui,
+                        "components",
                         &scene.components,
                         |c| c.crate_name(),
                         scene,
@@ -127,6 +128,7 @@ impl Inspector {
                 section(ui, "Systems");
                 crate_groups(
                     ui,
+                    "systems",
                     &scene.systems,
                     |s| crate_of(&s.name),
                     scene,
@@ -256,6 +258,7 @@ fn placement(
 /// and groups `expand` picks start open.
 fn crate_groups<T>(
     ui: &mut Ui,
+    section: &str,
     items: &[T],
     crate_of: impl Fn(&T) -> &str,
     scene: &Scene,
@@ -275,7 +278,8 @@ fn crate_groups<T>(
                 .small()
                 .color(TEXT),
         )
-        .id_salt(name)
+        // The same crate can show under components and systems.
+        .id_salt((section, name))
         .default_open(Some(name) == game || expand(&items))
         .show(ui, |ui| {
             for item in items {
@@ -339,7 +343,7 @@ fn component_tile(
             Value::String(text) => text.clone(),
             other => other.to_string(),
         };
-        ui.label(RichText::new(text).monospace().small().color(MUTED));
+        read_only(ui, &text, MUTED);
     }
     action
 }
@@ -434,8 +438,8 @@ impl Fields<'_> {
                     change(json!(values));
                 }
             }
-            Value::Null => read_only(ui, "None"),
-            other => read_only(ui, &other.to_string()),
+            Value::Null => read_only(ui, "None", TEXT),
+            other => read_only(ui, &other.to_string(), TEXT),
         }
     }
 }
@@ -526,8 +530,17 @@ fn commit_field(ui: &mut Ui, id: Id, value: &str, label: Option<&str>) -> Option
     (was_typing && text != value).then_some(text)
 }
 
-fn read_only(ui: &mut Ui, text: &str) {
-    ui.add(Label::new(RichText::new(text).monospace().color(TEXT)).wrap());
+/// Monospace text that wraps anywhere: computed values like matrices have
+/// no spaces to wrap at, and would widen the panel.
+fn read_only(ui: &mut Ui, text: &str, color: egui::Color32) {
+    let format = egui::TextFormat {
+        font_id: egui::TextStyle::Monospace.resolve(ui.style()),
+        color,
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::single_section(text.to_owned(), format);
+    job.wrap.break_anywhere = true;
+    ui.add(Label::new(job).wrap());
 }
 
 /// A field's name in a fixed column, then the field.

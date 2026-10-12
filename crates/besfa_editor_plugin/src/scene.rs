@@ -419,6 +419,9 @@ fn saved_components(
     registry: &TypeRegistry,
 ) -> Vec<Box<dyn PartialReflect>> {
     let entity_ref = world.entity(entity);
+    let parked = world
+        .get::<crate::scene_view::Parked>(entity)
+        .map(|parked| parked.active);
     let saved: Vec<(ComponentId, &ComponentInfo, Box<dyn PartialReflect>)> = world
         .inspect_entity(entity)
         .into_iter()
@@ -433,7 +436,7 @@ fn saved_components(
                 registry,
                 &HANDLE_PATHS,
             );
-            let copy = saved_value(value);
+            let copy = saved_value(value, parked);
             if serde_json::to_value(serializer).is_err() || copy.is_none() {
                 warn!("Not saving {}: it does not serialize.", info.name());
                 return None;
@@ -466,13 +469,15 @@ fn saved_components(
 /// serialize through serde, like `Name`, serializable; a dynamic value
 /// loses that. Bevy recomputes a camera's matrices and target size and a
 /// perspective's aspect ratio every frame, so the file keeps their defaults.
-/// None for a value that cannot be copied either way.
+/// A game camera switched off in edit mode keeps the switch it plays with,
+/// `parked`. None for a value that cannot be copied either way.
 // ponytail: the template's camera; an orthographic projection's `area` is
 // recomputed too, clear it once 2D scenes are saved.
-fn saved_value(value: &dyn Reflect) -> Option<Box<dyn PartialReflect>> {
+fn saved_value(value: &dyn Reflect, parked: Option<bool>) -> Option<Box<dyn PartialReflect>> {
     if let Some(camera) = value.downcast_ref::<Camera>() {
         return Some(Box::new(Camera {
             computed: default(),
+            is_active: parked.unwrap_or(camera.is_active),
             ..camera.clone()
         }));
     }
@@ -499,12 +504,13 @@ fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn Partial
 /// Components that do not belong in the file: what the plugin or Bevy
 /// builds from other components when the scene loads (`Children` follows
 /// from each child's `ChildOf`), camera settings Bevy does not make
-/// serializable, and the render target, which the editor points at its
-/// viewport after the camera spawns.
+/// serializable, the render target, which the editor points at its viewport
+/// after the camera spawns, and the plugin's note of a camera it switched off.
 // ponytail: what the template's entities carry; grow it as files show more.
 pub(crate) fn left_out(type_id: TypeId) -> bool {
     [
         TypeId::of::<SceneEntity>(),
+        TypeId::of::<crate::scene_view::Parked>(),
         TypeId::of::<Children>(),
         TypeId::of::<RenderTarget>(),
         TypeId::of::<Mesh3d>(),
@@ -746,6 +752,15 @@ mod tests {
             "not a default"
         );
 
+        // Switched off in edit mode, it is saved the way the game plays it.
+        app.world_mut().get_mut::<Camera>(camera).unwrap().is_active = false;
+        app.world_mut()
+            .entity_mut(camera)
+            .insert(crate::scene_view::Parked { active: true });
+        save(app.world_mut(), &path).expect("the scene should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        assert!(!ron.contains(&quoted(Camera::type_path())), "{ron}");
+
         app.world_mut().get_mut::<Camera>(camera).unwrap().order = 3;
         save(app.world_mut(), &path).expect("the scene should save");
         let ron = std::fs::read_to_string(&path).unwrap();
@@ -766,7 +781,9 @@ mod tests {
                 assert!(world.entity(context.entity).contains::<Camera3d>());
             });
         let entities = spawn(&mut loaded, &ron);
-        assert_eq!(loaded.world().get::<Camera>(entities[0]).unwrap().order, 3);
+        let loaded = loaded.world().get::<Camera>(entities[0]).unwrap();
+        assert_eq!(loaded.order, 3);
+        assert!(loaded.is_active);
     }
 
     #[test]

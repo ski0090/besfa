@@ -18,7 +18,10 @@ use bevy::{
 use serde::{Deserialize, de::DeserializeSeed};
 use serde_json::Value;
 
-use crate::scene::{MeshColor, MeshShape, SceneEntity};
+use crate::{
+    scene::{MeshColor, MeshShape, SceneEntity},
+    scene_view::keep_parked,
+};
 
 /// An entity the editor deleted: disabled, so the game, rendering and
 /// saving skip it, until undoing restores it or the editor despawns it.
@@ -71,16 +74,18 @@ pub(crate) fn set(
         None => TypedReflectDeserializer::new(registration, &registry).deserialize(value),
     }
     .map_err(|error| error.to_string())?;
-    let mut entity = entity_mut(world, entity)?;
-    match reflect.reflect_mut(&mut entity) {
-        Some(mut target) => target
+    let mut target = entity_mut(world, entity)?;
+    let result = match reflect.reflect_mut(&mut target) {
+        Some(mut component) => component
             .try_apply(value.as_ref())
             .map_err(|error| error.to_string()),
         None => {
-            reflect.insert(&mut entity, value.as_ref(), &registry);
+            reflect.insert(&mut target, value.as_ref(), &registry);
             Ok(())
         }
-    }
+    };
+    keep_parked(world, entity);
+    result
 }
 
 /// Adds `component` to `entity` with its default value.
@@ -100,6 +105,7 @@ pub(crate) fn insert(world: &mut World, entity: Entity, component: &str) -> Resu
         value.as_partial_reflect(),
         &registry,
     );
+    keep_parked(world, entity);
     Ok(())
 }
 
