@@ -686,6 +686,10 @@ impl Editor {
             self.save_after_ui = true;
             return;
         }
+        // Unity's key for its Asset Store.
+        if pressed(Modifiers::COMMAND, Key::Num9) {
+            return project::open_url(project::BEVY_ASSETS);
+        }
         if ctx.text_edit_focused() {
             return;
         }
@@ -739,6 +743,12 @@ impl Editor {
                         .clicked()
                     {
                         self.replay(false);
+                    }
+                });
+                ui.menu_button("Window", |ui| {
+                    let assets = Button::new("Bevy Assets").shortcut_text("Ctrl+9");
+                    if ui.add(assets).on_hover_text(project::BEVY_ASSETS).clicked() {
+                        project::open_url(project::BEVY_ASSETS);
                     }
                 });
             });
@@ -1247,14 +1257,9 @@ mod tests {
     /// Where the toolbar's plugin icon showing `icon` is, in points.
     fn plugin_icon(harness: &egui_kittest::Harness<Screen>, icon: &str) -> egui::Rect {
         use egui_kittest::kittest::Queryable;
-        // Accessibility bounds are in pixels.
-        let rect = harness
+        harness
             .get_by_role_and_label(egui::accesskit::Role::Button, icon)
-            .rect();
-        egui::Rect::from_min_max(
-            (rect.min.to_vec2() / PIXELS_PER_POINT).to_pos2(),
-            (rect.max.to_vec2() / PIXELS_PER_POINT).to_pos2(),
-        )
+            .rect()
     }
 
     /// Writes the window, or its top `height` points, to docs/images.

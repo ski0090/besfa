@@ -149,9 +149,38 @@ pub fn move_to_recycle_bin(directory: &str) -> bool {
 /// Opens `directory` in Explorer.
 pub fn reveal(directory: &str) {
     // Explorer needs backslashes; with '/' it silently opens Documents.
-    let _ = std::process::Command::new("explorer")
-        .arg(directory.replace('/', "\\"))
-        .spawn();
+    shell_open(&directory.replace('/', "\\"));
+}
+
+/// The community's plugins, assets, templates and tools for Bevy, which is
+/// what Bevy has for Unity's Asset Store.
+pub const BEVY_ASSETS: &str = "https://bevy.org/assets/";
+
+/// Opens `url` in the default browser.
+pub fn open_url(url: &str) {
+    shell_open(url);
+}
+
+/// Hands `target` to Explorer, outside the editor's job, so a window or a
+/// browser it starts stays open when the editor exits. Launched from a job
+/// that allows no breakaway, as under `cargo run`, it stays in the job.
+fn shell_open(target: &str) {
+    let mut command = std::process::Command::new("explorer");
+    command.arg(target);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        if command
+            .creation_flags(CREATE_BREAKAWAY_FROM_JOB)
+            .spawn()
+            .is_ok()
+        {
+            return;
+        }
+        command.creation_flags(0);
+    }
+    let _ = command.spawn();
 }
 
 /// Asks for a folder with the system dialog; None if cancelled.

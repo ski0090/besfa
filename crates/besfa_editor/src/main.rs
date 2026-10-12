@@ -127,9 +127,8 @@ fn style(ctx: &egui::Context) {
 /// Builds and games the editor starts inherit this job, and the kernel kills
 /// them when the job's last handle closes: when the editor exits, however it
 /// exits. Without it a crashed editor leaves cargo and a window-less game
-/// running. The handle is left open on purpose.
-// ponytail: everything the editor launches dies with it; allow breakaway
-// (JOB_OBJECT_LIMIT_BREAKAWAY_OK) once something must outlive the editor.
+/// running. The handle is left open on purpose. What must outlive the
+/// editor, like a browser it opened, breaks away from the job.
 #[cfg(windows)]
 fn kill_children_with_editor() {
     use windows::Win32::System::{JobObjects::*, Threading::GetCurrentProcess};
@@ -139,7 +138,8 @@ fn kill_children_with_editor() {
             return;
         };
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
         let _ = SetInformationJobObject(
             job,
             JobObjectExtendedLimitInformation,

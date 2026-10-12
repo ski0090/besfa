@@ -80,6 +80,14 @@ impl Hub {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Besfa Editor").color(MUTED));
                 ui.add_space(24.0);
+                if ui
+                    .link("Bevy Assets")
+                    .on_hover_text(project::BEVY_ASSETS)
+                    .clicked()
+                {
+                    project::open_url(project::BEVY_ASSETS);
+                }
+                ui.add_space(24.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(RichText::new("0.1.0-dev").small().color(MUTED));
                     ui.add_space(24.0);
