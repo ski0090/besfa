@@ -36,18 +36,30 @@ pub fn command(program: &str) -> Command {
     command
 }
 
-/// `program` as found on PATH, or as given when it is not there. Windows
-/// would look in the editor's own folder first, where a workspace build
-/// leaves a `besfa.exe` that may be older than the one on PATH.
+/// `program` as found on PATH outside the editor's own folder, or as given
+/// when it is not there. A workspace build leaves a `besfa.exe` next to the
+/// editor that may be older than the one on PATH, and both Windows and
+/// `cargo run`, which puts `target\debug` on PATH, would find that one first.
 fn on_path(program: &str) -> PathBuf {
+    let paths = std::env::var_os("PATH").unwrap_or_default();
+    let exe = std::env::current_exe().ok();
+    let own = exe.as_deref().and_then(Path::parent);
+    find_program(program, std::env::split_paths(&paths), own).unwrap_or_else(|| program.into())
+}
+
+/// The first `program` in `dirs`, skipping `own` and the folders in it.
+fn find_program(
+    program: &str,
+    dirs: impl IntoIterator<Item = PathBuf>,
+    own: Option<&Path>,
+) -> Option<PathBuf> {
     let file = format!("{program}{}", std::env::consts::EXE_SUFFIX);
-    std::env::var_os("PATH")
-        .and_then(|paths| {
-            std::env::split_paths(&paths)
-                .map(|dir| dir.join(&file))
-                .find(|path| path.is_file())
-        })
-        .unwrap_or_else(|| program.into())
+    // Windows paths ignore case.
+    let lower = |path: &Path| PathBuf::from(path.to_string_lossy().to_lowercase());
+    dirs.into_iter()
+        .filter(|dir| !own.is_some_and(|own| lower(dir).starts_with(lower(own))))
+        .map(|dir| dir.join(&file))
+        .find(|path| path.is_file())
 }
 
 impl CliProcess {
@@ -324,8 +336,27 @@ mod tests {
     }
 
     #[test]
-    fn finds_programs_on_path() {
+    fn finds_programs_on_path_outside_the_editor() {
         assert!(on_path("cmd").is_absolute(), "{:?}", on_path("cmd"));
+        let dir = std::env::temp_dir().join(format!("besfa_path_{}", std::process::id()));
+        let (own, other) = (dir.join("Target/debug"), dir.join("bin"));
+        for folder in [own.join("deps"), own.clone(), other.clone()] {
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join(format!("foo{}", std::env::consts::EXE_SUFFIX)),
+                "",
+            )
+            .unwrap();
+        }
+        let dirs = || vec![own.join("deps"), own.clone(), other.clone()];
+        let found = find_program("foo", dirs(), Some(&dir.join("target/DEBUG"))).unwrap();
+        assert!(found.starts_with(&other), "{found:?}");
+        assert!(
+            find_program("foo", dirs(), None)
+                .unwrap()
+                .starts_with(own.join("deps"))
+        );
+        std::fs::remove_dir_all(dir).unwrap();
         assert_eq!(
             on_path("besfa-missing-cli"),
             PathBuf::from("besfa-missing-cli")
