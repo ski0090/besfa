@@ -1032,4 +1032,146 @@ mod tests {
         assert!(!poll(), "once");
         fs::remove_dir_all(dir).unwrap();
     }
+
+    /// The editor and what the README shows of it, for the screenshots.
+    struct Screen {
+        editor: Editor,
+        prebuild: Prebuild,
+        /// Ringed in the picture.
+        highlight: Option<egui::Rect>,
+    }
+
+    /// Renders the editor for the README's screenshots, with the fonts the
+    /// running editor uses, and writes them to docs/images. Not part of
+    /// `cargo test`; run it after changing the UI:
+    ///
+    /// ```text
+    /// cargo test -p besfa_editor readme_screenshots -- --ignored
+    /// ```
+    #[test]
+    #[ignore = "writes docs/images"]
+    fn readme_screenshots() {
+        const OLD: &str = "28b39927dda69b765ee1e7071794050033b4a307";
+        const LATEST: &str = "51b56bc0a1d9cd2bd1f1c5d6a2a8d5c9e0f1a2b3";
+        // What the template game prints and reports once it runs.
+        let game_output = [
+            r"   Compiling my_game v0.1.0 (C:\Projects\my_game)",
+            "    Finished `dev` profile [optimized + debuginfo] target(s) in 5.67s",
+            r"     Running `C:\Users\you\AppData\Local\Besfa\target\debug\my_game.exe`",
+            "2026-10-07T05:36:08.737706Z  INFO besfa_editor_plugin::viewport: Rendering into the editor viewport 1280x720.",
+            "2026-10-07T05:36:08.776701Z  INFO besfa_editor_plugin::scene: Loaded scenes/main.scn.ron",
+            r#"@besfa {"type":"systems","crate":"my_game","systems":[{"schedule":"Update","name":"my_game::spin"}]}"#,
+            r#"@besfa {"type":"entities","entities":[{"id":4294967295,"name":"Cube"},{"id":4294967294,"name":"Light"},{"id":4294967293,"name":"Camera"}]}"#,
+        ];
+        let read = |editor: &mut Editor, lines: &[&str]| {
+            for line in lines {
+                if editor.scene.handle(line).is_none() {
+                    editor.log(*line);
+                }
+            }
+        };
+
+        // Waiting for a prebuild, the editor starts no game of its own.
+        let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
+        let project = Project::new(r"C:\Projects\my_game");
+        let mut editor = Editor::new(project, None, &waiting, &egui::Context::default());
+        editor.waiting_for_prebuild = false;
+        editor.plugin_revision = Some(OLD.into());
+        editor.latest_plugin_revision = Some(LATEST.into());
+        read(&mut editor, &game_output);
+
+        let screen = Screen {
+            editor,
+            prebuild: Prebuild::with_phase(crate::process::PrebuildPhase::Ready, "Bevy is ready"),
+            highlight: None,
+        };
+        let mut harness = egui_kittest::Harness::builder()
+            // The window, and the margin the harness puts around it.
+            .with_size([1280.0 + 2.0 * MARGIN, 800.0 + 2.0 * MARGIN])
+            .with_pixels_per_point(PIXELS_PER_POINT)
+            .wgpu()
+            .build_ui_state(
+                |ui, screen: &mut Screen| {
+                    screen.editor.ui(ui, &screen.prebuild);
+                    if let Some(rect) = screen.highlight {
+                        let layer =
+                            egui::LayerId::new(egui::Order::Debug, egui::Id::new("highlight"));
+                        ui.ctx().layer_painter(layer).rect_stroke(
+                            rect.expand(3.0),
+                            6.0,
+                            (2.0, Color32::from_rgb(0xFF, 0x5F, 0x57)),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                },
+                screen,
+            );
+        crate::style(&harness.ctx);
+        harness.run();
+
+        // The project's plugin is not the prebuild's: the toolbar warns, and
+        // hovering explains what clicking does.
+        let rect = plugin_icon(&harness, "⚠");
+        harness.hover_at(rect.center());
+        harness.state_mut().highlight = Some(rect);
+        // Past the tooltip's delay.
+        harness.run_steps(8);
+        save(&mut harness, "plugin-update-available", Some(110.0));
+
+        // Clicking updates it, restarts the game and logs what cargo did.
+        harness.remove_cursor();
+        let editor = &mut harness.state_mut().editor;
+        read(
+            editor,
+            &[
+                "    Updating git repository `https://github.com/ski0090/besfa`",
+                &format!(
+                    "    Updating besfa_editor_plugin v0.1.0 (https://github.com/ski0090/besfa#{}) -> #{}",
+                    &OLD[..8],
+                    &LATEST[..8]
+                ),
+                "Process exited with code 1.",
+            ],
+        );
+        editor.scene.reset();
+        read(editor, &game_output);
+        editor.plugin_revision = Some(LATEST.into());
+        harness.run();
+        harness.state_mut().highlight = Some(plugin_icon(&harness, "✔"));
+        harness.run();
+        save(&mut harness, "plugin-updated", None);
+    }
+
+    /// Keeps text sharp.
+    const PIXELS_PER_POINT: f32 = 1.5;
+
+    /// The harness's outer margin around the UI, in points.
+    const MARGIN: f32 = 8.0;
+
+    /// Where the toolbar's plugin icon showing `icon` is, in points.
+    fn plugin_icon(harness: &egui_kittest::Harness<Screen>, icon: &str) -> egui::Rect {
+        use egui_kittest::kittest::Queryable;
+        // Accessibility bounds are in pixels.
+        let rect = harness
+            .get_by_role_and_label(egui::accesskit::Role::Button, icon)
+            .rect();
+        egui::Rect::from_min_max(
+            (rect.min.to_vec2() / PIXELS_PER_POINT).to_pos2(),
+            (rect.max.to_vec2() / PIXELS_PER_POINT).to_pos2(),
+        )
+    }
+
+    /// Writes the window, or its top `height` points, to docs/images.
+    fn save(harness: &mut egui_kittest::Harness<Screen>, name: &str, height: Option<f32>) {
+        let image = harness.render().expect("render the editor");
+        let margin = (MARGIN * PIXELS_PER_POINT) as u32;
+        let width = image.width() - 2 * margin;
+        let height = height.map_or(image.height() - 2 * margin, |points| {
+            (points * PIXELS_PER_POINT) as u32
+        });
+        let image = image::imageops::crop_imm(&image, margin, margin, width, height).to_image();
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../docs/images/{name}.png"));
+        image.save(path).expect("write the screenshot");
+    }
 }

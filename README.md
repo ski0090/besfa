@@ -83,3 +83,9 @@ Plugin changes reach games only after they are pushed to `main` on GitHub. After
 ```bash
 cargo test
 ```
+
+The README screenshots are rendered by a test; after changing the UI, retake them (written to `docs/images`):
+
+```bash
+cargo test -p besfa_editor readme_screenshots -- --ignored
+```

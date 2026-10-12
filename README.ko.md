@@ -83,3 +83,9 @@ cargo update -p besfa_editor_plugin
 ```bash
 cargo test
 ```
+
+README의 스크린샷은 테스트로 그립니다. UI를 바꾼 뒤에는 다시 찍으세요(`docs/images`에 저장됩니다).
+
+```bash
+cargo test -p besfa_editor readme_screenshots -- --ignored
+```

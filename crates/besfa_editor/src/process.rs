@@ -220,6 +220,19 @@ impl Prebuild {
     }
 }
 
+#[cfg(test)]
+impl Prebuild {
+    /// A prebuild in `phase` with no process behind it.
+    pub fn with_phase(phase: PrebuildPhase, message: &str) -> Self {
+        Self {
+            phase,
+            message: message.into(),
+            progress: None,
+            process: None,
+        }
+    }
+}
+
 /// The share of finished units in cargo's progress bar, as in
 /// `Building [==>   ] 210/498: bevy_render…`.
 fn build_progress(line: &str) -> Option<f32> {
