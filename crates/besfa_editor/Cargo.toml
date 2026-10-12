@@ -5,10 +5,10 @@ edition = "2024"
 description = "The Besfa editor: project hub and scene editor for Bevy games"
 
 [dependencies]
-eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
 # Must match the wgpu and windows versions egui-wgpu uses, so the raw D3D12
 # types line up with wgpu-hal's when the viewport texture is shared.
-wgpu = "29"
+wgpu = "30"
 serde = { version = "1", features = ["derive"] }
 # Keeps component fields in the order the game reports them.
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -28,5 +28,5 @@ windows = { version = "0.62", features = [
 
 [dev-dependencies]
 # Renders the editor headless for the README's screenshots.
-egui_kittest = { version = "0.35", features = ["wgpu"] }
+egui_kittest = { version = "0.36", features = ["wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }

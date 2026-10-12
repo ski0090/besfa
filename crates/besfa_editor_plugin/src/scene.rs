@@ -168,13 +168,13 @@ fn build_materials(
 }
 
 /// Removing the shape removes the mesh built from it.
-fn drop_mesh(remove: On<Remove, MeshShape>, mut commands: Commands) {
+fn drop_mesh(remove: On<Remove<MeshShape>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(remove.entity) {
         entity.try_remove::<Mesh3d>();
     }
 }
 
-fn drop_material(remove: On<Remove, MeshColor>, mut commands: Commands) {
+fn drop_material(remove: On<Remove<MeshColor>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(remove.entity) {
         entity.try_remove::<MeshMaterial3d<StandardMaterial>>();
     }
@@ -419,11 +419,11 @@ fn saved_components(
     registry: &TypeRegistry,
 ) -> Vec<Box<dyn PartialReflect>> {
     let entity_ref = world.entity(entity);
-    let saved: Vec<(&ComponentInfo, Box<dyn PartialReflect>)> = world
+    let saved: Vec<(ComponentId, &ComponentInfo, Box<dyn PartialReflect>)> = world
         .inspect_entity(entity)
         .into_iter()
         .flatten()
-        .filter_map(|info| {
+        .filter_map(|(id, info)| {
             let type_id = info.type_id().filter(|id| !left_out(*id))?;
             let value = registry
                 .get_type_data::<ReflectComponent>(type_id)?
@@ -433,27 +433,28 @@ fn saved_components(
                 registry,
                 &HANDLE_PATHS,
             );
-            if serde_json::to_value(serializer).is_err() {
+            let copy = saved_value(value);
+            if serde_json::to_value(serializer).is_err() || copy.is_none() {
                 warn!("Not saving {}: it does not serialize.", info.name());
                 return None;
             }
-            Some((info, saved_value(value)))
+            Some((id, info, copy?))
         })
         .collect();
     let requirers = |id: ComponentId| {
         saved
             .iter()
-            .filter(|(other, _)| other.required_components().iter_ids().any(|r| r == id))
+            .filter(|(_, other, _)| other.required_components().iter_ids().any(|r| r == id))
             .count()
     };
-    let requirers: Vec<usize> = saved.iter().map(|(info, _)| requirers(info.id())).collect();
+    let requirers: Vec<usize> = saved.iter().map(|(id, ..)| requirers(*id)).collect();
     let mut kept: Vec<(usize, Box<dyn PartialReflect>)> = saved
         .into_iter()
         .zip(requirers)
-        .filter(|((info, value), requirers)| {
+        .filter(|((_, info, value), requirers)| {
             *requirers == 0 || !is_default(registry, info, value.as_ref())
         })
-        .map(|((_, value), requirers)| (requirers, value))
+        .map(|((.., value), requirers)| (requirers, value))
         .collect();
     // Stable, and `required_components` holds requirements of requirements,
     // so whatever requires a component has fewer requirers than it.
@@ -465,25 +466,27 @@ fn saved_components(
 /// serialize through serde, like `Name`, serializable; a dynamic value
 /// loses that. Bevy recomputes a camera's matrices and target size and a
 /// perspective's aspect ratio every frame, so the file keeps their defaults.
+/// None for a value that cannot be copied either way.
 // ponytail: the template's camera; an orthographic projection's `area` is
 // recomputed too, clear it once 2D scenes are saved.
-fn saved_value(value: &dyn Reflect) -> Box<dyn PartialReflect> {
+fn saved_value(value: &dyn Reflect) -> Option<Box<dyn PartialReflect>> {
     if let Some(camera) = value.downcast_ref::<Camera>() {
-        return Box::new(Camera {
+        return Some(Box::new(Camera {
             computed: default(),
             ..camera.clone()
-        });
+        }));
     }
     if let Some(Projection::Perspective(perspective)) = value.downcast_ref::<Projection>() {
-        return Box::new(Projection::Perspective(PerspectiveProjection {
+        return Some(Box::new(Projection::Perspective(PerspectiveProjection {
             aspect_ratio: PerspectiveProjection::default().aspect_ratio,
             ..perspective.clone()
-        }));
+        })));
     }
     value
         .reflect_clone()
         .map(|clone| clone.into_partial_reflect())
-        .unwrap_or_else(|_| value.to_dynamic())
+        .or_else(|_| value.to_dynamic())
+        .ok()
 }
 
 fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn PartialReflect) -> bool {

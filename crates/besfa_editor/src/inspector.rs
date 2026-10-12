@@ -664,9 +664,11 @@ mod tests {
                 ..Default::default()
             };
             let mut changed = None;
-            let _ = ctx.run_ui(input, |ui| {
+            let mut output = ctx.run_ui(input, |ui| {
                 changed = value_editor(ui, id, value, false, &[])
             });
+            // Nothing renders here, so the font texture goes unused.
+            output.textures_delta.clear();
             changed
         };
         let field = id.with(&["n".to_string()][..]);

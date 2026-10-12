@@ -215,7 +215,7 @@ const TEMPLATE_SCENE: &str = include_str!("../template/main.scn.ron");
 const SCENE_FILE: &str = "assets/scenes/main.scn.ron";
 
 /// Appended to the `[dependencies]` table that ends Cargo's generated manifest.
-const TEMPLATE_DEPENDENCIES: &str = r#"bevy = "0.19.1"
+const TEMPLATE_DEPENDENCIES: &str = r#"bevy = "0.20.0"
 besfa_editor_plugin = { git = "https://github.com/ski0090/besfa" }
 
 # Bevy is slow unoptimized: optimize dependencies, keep the game quick to rebuild.
@@ -369,7 +369,7 @@ mod tests {
         );
         let manifest = manifest.expect("Cargo.toml should be created");
         assert!(manifest.contains("name = \"demo_game\""));
-        assert!(manifest.contains("[dependencies]\nbevy = \"0.19.1\""));
+        assert!(manifest.contains("[dependencies]\nbevy = \"0.20.0\""));
         assert!(manifest.contains("besfa_editor_plugin = { git ="));
         assert_eq!(main.expect("main.rs should be created"), TEMPLATE_MAIN);
         let scene = scene.expect("the scene file should be created");

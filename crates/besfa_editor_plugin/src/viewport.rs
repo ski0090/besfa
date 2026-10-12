@@ -117,7 +117,7 @@ pub(crate) fn reopen(world: &mut World, name: &str) -> Result<(), String> {
 /// viewport. Cameras with any other target are left alone, and so is every
 /// camera when the viewport could not be opened: a missing view would panic.
 fn retarget_camera(
-    add: On<Add, Camera>,
+    add: On<Add<Camera>>,
     viewport: Option<Res<ViewportTexture>>,
     mut targets: Query<&mut RenderTarget>,
 ) {
@@ -208,6 +208,8 @@ mod shared {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     view_formats: &[],
                 },
+                // A shared resource starts in the common state.
+                wgpu::TextureUses::UNINITIALIZED,
             )
         })
     }

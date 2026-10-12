@@ -185,26 +185,26 @@ fn entities(world: &mut World) -> Value {
 /// The components on `entity`, or `None` once it is despawned. A value is
 /// only there for components registered with `Reflect`.
 fn components(world: &World, entity: Entity) -> Option<Vec<Value>> {
-    let infos: Vec<&ComponentInfo> = world.inspect_entity(entity).ok()?.collect();
+    let infos: Vec<(ComponentId, &ComponentInfo)> = world.inspect_entity(entity).ok()?.collect();
     // The present component that requires a component. `Mesh3d` requires
     // `Visibility`, which requires `ViewVisibility`: the requirer with the
     // fewest requirements of its own is the direct one.
     let required_by = |id: ComponentId| {
         infos
             .iter()
-            .filter(|info| {
+            .filter(|(_, info)| {
                 info.required_components()
                     .iter_ids()
                     .any(|required| required == id)
             })
-            .min_by_key(|info| info.required_components().iter_ids().count())
-            .map(|info| info.name().shortname().to_string())
+            .min_by_key(|(_, info)| info.required_components().iter_ids().count())
+            .map(|(_, info)| info.name().shortname().to_string())
     };
     let registry = world.resource::<AppTypeRegistry>().read();
     let entity_ref = world.entity(entity);
     let components = infos
         .iter()
-        .map(|info| {
+        .map(|&(id, info)| {
             let value = info
                 .type_id()
                 .and_then(|type_id| registry.get_type_data::<ReflectComponent>(type_id))
@@ -241,7 +241,7 @@ fn components(world: &World, entity: Entity) -> Option<Vec<Value>> {
                 "name": name,
                 "path": path,
                 "mutable": info.mutable(),
-                "required_by": required_by(info.id()),
+                "required_by": required_by(id),
                 // Computed from other components; the scene file leaves it out.
                 "saved": info.type_id().is_some_and(|id| !left_out(id)),
                 "value": value,

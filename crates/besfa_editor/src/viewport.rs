@@ -446,6 +446,8 @@ mod shared {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                     view_formats: &[],
                 },
+                // A shared resource starts in the common state.
+                wgpu::TextureUses::UNINITIALIZED,
             )
         };
         Ok((texture, handle, name))
