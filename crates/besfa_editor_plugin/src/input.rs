@@ -23,7 +23,7 @@ use bevy::{
     window::CursorMoved,
 };
 
-use crate::scene_view::{Button, PointerEvent};
+use besfa_protocol::{Button, PointerEvent};
 
 /// The messages name a window; there is none.
 const NO_WINDOW: Entity = Entity::PLACEHOLDER;

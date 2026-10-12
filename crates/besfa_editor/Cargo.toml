@@ -9,7 +9,7 @@ eframe = { version = "0.36", default-features = false, features = ["accesskit", 
 # Must match the wgpu and windows versions egui-wgpu uses, so the raw D3D12
 # types line up with wgpu-hal's when the viewport texture is shared.
 wgpu = "30"
-serde = { version = "1", features = ["derive"] }
+besfa_protocol = { path = "../besfa_protocol" }
 # Keeps component fields in the order the game reports them.
 serde_json = { version = "1", features = ["preserve_order"] }
 

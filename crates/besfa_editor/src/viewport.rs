@@ -10,11 +10,11 @@
 
 use std::{collections::HashSet, sync::Arc};
 
+use besfa_protocol::{Button, Command, PointerEvent};
 use eframe::{
     egui::{self, Event, EventFilter, Key, PointerButton, Pos2, Rect, Sense, Vec2, mutex::RwLock},
     egui_wgpu::{self, RenderState},
 };
-use serde_json::{Value, json};
 
 const SHARED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 
@@ -130,11 +130,11 @@ const FLY_KEYS: [Key; 6] = [Key::W, Key::A, Key::S, Key::D, Key::Q, Key::E];
 #[derive(Default)]
 pub struct ViewportInput {
     /// The button held down; others are ignored until it is released.
-    pressed: Option<&'static str>,
+    pressed: Option<Button>,
     /// Fly keys held while looking around in edit mode, by physical key.
     held: HashSet<Key>,
     /// The last `fly` sent; another goes only when it changes.
-    flying: Option<Value>,
+    flying: Option<Command>,
     focused: bool,
     was_playing: bool,
     /// Takes the keyboard on the next frame.
@@ -145,7 +145,7 @@ impl ViewportInput {
     /// The right button is held in edit mode. Its keys fly the scene view
     /// then, so the editor's shortcuts wait.
     pub fn looking(&self, playing: bool) -> bool {
-        self.pressed == Some("right") && !playing
+        self.pressed == Some(Button::Right) && !playing
     }
 
     /// Handles this frame's input over `rect`, which shows a texture of
@@ -156,7 +156,7 @@ impl ViewportInput {
         rect: Rect,
         texture_size: Vec2,
         playing: bool,
-        send: &mut dyn FnMut(Value),
+        send: &mut dyn FnMut(Command),
     ) -> egui::Response {
         let response = ui.interact(
             rect,
@@ -174,14 +174,7 @@ impl ViewportInput {
             response.surrender_focus();
         }
 
-        let pointer = |event: &str, pos: Pos2, button: Option<&str>| {
-            let at = (pos - rect.min) * texture_size / rect.size();
-            let mut command = json!({"command": "pointer", "event": event, "x": at.x, "y": at.y});
-            if let Some(button) = button {
-                command["button"] = button.into();
-            }
-            command
-        };
+        let at = |pos: Pos2| (pos - rect.min) * texture_size / rect.size();
         let over = response.contains_pointer();
         let focused = response.has_focus();
         let (events, shift) = ui.input(|i| (i.events.clone(), i.modifiers.shift));
@@ -193,12 +186,13 @@ impl ViewportInput {
                     pressed: true,
                     ..
                 } if over && self.pressed.is_none() => {
-                    if let Some(name) = button_name(*button) {
+                    if let Some(button) = button_name(*button) {
                         response.request_focus();
-                        self.pressed = Some(name);
-                        send(pointer("down", *pos, Some(name)));
+                        self.pressed = Some(button);
+                        let Vec2 { x, y } = at(*pos);
+                        send(Command::Pointer(PointerEvent::Down { x, y, button }));
                         if self.looking(playing) {
-                            self.flying = Some(fly([0, 0, 0], false));
+                            self.flying = Some(fly([0.0; 3], false));
                         }
                     }
                 }
@@ -209,11 +203,14 @@ impl ViewportInput {
                     ..
                 } if self.pressed.is_some() && button_name(*button) == self.pressed => {
                     // The game stops flying when the button goes up.
-                    send(pointer("up", *pos, self.pressed.take()));
+                    let Vec2 { x, y } = at(*pos);
+                    let button = self.pressed.take().unwrap();
+                    send(Command::Pointer(PointerEvent::Up { x, y, button }));
                     self.held.clear();
                 }
                 Event::PointerMoved(pos) if over || self.pressed.is_some() => {
-                    send(pointer("move", *pos, None));
+                    let Vec2 { x, y } = at(*pos);
+                    send(Command::Pointer(PointerEvent::Move { x, y }));
                 }
                 // Positive scrolls down, which zooms out.
                 Event::MouseWheel { unit, delta, .. } if over => {
@@ -222,7 +219,7 @@ impl ViewportInput {
                         egui::MouseWheelUnit::Line => delta.y * PIXELS_PER_LINE,
                         egui::MouseWheelUnit::Page => delta.y * rect.height(),
                     };
-                    send(json!({"command": "pointer", "event": "scroll", "delta": -pixels}));
+                    send(Command::Pointer(PointerEvent::Scroll { delta: -pixels }));
                 }
                 // A held key stays pressed in the game until it is released,
                 // so repeats are not sent.
@@ -236,14 +233,15 @@ impl ViewportInput {
                     let key = physical_key.unwrap_or(*key);
                     if playing && focused {
                         if let Some(code) = key_code(key) {
-                            let mut command =
-                                json!({"command": "key", "code": code, "pressed": pressed});
-                            if let (true, Some(Event::Text(text))) =
-                                (*pressed, events.get(index + 1))
-                            {
-                                command["text"] = text.as_str().into();
-                            }
-                            send(command);
+                            let text = match (*pressed, events.get(index + 1)) {
+                                (true, Some(Event::Text(text))) => Some(text.clone()),
+                                _ => None,
+                            };
+                            send(Command::Key {
+                                code,
+                                pressed: *pressed,
+                                text,
+                            });
                         }
                     } else if self.looking(playing) && FLY_KEYS.contains(&key) {
                         if *pressed {
@@ -261,9 +259,8 @@ impl ViewportInput {
         // scene view's camera, Q and E down and up, and Shift speeds it up.
         // They stay the editor's keys: the game's input never sees them.
         if self.looking(playing) {
-            let axis = |plus, minus| {
-                i32::from(self.held.contains(&plus)) - i32::from(self.held.contains(&minus))
-            };
+            let held = |key| f32::from(u8::from(self.held.contains(&key)));
+            let axis = |plus, minus| held(plus) - held(minus);
             let command = fly(
                 [
                     axis(Key::D, Key::A),
@@ -289,7 +286,7 @@ impl ViewportInput {
             ui.memory_mut(|memory| memory.set_focus_lock_filter(response.id, keys));
         } else if self.focused {
             if playing {
-                send(json!({"command": "focus_lost"}));
+                send(Command::FocusLost);
             } else {
                 self.held.clear();
             }
@@ -299,15 +296,20 @@ impl ViewportInput {
     }
 }
 
-fn fly([right, up, forward]: [i32; 3], fast: bool) -> Value {
-    json!({"command": "fly", "right": right, "up": up, "forward": forward, "fast": fast})
+fn fly([right, up, forward]: [f32; 3], fast: bool) -> Command {
+    Command::Fly {
+        right,
+        up,
+        forward,
+        fast,
+    }
 }
 
-fn button_name(button: PointerButton) -> Option<&'static str> {
+fn button_name(button: PointerButton) -> Option<Button> {
     match button {
-        PointerButton::Primary => Some("left"),
-        PointerButton::Middle => Some("middle"),
-        PointerButton::Secondary => Some("right"),
+        PointerButton::Primary => Some(Button::Left),
+        PointerButton::Middle => Some(Button::Middle),
+        PointerButton::Secondary => Some(Button::Right),
         _ => None,
     }
 }

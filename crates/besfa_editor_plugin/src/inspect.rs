@@ -2,13 +2,14 @@
 //! entity's components, every system, and the components the editor can add.
 //!
 //! A report is one stdout line: `@besfa ` and a JSON object with a `type`,
-//! which tells reports from the game's logs. Entities and the selected
+//! which tells reports from the game's logs; see [`besfa_protocol::Report`]. Entities and the selected
 //! entity are reported when they change; systems and addable components
 //! once, before the game runs. The game also reports a selection it made
 //! itself and the outcome of a save.
 
 use std::io::Write;
 
+use besfa_protocol::{ComponentData, ComponentType, EntityInfo, Report, SystemInfo};
 use bevy::{
     ecs::{
         component::{ComponentId, ComponentInfo},
@@ -21,7 +22,7 @@ use bevy::{
     reflect::serde::TypedReflectSerializer,
     world_serialization::{DynamicWorldRoot, WorldAssetRoot},
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     edit::Deleted,
@@ -47,17 +48,19 @@ pub(crate) fn select(world: &mut World, entity: Option<Entity>) {
 
 /// Tells the editor the game changed the selection.
 pub(crate) fn report_selection(entity: Option<Entity>) {
-    send_report(json!({ "type": "selected", "id": entity.map(Entity::to_bits) }));
+    send_report(&Report::Selected {
+        id: entity.map(Entity::to_bits),
+    });
 }
 
 /// Tells the editor whether the scene file was written.
 pub(crate) fn report_saved(error: Option<String>) {
-    send_report(json!({ "type": "saved", "error": error }));
+    send_report(&Report::Saved { error });
 }
 
 /// Writes one report line.
-pub(crate) fn send_report(report: Value) {
-    write(&report.to_string());
+pub(crate) fn send_report(report: &Report) {
+    write(&report.line());
 }
 
 pub(crate) struct InspectPlugin;
@@ -76,8 +79,8 @@ impl Plugin for InspectPlugin {
     // from `Last` on a system count change if a game needs that.
     fn cleanup(&self, app: &mut App) {
         hide_internals(app.world_mut());
-        write(&systems(app.world()).to_string());
-        write(&addable_components(app.world()).to_string());
+        send_report(&systems(app.world()));
+        send_report(&addable_components(app.world()));
     }
 }
 
@@ -100,12 +103,12 @@ fn hide_internals(world: &mut World) {
 
 fn write(line: &str) {
     let mut stdout = std::io::stdout().lock();
-    let _ = writeln!(stdout, "@besfa {line}");
+    let _ = writeln!(stdout, "{line}");
 }
 
 /// Writes `report` unless it is the one written last.
-fn write_if_changed(last: &mut String, report: Value) {
-    let line = report.to_string();
+fn write_if_changed(last: &mut String, report: Report) {
+    let line = report.line();
     if *last != line {
         write(&line);
         *last = line;
@@ -125,12 +128,11 @@ fn report(world: &mut World, mut last_entities: Local<String>, mut last_entity: 
         // A new count makes a new line, so every change is answered.
         Some(components) => write_if_changed(
             &mut last_entity,
-            json!({
-                "type": "entity",
-                "id": entity.to_bits(),
-                "changes": world.resource::<Changes>().0,
-                "components": components,
-            }),
+            Report::Entity {
+                id: entity.to_bits(),
+                changes: Some(world.resource::<Changes>().0),
+                components,
+            },
         ),
         // Despawned; the entities report drops it as well.
         None => select(world, None),
@@ -142,7 +144,7 @@ fn report(world: &mut World, mut last_entities: Local<String>, mut last_entity: 
 /// hundreds of entities Bevy keeps for observers and events.
 // ponytail: tells scene from internals by components; an explicit marker
 // would be needed once internal entities carry transforms.
-fn entities(world: &mut World) -> Value {
+fn entities(world: &mut World) -> Report {
     let mut entities: Vec<_> = world
         .query_filtered::<(
             Entity,
@@ -161,30 +163,29 @@ fn entities(world: &mut World) -> Value {
     // Spawn order; `Entity`'s own order inverts the index.
     entities
         .sort_unstable_by_key(|(entity, ..)| (entity.index_u32(), entity.generation().to_bits()));
-    let entities: Vec<Value> = entities
+    let entities = entities
         .iter()
-        .map(|(entity, name, parent, scene, (placed_scene, model))| {
-            let asset = placed_scene
-                .and_then(|root| root.0.path())
-                .or_else(|| model.and_then(|root| root.0.path()))
-                .map(|path| path.without_label().to_string());
-            json!({
-                "id": entity.to_bits(),
-                "name": name.map(Name::as_str),
-                "parent": parent.map(|parent| parent.parent().to_bits()),
+        .map(
+            |(entity, name, parent, scene, (placed_scene, model))| EntityInfo {
+                id: entity.to_bits(),
+                name: name.map(|name| name.as_str().into()),
+                parent: parent.map(|parent| parent.parent().to_bits()),
                 // From the scene file or the editor; saving keeps it.
-                "scene": scene,
+                scene: *scene,
                 // A placed model, scene or prefab: the file it shows.
-                "asset": asset,
-            })
-        })
+                asset: placed_scene
+                    .and_then(|root| root.0.path())
+                    .or_else(|| model.and_then(|root| root.0.path()))
+                    .map(|path| path.without_label().to_string()),
+            },
+        )
         .collect();
-    json!({ "type": "entities", "entities": entities })
+    Report::Entities { entities }
 }
 
 /// The components on `entity`, or `None` once it is despawned. A value is
 /// only there for components registered with `Reflect`.
-fn components(world: &World, entity: Entity) -> Option<Vec<Value>> {
+fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
     let infos: Vec<(ComponentId, &ComponentInfo)> = world.inspect_entity(entity).ok()?.collect();
     // The present component that requires a component. `Mesh3d` requires
     // `Visibility`, which requires `ViewVisibility`: the requirer with the
@@ -244,15 +245,15 @@ fn components(world: &World, entity: Entity) -> Option<Vec<Value>> {
                         .to_string()
                 },
             );
-            json!({
-                "name": name,
-                "path": path,
-                "mutable": info.mutable(),
-                "required_by": required_by(id),
+            ComponentData {
+                name,
+                path,
+                mutable: info.mutable(),
+                required_by: required_by(id),
                 // Computed from other components; the scene file leaves it out.
-                "saved": info.type_id().is_some_and(|id| !left_out(id)),
-                "value": value,
-            })
+                saved: info.type_id().is_some_and(|id| !left_out(id)),
+                value,
+            }
         })
         .collect();
     Some(components)
@@ -260,18 +261,24 @@ fn components(world: &World, entity: Entity) -> Option<Vec<Value>> {
 
 /// Every system of every schedule, with the game's crate name so the editor
 /// can put the game's own systems first.
-fn systems(world: &World) -> Value {
-    let systems: Vec<Value> = world
+fn systems(world: &World) -> Report {
+    let systems = world
         .resource::<Schedules>()
         .iter()
         .flat_map(|(label, schedule)| {
             let label = format!("{label:?}");
             system_names(schedule)
                 .into_iter()
-                .map(move |name| json!({ "schedule": label, "name": name }))
+                .map(move |name| SystemInfo {
+                    schedule: label.clone(),
+                    name,
+                })
         })
         .collect();
-    json!({ "type": "systems", "crate": game_crate(), "systems": systems })
+    Report::Systems {
+        game_crate: game_crate(),
+        systems,
+    }
 }
 
 /// Initializing a schedule moves its systems out of the graph, so look in
@@ -292,7 +299,7 @@ fn system_names(schedule: &Schedule) -> Vec<String> {
 
 /// Components the editor can add: reflected, with a default value, and not
 /// computed from other components.
-fn addable_components(world: &World) -> Value {
+fn addable_components(world: &World) -> Report {
     let registry = world.resource::<AppTypeRegistry>().read();
     let mut components: Vec<(&str, &str)> = registry
         .iter()
@@ -308,11 +315,14 @@ fn addable_components(world: &World) -> Value {
         })
         .collect();
     components.sort_unstable_by_key(|(_, path)| *path);
-    let components: Vec<Value> = components
+    let components = components
         .into_iter()
-        .map(|(name, path)| json!({ "name": name, "path": path }))
+        .map(|(name, path)| ComponentType {
+            name: name.into(),
+            path: path.into(),
+        })
         .collect();
-    json!({ "type": "components", "components": components })
+    Report::Components { components }
 }
 
 /// The game's crate name as its type paths start: `my-game.exe` is `my_game::`.
@@ -328,11 +338,18 @@ mod tests {
     #[derive(Component)]
     struct Plain;
 
-    fn find<'a>(components: &'a [Value], name: &str) -> &'a Value {
+    fn find<'a>(components: &'a [ComponentData], name: &str) -> &'a ComponentData {
         components
             .iter()
-            .find(|component| component["name"] == name)
+            .find(|component| component.name == name)
             .unwrap_or_else(|| panic!("no component {name} in {components:?}"))
+    }
+
+    fn reported_entities(report: Report) -> Vec<EntityInfo> {
+        match report {
+            Report::Entities { entities } => entities,
+            other => panic!("not an entities report: {other:?}"),
+        }
     }
 
     #[test]
@@ -344,28 +361,23 @@ mod tests {
         let child = world.spawn(ChildOf(parent)).id();
         let placed = world.spawn(Transform::default()).id();
 
-        let report = entities(&mut world);
+        let entities = reported_entities(entities(&mut world));
 
-        assert_eq!(report["type"], "entities");
-        let entities = report["entities"].as_array().unwrap();
         assert_eq!(
-            entities
-                .iter()
-                .map(|e| e["id"].as_u64().unwrap())
-                .collect::<Vec<_>>(),
+            entities.iter().map(|e| e.id).collect::<Vec<_>>(),
             [parent.to_bits(), child.to_bits(), placed.to_bits()],
             "spawn order, internals left out: {entities:?}"
         );
         let find = |entity: Entity| {
             entities
                 .iter()
-                .find(|reported| reported["id"] == entity.to_bits())
+                .find(|reported| reported.id == entity.to_bits())
                 .unwrap_or_else(|| panic!("{entity} missing from {entities:?}"))
         };
-        assert_eq!(find(parent)["name"], "Parent");
-        assert_eq!(find(parent)["parent"], Value::Null);
-        assert_eq!(find(child)["name"], Value::Null);
-        assert_eq!(find(child)["parent"], parent.to_bits());
+        assert_eq!(find(parent).name.as_deref(), Some("Parent"));
+        assert_eq!(find(parent).parent, None);
+        assert_eq!(find(child).name, None);
+        assert_eq!(find(child).parent, Some(parent.to_bits()));
     }
 
     #[test]
@@ -377,13 +389,9 @@ mod tests {
         app.cleanup();
         let cube = app.world_mut().spawn(Name::new("Cube")).id();
 
-        let report = entities(app.world_mut());
-
-        let ids: Vec<u64> = report["entities"]
-            .as_array()
-            .unwrap()
+        let ids: Vec<u64> = reported_entities(entities(app.world_mut()))
             .iter()
-            .map(|entity| entity["id"].as_u64().unwrap())
+            .map(|entity| entity.id)
             .collect();
         assert_eq!(ids, [cube.to_bits()]);
     }
@@ -407,23 +415,26 @@ mod tests {
 
         let transform = find(&components, "Transform");
         assert_eq!(
-            transform["path"],
+            transform.path,
             "bevy_transform::components::transform::Transform"
         );
         // glam serializes vectors as arrays.
-        assert_eq!(transform["value"]["translation"][1], 2.0);
-        assert_eq!(transform["mutable"], true);
-        assert_eq!(transform["required_by"], Value::Null);
+        assert_eq!(transform.value.as_ref().unwrap()["translation"][1], 2.0);
+        assert!(transform.mutable);
+        assert_eq!(transform.required_by, None);
         // Required by Visibility, which Visibility::Hidden brought in.
         assert_eq!(
-            find(&components, "ViewVisibility")["required_by"],
-            "Visibility"
+            find(&components, "ViewVisibility").required_by.as_deref(),
+            Some("Visibility")
         );
-        assert_eq!(find(&components, "Visibility")["value"], "Hidden");
+        assert_eq!(
+            find(&components, "Visibility").value,
+            Some(Value::from("Hidden"))
+        );
         // No Reflect: the name alone.
         let plain = find(&components, "Plain");
-        assert_eq!(plain["value"], Value::Null);
-        assert!(plain["path"].as_str().unwrap().ends_with("::tests::Plain"));
+        assert_eq!(plain.value, None);
+        assert!(plain.path.ends_with("::tests::Plain"));
 
         app.world_mut().despawn(cube);
         assert!(super::components(app.world(), cube).is_none());
@@ -440,11 +451,13 @@ mod tests {
         let after = systems(app.world());
 
         for report in [before, after] {
-            assert_eq!(report["type"], "systems");
-            let systems = report["systems"].as_array().unwrap();
+            let Report::Systems { systems, .. } = report else {
+                panic!("not a systems report: {report:?}");
+            };
             assert!(
-                systems.iter().any(|system| system["schedule"] == "Update"
-                    && system["name"].as_str().unwrap().ends_with("::spin")),
+                systems
+                    .iter()
+                    .any(|system| system.schedule == "Update" && system.name.ends_with("::spin")),
                 "{systems:?}"
             );
         }

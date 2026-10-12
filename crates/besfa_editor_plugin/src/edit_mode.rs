@@ -4,23 +4,23 @@
 //! The editor sets `BESFA_EDIT_MODE` and the game starts with virtual time
 //! paused: Startup systems build the scene, `Update` sees no time pass and
 //! `FixedUpdate` does not run. The editor writes one command per line to
-//! stdin, a JSON object such as `{"command":"play"}`; see [`Command`]. The
-//! editor ends a play session by killing the process, which resets the scene.
+//! stdin, a JSON object such as `{"command":"play"}`; see
+//! [`besfa_protocol::Request`]. A request with a `seq` is answered with a
+//! `done` report once it has run. The editor ends a play session by killing
+//! the process, which resets the scene.
 
 use std::sync::{Mutex, PoisonError, mpsc};
 
+use besfa_protocol::{Command, Report, Request, VERSION};
 use bevy::{input::InputSystems, prelude::*};
-use serde::Deserialize;
-use serde_json::Value;
 
 use crate::{
-    edit::{self, SpawnKind},
-    input,
+    edit, input,
     inspect::{Changes, Selected, report_saved, select, send_report},
     scene::{
         SCENE_PATH, asset_file, instance_prefab, save, save_instance, save_prefab, scene_file,
     },
-    scene_view::{self, PointerEvent, SceneView, Tool},
+    scene_view::{self, SceneView},
     viewport,
 };
 
@@ -39,10 +39,9 @@ pub(crate) struct EditorCommands(pub(crate) Mutex<mpsc::Receiver<String>>);
 
 impl Plugin for EditModePlugin {
     fn build(&self, app: &mut App) {
+        // The first line, so the editor knows what this plugin understands.
+        send_report(&Report::Hello { version: VERSION });
         let (sender, receiver) = mpsc::channel();
-        // ponytail: the editor talks over the game's stdin and stdout (see
-        // `inspect` for the replies). A besfa_protocol crate can take over
-        // once the editor and the game need shared message types.
         std::thread::spawn(move || {
             for line in std::io::stdin().lines().map_while(Result::ok) {
                 if sender.send(line).is_err() {
@@ -64,100 +63,6 @@ fn pause(mut time: ResMut<Time<Virtual>>) {
     time.pause();
 }
 
-/// One line from the editor. Entities are the ids `inspect` reports, and
-/// components their reflected type paths.
-#[derive(Deserialize, Debug, PartialEq)]
-#[serde(tag = "command", rename_all = "snake_case")]
-enum Command {
-    /// Unpauses virtual time once, so a game that pauses itself stays
-    /// paused, and hands the view to the game's cameras.
-    Play,
-    /// Picks the entity whose components `inspect` reports; no id clears it.
-    Select {
-        id: Option<u64>,
-    },
-    /// Writes the scene file and reports whether that worked.
-    Save,
-    Set {
-        id: u64,
-        component: String,
-        value: Value,
-    },
-    Insert {
-        id: u64,
-        component: String,
-    },
-    Remove {
-        id: u64,
-        component: String,
-    },
-    /// Spawns a scene entity, reports it and selects it.
-    Spawn {
-        kind: SpawnKind,
-    },
-    /// Copies an entity, reports the copy and selects it.
-    Duplicate {
-        id: u64,
-    },
-    /// Hides an entity and its children until `restore`.
-    Delete {
-        id: u64,
-    },
-    Restore {
-        id: u64,
-    },
-    /// Drops a deleted entity for good, once no undo can restore it.
-    Despawn {
-        id: u64,
-    },
-    /// Spawns an entity showing the asset at `path`, relative to the asset
-    /// directory, then reports and selects it.
-    Instantiate {
-        path: String,
-    },
-    /// Writes an entity and its scene children to `path`, relative to the
-    /// asset directory, as a prefab.
-    SavePrefab {
-        id: u64,
-        path: String,
-    },
-    /// Writes what a placed prefab shows, changes made inside it included,
-    /// back to its file; every instance of it then shows the new file.
-    ApplyPrefab {
-        id: u64,
-    },
-    /// The viewport's pointer: the scene view's in edit mode, the game's
-    /// mouse once it plays.
-    Pointer(PointerEvent),
-    /// A key pressed or released in the viewport while the game plays,
-    /// named the way Bevy's `KeyCode` is, with the text it typed.
-    Key {
-        code: String,
-        pressed: bool,
-        text: Option<String>,
-    },
-    /// The viewport lost the keyboard, so held keys are let go.
-    FocusLost,
-    /// What dragging a handle does.
-    Tool {
-        tool: Tool,
-    },
-    /// Frames the selected entity in the scene view.
-    Focus,
-    /// Which way the scene view flies while the right button is held:
-    /// right, up and forward, each -1 to 1.
-    Fly {
-        right: f32,
-        up: f32,
-        forward: f32,
-        fast: bool,
-    },
-    /// Renders into the editor's new viewport texture of this name.
-    Viewport {
-        name: String,
-    },
-}
-
 /// Exclusive, because commands change and save the whole world.
 fn run_commands(world: &mut World) {
     let lines: Vec<String> = {
@@ -166,14 +71,23 @@ fn run_commands(world: &mut World) {
         receiver.try_iter().collect()
     };
     for line in lines {
-        match serde_json::from_str(&line) {
-            Ok(command) => run(world, command),
+        match serde_json::from_str::<Request>(&line) {
+            Ok(Request { seq, command }) => {
+                let result = run(world, command);
+                if let Some(seq) = seq {
+                    send_report(&Report::Done {
+                        seq,
+                        error: result.err(),
+                    });
+                }
+            }
             Err(error) => warn!("Unknown editor command {line}: {error}"),
         }
     }
 }
 
-fn run(world: &mut World, command: Command) {
+/// Runs `command`, logging why it failed if it did.
+fn run(world: &mut World, command: Command) -> Result<(), String> {
     // Counted whether or not they apply: the editor counts what it sent.
     if matches!(
         command,
@@ -198,8 +112,8 @@ fn run(world: &mut World, command: Command) {
                 Ok(()) => info!("Saved {SCENE_PATH}"),
                 Err(error) => error!("Could not save {SCENE_PATH}: {error}"),
             }
-            report_saved(result.err());
-            return;
+            report_saved(result.clone().err());
+            return result;
         }
         Command::Set {
             id,
@@ -241,12 +155,11 @@ fn run(world: &mut World, command: Command) {
                 Ok(()) => info!("Saved {path}"),
                 Err(error) => error!("Could not save {path}: {error}"),
             }
-            send_report(serde_json::json!({
-                "type": "prefab_saved",
-                "path": path,
-                "error": result.err(),
-            }));
-            return;
+            send_report(&Report::PrefabSaved {
+                path: Some(path),
+                error: result.clone().err(),
+            });
+            return result;
         }
         Command::ApplyPrefab { id } => {
             let result = entity(id).and_then(|entity| {
@@ -259,12 +172,11 @@ fn run(world: &mut World, command: Command) {
                 Ok(path) => info!("Saved {path}"),
                 Err(error) => error!("Could not apply the prefab: {error}"),
             }
-            send_report(serde_json::json!({
-                "type": "prefab_saved",
-                "path": result.as_ref().ok(),
-                "error": result.err(),
-            }));
-            return;
+            send_report(&Report::PrefabSaved {
+                path: result.clone().ok(),
+                error: result.clone().err(),
+            });
+            return result.map(drop);
         }
         Command::Pointer(event) => {
             match world.get_resource_mut::<SceneView>() {
@@ -308,14 +220,17 @@ fn run(world: &mut World, command: Command) {
         }
         Command::Viewport { name } => viewport::reopen(world, &name),
     };
-    if let Err(error) = result {
+    if let Err(error) = &result {
         error!("Could not apply the editor's change: {error}");
     }
+    result
 }
 
 /// Tells the editor about an entity it asked for, then selects it.
 fn spawned(world: &mut World, entity: Entity) {
-    send_report(serde_json::json!({ "type": "spawned", "id": entity.to_bits() }));
+    send_report(&Report::Spawned {
+        id: entity.to_bits(),
+    });
     select(world, Some(entity));
 }
 
@@ -388,44 +303,6 @@ mod tests {
         editor.send(r#"{"command":"select"}"#.into()).unwrap();
         app.update();
         assert_eq!(app.world().resource::<Selected>().0, None);
-    }
-
-    #[test]
-    fn reads_every_command() {
-        let command = |line: &str| serde_json::from_str::<Command>(line).unwrap();
-
-        assert_eq!(
-            command(r#"{"command":"set","id":4,"component":"a::B<c::D, e::F>","value":{"x":1}}"#),
-            Command::Set {
-                id: 4,
-                component: "a::B<c::D, e::F>".into(),
-                value: serde_json::json!({ "x": 1 }),
-            }
-        );
-        assert_eq!(
-            command(r#"{"command":"spawn","kind":"cube"}"#),
-            Command::Spawn {
-                kind: SpawnKind::Cube
-            }
-        );
-        assert_eq!(command(r#"{"command":"save"}"#), Command::Save);
-        assert_eq!(
-            command(r#"{"command":"pointer","event":"scroll","delta":-120}"#),
-            Command::Pointer(PointerEvent::Scroll { delta: -120.0 })
-        );
-        assert_eq!(
-            command(r#"{"command":"tool","tool":"rotate"}"#),
-            Command::Tool { tool: Tool::Rotate }
-        );
-        assert_eq!(
-            command(r#"{"command":"key","code":"KeyW","pressed":true}"#),
-            Command::Key {
-                code: "KeyW".into(),
-                pressed: true,
-                text: None,
-            }
-        );
-        assert!(serde_json::from_str::<Command>("play").is_err());
     }
 
     #[test]

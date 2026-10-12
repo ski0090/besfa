@@ -5,12 +5,13 @@
 
 use std::collections::BTreeMap;
 
+use besfa_protocol::{ComponentData, ComponentType, EntityInfo, SystemInfo, crate_of};
 use eframe::egui::{self, Id, Label, RichText, ScrollArea, TextEdit, Ui};
 use serde_json::{Value, json};
 
 use crate::{
     panels::{MUTED, TEXT, panel_header, section, tag},
-    scene::{ComponentType, EntityComponent, GameSystem, Scene, SceneEntity, crate_of},
+    scene::Scene,
 };
 
 const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
@@ -83,15 +84,14 @@ impl Inspector {
             }
             if selected.is_some() {
                 section(ui, "Components");
-                let mut tile = |ui: &mut Ui, component: &EntityComponent| {
+                let mut tile = |ui: &mut Ui, component: &ComponentData| {
                     if let Some(change) = component_tile(ui, selected, component, self.details) {
                         action = Some(change);
                     }
                 };
                 if self.details {
                     // Groups that hold something the scene file keeps start open.
-                    let expand =
-                        |components: &[&EntityComponent]| components.iter().any(|c| c.saved);
+                    let expand = |components: &[&ComponentData]| components.iter().any(|c| c.saved);
                     crate_groups(
                         ui,
                         "components",
@@ -110,7 +110,7 @@ impl Inspector {
                     self.adding = Some(String::new());
                 }
             }
-            let system_row = |ui: &mut Ui, system: &GameSystem| {
+            let system_row = |ui: &mut Ui, system: &SystemInfo| {
                 let name = system
                     .name
                     .strip_prefix(&format!("{}::", crate_of(&system.name)));
@@ -136,7 +136,7 @@ impl Inspector {
                     system_row,
                 );
             } else {
-                let game = |system: &&GameSystem| {
+                let game = |system: &&SystemInfo| {
                     Some(crate_of(&system.name)) == scene.crate_name.as_deref()
                 };
                 let systems: Vec<_> = scene.systems.iter().filter(game).collect();
@@ -209,7 +209,7 @@ impl Inspector {
 /// What there is to edit, Transform first: the components the scene file
 /// keeps, and the game's own, where an unreflected one is tagged so. The
 /// `name` edited in the header is left out.
-fn editable<'a>(scene: &'a Scene, name: Option<&EntityComponent>) -> Vec<&'a EntityComponent> {
+fn editable<'a>(scene: &'a Scene, name: Option<&ComponentData>) -> Vec<&'a ComponentData> {
     let mut shown: Vec<_> = scene
         .components
         .iter()
@@ -227,7 +227,7 @@ fn editable<'a>(scene: &'a Scene, name: Option<&EntityComponent>) -> Vec<&'a Ent
 fn placement(
     ui: &mut Ui,
     scene: &Scene,
-    entity: &SceneEntity,
+    entity: &EntityInfo,
     can_apply: bool,
     action: &mut Option<Action>,
 ) {
@@ -292,7 +292,7 @@ fn crate_groups<T>(
 fn component_tile(
     ui: &mut Ui,
     selected: Option<u64>,
-    component: &EntityComponent,
+    component: &ComponentData,
     details: bool,
 ) -> Option<Action> {
     let mut action = None;

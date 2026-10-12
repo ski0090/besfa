@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use besfa_protocol::SpawnKind;
 use eframe::egui::{self, Color32, Id, Label, RichText, ScrollArea, Ui};
 
 use crate::{
@@ -63,19 +64,19 @@ pub fn prebuild_status(ui: &mut Ui, prebuild: &Prebuild) {
     };
 }
 
-/// What the add menu spawns, by the `kind` the game takes.
-pub const SPAWN_KINDS: [(&str, &str); 6] = [
-    ("empty", "Empty"),
-    ("cube", "Cube"),
-    ("sphere", "Sphere"),
-    ("plane", "Plane"),
-    ("light", "Light"),
-    ("camera", "Camera"),
+/// What the add menu spawns, with its label.
+pub const SPAWN_KINDS: [(SpawnKind, &str); 6] = [
+    (SpawnKind::Empty, "Empty"),
+    (SpawnKind::Cube, "Cube"),
+    (SpawnKind::Sphere, "Sphere"),
+    (SpawnKind::Plane, "Plane"),
+    (SpawnKind::Light, "Light"),
+    (SpawnKind::Camera, "Camera"),
 ];
 
 pub enum HierarchyAction {
     Select(Option<u64>),
-    Spawn(&'static str),
+    Spawn(SpawnKind),
     Duplicate,
     Delete,
     SavePrefab,

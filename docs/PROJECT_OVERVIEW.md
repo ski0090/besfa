@@ -33,6 +33,10 @@ my-game/                       # 에디터가 생성하는 별도 사용자 프�
 
 egui(eframe, wgpu DX12) 기반 Windows 데스크톱 에디터다. 프로젝트 허브와, 게임을 뷰포트에서 실행하며 씬을 고치는 편집 화면이 있다. 역할과 동작은 [EDITOR_UI.md](./EDITOR_UI.md)를 참고한다.
 
+### `crates/besfa_protocol`
+
+에디터와 게임의 `besfa_editor_plugin`이 함께 쓰는 메시지 타입이다. 에디터가 게임의 stdin에 쓰는 `Request`(`Command`와 답을 받을 `seq`)와 게임이 stdout에 쓰는 `Report`, 그리고 프로토콜 버전이 있다. 자세한 규칙은 [ARCHITECTURE.md](./ARCHITECTURE.md)를 참고한다.
+
 ### `crates/besfa_cli`
 
 Besfa 프로젝트 자동화를 위한 Rust 바이너리 crate다.

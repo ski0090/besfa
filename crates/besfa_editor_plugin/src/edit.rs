@@ -8,6 +8,7 @@
 //! scene file and the `entity` report use. Values are JSON in the shape
 //! the `entity` report sends them.
 
+use besfa_protocol::SpawnKind;
 use bevy::{
     asset::HandleDeserializeProcessor,
     ecs::{entity_disabling::Disabled, reflect::ReflectFromWorld},
@@ -15,7 +16,7 @@ use bevy::{
     reflect::{TypeRegistration, TypeRegistry, serde::TypedReflectDeserializer},
     world_serialization::{DynamicWorldRoot, WorldAssetRoot},
 };
-use serde::{Deserialize, de::DeserializeSeed};
+use serde::de::DeserializeSeed;
 use serde_json::Value;
 
 use crate::{
@@ -27,18 +28,6 @@ use crate::{
 /// saving skip it, until undoing restores it or the editor despawns it.
 #[derive(Component)]
 pub(crate) struct Deleted;
-
-/// What the Hierarchy's add menu creates.
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SpawnKind {
-    Empty,
-    Cube,
-    Sphere,
-    Plane,
-    Light,
-    Camera,
-}
 
 /// Sets `component` on `entity` to `value`, adding it if the entity has
 /// none, which is how undoing a removal puts it back. The editor sends the

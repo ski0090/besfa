@@ -12,13 +12,14 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use besfa_protocol::{Command, Report, Request, Tool, VERSION};
 use eframe::{
     egui::{
         self, Button, Color32, Key, KeyboardShortcut, Modifiers, RichText, Ui, ViewportCommand,
     },
     egui_wgpu::RenderState,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     inspector::{Action, Inspector},
@@ -41,12 +42,11 @@ const RESIZE_DELAY: Duration = Duration::from_millis(250);
 /// How long the editor waits for the game to report a save.
 const SAVE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The scene view's handle tools, by the name the game takes, with their
-/// icons, tooltips and keys.
-const TOOLS: [(&str, &str, &str, Key); 3] = [
-    ("translate", "✚", "Move (W)", Key::W),
-    ("rotate", "⟳", "Rotate (E)", Key::E),
-    ("scale", "⬈", "Scale (R)", Key::R),
+/// The scene view's handle tools with their icons, tooltips and keys.
+const TOOLS: [(Tool, &str, &str, Key); 3] = [
+    (Tool::Translate, "✚", "Move (W)", Key::W),
+    (Tool::Rotate, "⟳", "Rotate (E)", Key::E),
+    (Tool::Scale, "⬈", "Scale (R)", Key::R),
 ];
 
 /// What follows a save once the game reports it, or gives up waiting.
@@ -75,19 +75,24 @@ pub struct Editor {
     /// `cargo update` of the plugin, while it runs.
     update: Option<CliProcess>,
     viewport: Option<ViewportTexture>,
-    /// Textures replaced by a resize. A running game may still render into
-    /// one until it reads the `viewport` command, so they go when the next
-    /// game launches.
-    // ponytail: kept until the next launch; drop them on a game
-    // acknowledgment if long sessions with many resizes hold too much GPU
-    // memory.
+    /// Textures replaced by a resize. The game renders into one until it
+    /// takes the `viewport` command, so they go once it answers the latest
+    /// one, or when the next game launches: plugins from before protocol
+    /// versions do not answer.
     retired: Vec<ViewportTexture>,
+    /// The latest `viewport` request, which the retired textures wait on.
+    viewport_request: Option<u64>,
+    /// The last request number given to this game process.
+    seq: u64,
+    /// The protocol version the game's plugin speaks: 0 for one from before
+    /// versions, None until the game says.
+    protocol: Option<u32>,
     /// The viewport panel's size in physical pixels, which the texture
     /// follows once it settles.
     wanted_viewport: Option<[u32; 2]>,
     resize_at: Option<Instant>,
     input: ViewportInput,
-    tool: &'static str,
+    tool: Tool,
     /// Waiting for a game process: stopping one to launch the next, or
     /// updating the plugin first.
     starting: bool,
@@ -134,10 +139,13 @@ impl Editor {
             update: None,
             viewport: None,
             retired: Vec::new(),
+            viewport_request: None,
+            seq: 0,
+            protocol: None,
             wanted_viewport: None,
             resize_at: None,
             input: ViewportInput::default(),
-            tool: "translate",
+            tool: Tool::Translate,
             starting: false,
             playing: false,
             relaunch: false,
@@ -254,7 +262,7 @@ impl Editor {
         for output in game.poll() {
             match output {
                 Output::Line(line) => match self.scene.handle(&line) {
-                    Some(report) => self.on_report(&report, ctx),
+                    Some(report) => self.on_report(report, ctx),
                     None => self.log(line),
                 },
                 Output::Exit(code) => {
@@ -306,6 +314,10 @@ impl Editor {
         self.history.clear();
         // The previous game has exited, so nothing renders into them any more.
         self.retired.clear();
+        // Requests are numbered per game process.
+        self.viewport_request = None;
+        self.seq = 0;
+        self.protocol = None;
         self.ensure_viewport();
         let shared = self.viewport.as_ref().zip(self.render.as_ref());
         let shared = shared.map(|(viewport, render)| (viewport.name.clone(), adapter_name(render)));
@@ -324,23 +336,21 @@ impl Editor {
         // Only the editor turns it on, so a plain `cargo build` stays
         // standalone.
         let args = ["run", "--features", "bevy/dynamic_linking"];
-        let mut game =
-            match CliProcess::start(Path::new(&self.project.path), "cargo", &args, &env, ctx) {
-                Ok(game) => game,
-                Err(error) => return self.log(format!("Could not start cargo: {error}")),
-            };
+        match CliProcess::start(Path::new(&self.project.path), "cargo", &args, &env, ctx) {
+            Ok(game) => self.game = Some(game),
+            Err(error) => return self.log(format!("Could not start cargo: {error}")),
+        }
         // Sent while cargo still builds, these wait in the pipe for the game.
         if play {
-            game.send(&json!({"command": "play"}).to_string());
+            self.send(Command::Play);
         }
         // The scene is rebuilt from the same file, so the selection carries over.
         if let Some(id) = self.scene.selected {
-            game.send(&json!({"command": "select", "id": id}).to_string());
+            self.send(Command::Select { id: Some(id) });
         }
-        if self.tool != "translate" {
-            game.send(&json!({"command": "tool", "tool": self.tool}).to_string());
+        if self.tool != Tool::Translate {
+            self.send(Command::Tool { tool: self.tool });
         }
-        self.game = Some(game);
         self.playing = play;
     }
 
@@ -355,7 +365,7 @@ impl Editor {
         if self.scene.dirty {
             self.save();
         }
-        self.send(json!({"command": "play"}));
+        self.send(Command::Play);
         self.playing = true;
     }
 
@@ -372,23 +382,30 @@ impl Editor {
         }
     }
 
-    fn send(&mut self, command: Value) {
-        if let Some(game) = &mut self.game {
-            game.send(&command.to_string());
-            self.scene.sent(&command);
-        }
+    /// Sends `command` and returns the number the game answers it with.
+    /// Input goes many times a second, so it is not numbered.
+    fn send(&mut self, command: Command) -> Option<u64> {
+        let game = self.game.as_mut()?;
+        let seq = (!command.is_input()).then(|| {
+            self.seq += 1;
+            self.seq
+        });
+        self.scene.sent(&command);
+        game.send(&serde_json::to_string(&Request { seq, command }).unwrap());
+        seq
     }
 
     /// Sends a command that changes the scene, recording `undo`, the
     /// commands that take it back. A change nothing can take back, like
     /// removing an unreflected component, leaves no entry. Changes made while
     /// playing end with the play session, so they do not count as unsaved.
-    fn edit(&mut self, command: Value, undo: Vec<Value>) {
-        self.send(command.clone());
+    fn edit(&mut self, command: Command, undo: Vec<Command>) {
+        let seq = self.send(command.clone());
         if !undo.is_empty() {
             self.record(Edit {
                 undo,
                 redo: vec![command],
+                seq,
             });
         }
         if !self.playing {
@@ -402,8 +419,8 @@ impl Editor {
     fn record(&mut self, edit: Edit) {
         for forgotten in self.history.add(edit) {
             for command in forgotten.undo {
-                if command["command"] == "delete" {
-                    self.send(json!({"command": "despawn", "id": command["id"]}));
+                if let Command::Delete { id } = command {
+                    self.send(Command::Despawn { id });
                 }
             }
         }
@@ -426,27 +443,57 @@ impl Editor {
         }
     }
 
-    /// Records what the game did on the editor's behalf, and notices saves.
-    fn on_report(&mut self, report: &Value, ctx: &egui::Context) {
-        match report["type"].as_str() {
-            Some("spawned") => {
-                let id = &report["id"];
+    /// Records what the game did on the editor's behalf, notices saves and
+    /// answers to requests, and checks the plugin's protocol.
+    fn on_report(&mut self, report: Report, ctx: &egui::Context) {
+        match report {
+            Report::Hello { version } => {
+                self.protocol = Some(version);
+                if let Some(warning) = protocol_warning(version) {
+                    self.log(warning);
+                }
+            }
+            // Reports come before any hello only from an early plugin.
+            Report::Entities { .. } if self.protocol.is_none() => {
+                self.protocol = Some(0);
+                self.log(protocol_warning(0).unwrap_or_default());
+            }
+            Report::Spawned { id } => self.record(Edit {
+                undo: vec![Command::Delete { id }],
+                redo: vec![Command::Restore { id }],
+                seq: None,
+            }),
+            Report::Edited {
+                id,
+                component,
+                before,
+                after,
+            } => {
+                let set = |value| Command::Set {
+                    id,
+                    component: component.clone(),
+                    value,
+                };
                 self.record(Edit {
-                    undo: vec![json!({"command": "delete", "id": id})],
-                    redo: vec![json!({"command": "restore", "id": id})],
+                    undo: vec![set(before)],
+                    redo: vec![set(after)],
+                    seq: None,
                 });
             }
-            Some("edited") => {
-                let set = |value: &Value| json!({"command": "set", "id": report["id"], "component": report["component"], "value": value});
-                self.record(Edit {
-                    undo: vec![set(&report["before"])],
-                    redo: vec![set(&report["after"])],
-                });
-            }
-            Some("saved") => {
+            Report::Saved { .. } => {
                 if let Some((_, then)) = self.pending_save.take() {
                     self.after_save(then, ctx);
                 }
+            }
+            // The game logs why a request failed; a change it could not make
+            // leaves nothing to undo.
+            Report::Done {
+                seq,
+                error: Some(_),
+            } => self.history.discard(seq),
+            // The game renders into the newest texture now.
+            Report::Done { seq, error: None } if Some(seq) == self.viewport_request => {
+                self.retired.clear();
             }
             _ => {}
         }
@@ -455,7 +502,7 @@ impl Editor {
     /// The game reports whether saving worked, which clears the dirty mark.
     fn save(&mut self) {
         if self.game.is_some() && !self.playing {
-            self.send(json!({"command": "save"}));
+            self.send(Command::Save);
         }
     }
 
@@ -525,8 +572,12 @@ impl Editor {
         self.restart(ctx);
     }
 
-    fn set_command(&self, component: &str, value: Value) -> Value {
-        json!({"command": "set", "id": self.scene.selected, "component": component, "value": value})
+    fn set_command(id: u64, component: &str, value: Value) -> Command {
+        Command::Set {
+            id,
+            component: component.into(),
+            value,
+        }
     }
 
     /// The selected entity's current value of `component`, as reported.
@@ -540,31 +591,37 @@ impl Editor {
     }
 
     fn on_inspector(&mut self, action: Action) {
-        let id = self.scene.selected;
+        // Components show only for a selected entity.
+        let Some(id) = self.scene.selected else {
+            return;
+        };
         match action {
             Action::Set(component, value) => {
-                let undo = self.set_command(
-                    &component,
-                    self.current_value(&component).unwrap_or_default(),
-                );
-                self.edit(self.set_command(&component, value), vec![undo]);
+                let before = self.current_value(&component).unwrap_or_default();
+                let undo = Self::set_command(id, &component, before);
+                self.edit(Self::set_command(id, &component, value), vec![undo]);
             }
             Action::Insert(component) => self.edit(
-                json!({"command": "insert", "id": id, "component": component}),
-                vec![json!({"command": "remove", "id": id, "component": component})],
+                Command::Insert {
+                    id,
+                    component: component.clone(),
+                },
+                vec![Command::Remove { id, component }],
             ),
             // Setting a missing component adds it back with its value.
             Action::Remove(component) => {
                 let undo = self
                     .current_value(&component)
-                    .map(|value| self.set_command(&component, value));
+                    .map(|value| Self::set_command(id, &component, value));
                 self.edit(
-                    json!({"command": "remove", "id": id, "component": component}),
+                    Command::Remove { id, component },
                     undo.into_iter().collect(),
                 );
             }
             // Writes a file, not the scene: nothing to undo or save.
-            Action::ApplyPrefab(id) => self.send(json!({"command": "apply_prefab", "id": id})),
+            Action::ApplyPrefab(id) => {
+                self.send(Command::ApplyPrefab { id });
+            }
         }
     }
 
@@ -573,12 +630,10 @@ impl Editor {
             // The game reports the selected entity's components back.
             HierarchyAction::Select(id) => {
                 self.scene.select(id);
-                self.send(json!({"command": "select", "id": id}));
+                self.send(Command::Select { id });
             }
             // The game reports what it spawns, which records the undo.
-            HierarchyAction::Spawn(kind) => {
-                self.edit(json!({"command": "spawn", "kind": kind}), vec![])
-            }
+            HierarchyAction::Spawn(kind) => self.edit(Command::Spawn { kind }, vec![]),
             HierarchyAction::Duplicate => self.duplicate(),
             HierarchyAction::Delete => self.delete(),
             HierarchyAction::SavePrefab => {
@@ -593,7 +648,7 @@ impl Editor {
 
     fn duplicate(&mut self) {
         if let Some(entity) = self.scene.selected_entity() {
-            self.edit(json!({"command": "duplicate", "id": entity.id}), vec![]);
+            self.edit(Command::Duplicate { id: entity.id }, vec![]);
         }
     }
 
@@ -601,21 +656,18 @@ impl Editor {
     fn delete(&mut self) {
         if let Some(entity) = self.scene.selected_entity() {
             let id = entity.id;
-            self.edit(
-                json!({"command": "delete", "id": id}),
-                vec![json!({"command": "restore", "id": id})],
-            );
+            self.edit(Command::Delete { id }, vec![Command::Restore { id }]);
         }
     }
 
     /// Puts the asset at `path` in the scene; the game reports it as spawned.
     fn instantiate(&mut self, path: String) {
-        self.edit(json!({"command": "instantiate", "path": path}), vec![]);
+        self.edit(Command::Instantiate { path }, vec![]);
     }
 
-    fn set_tool(&mut self, tool: &'static str) {
+    fn set_tool(&mut self, tool: Tool) {
         self.tool = tool;
-        self.send(json!({"command": "tool", "tool": tool}));
+        self.send(Command::Tool { tool });
     }
 
     /// Scene shortcuts. Delete, Ctrl+D and undo leave text fields alone,
@@ -648,7 +700,7 @@ impl Editor {
         } else if pressed(Modifiers::NONE, Key::Delete) {
             self.delete();
         } else if pressed(Modifiers::NONE, Key::F) {
-            self.send(json!({"command": "focus"}));
+            self.send(Command::Focus);
         } else if let Some((tool, ..)) = TOOLS
             .into_iter()
             .find(|(.., key)| pressed(Modifiers::NONE, *key))
@@ -730,26 +782,33 @@ impl Editor {
     }
 
     /// Whether the project's `besfa_editor_plugin` matches the one the Bevy
-    /// prebuild has, as an icon that updates the plugin when pressed. Hidden
-    /// for projects whose lock does not pin the plugin to a git revision.
+    /// prebuild has and speaks this editor's protocol, as an icon that
+    /// updates the plugin when pressed. Hidden while neither is known: the
+    /// lock does not pin the plugin to a git revision and the game has not
+    /// said which protocol it speaks.
     fn plugin_status(&mut self, ui: &mut Ui, busy: bool, ctx: &egui::Context) {
-        let Some(project) = &self.plugin_revision else {
+        let warning = self.protocol.and_then(protocol_warning);
+        if self.plugin_revision.is_none() && warning.is_none() {
             return;
-        };
+        }
         // Different, not necessarily older: a push made while the editor
         // runs leaves the project ahead of the prebuild.
-        let differs = self
-            .latest_plugin_revision
-            .as_ref()
-            .is_some_and(|latest| latest != project);
-        let (icon, color, state) = if differs {
+        let differs = self.plugin_revision.as_ref().is_some_and(|project| {
+            self.latest_plugin_revision
+                .as_ref()
+                .is_some_and(|latest| latest != project)
+        });
+        let (icon, color, state) = if differs || warning.is_some() {
             ("⚠", WARNING, "differs from")
         } else {
             ("✔", GOOD, "matches")
         };
-        let tooltip = format!(
-            "The plugin {state} the Bevy prebuild. Click to update it to the latest commit."
-        );
+        let tooltip = match warning {
+            Some(warning) => format!("{warning} Click to update it to the latest commit."),
+            None => format!(
+                "The plugin {state} the Bevy prebuild. Click to update it to the latest commit."
+            ),
+        };
         let button = Button::new(RichText::new(icon).color(color)).frame(false);
         if ui
             .add_enabled(!busy, button)
@@ -830,7 +889,7 @@ impl Editor {
     }
 
     /// Makes a texture of the wanted size, shows it, and tells the game to
-    /// render into it. The old texture is kept until the next launch.
+    /// render into it. The old texture is kept until the game moves.
     fn resize_viewport(&mut self) {
         self.resize_at = None;
         let (Some(old), Some([width, height]), Some(render)) =
@@ -845,7 +904,7 @@ impl Editor {
             Ok(viewport) => {
                 let name = viewport.name.clone();
                 self.retired.extend(self.viewport.replace(viewport));
-                self.send(json!({"command": "viewport", "name": name}));
+                self.viewport_request = self.send(Command::Viewport { name });
             }
             Err(error) => self.log(format!("Could not resize the viewport: {error}")),
         }
@@ -895,7 +954,7 @@ impl Editor {
                     let path = format!("prefabs/{}.scn.ron", name.trim());
                     self.dialog = None;
                     if let Some(id) = self.scene.selected {
-                        self.send(json!({"command": "save_prefab", "id": id, "path": path}));
+                        self.send(Command::SavePrefab { id, path });
                     }
                 } else if cancel || modal.should_close() {
                     self.dialog = None;
@@ -938,6 +997,28 @@ impl Editor {
             }
             None => {}
         }
+    }
+}
+
+/// Why a game whose plugin speaks protocol `version` needs a look, if it
+/// does.
+fn protocol_warning(version: u32) -> Option<String> {
+    use std::cmp::Ordering;
+    match version.cmp(&VERSION) {
+        Ordering::Equal => None,
+        Ordering::Less if version == 0 => Some(
+            "The game's besfa_editor_plugin predates protocol versions, so failed edits \
+             stay in the undo history. Update the plugin."
+                .into(),
+        ),
+        Ordering::Less => Some(format!(
+            "The game's besfa_editor_plugin speaks protocol {version}, older than this \
+             editor's {VERSION}. Update the plugin."
+        )),
+        Ordering::Greater => Some(format!(
+            "The game's besfa_editor_plugin speaks protocol {version}, newer than this \
+             editor's {VERSION}. Update the editor."
+        )),
     }
 }
 
@@ -1031,6 +1112,21 @@ mod tests {
         assert!(poll(), "settled");
         assert!(!poll(), "once");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn warns_about_a_plugin_that_speaks_another_protocol() {
+        assert_eq!(protocol_warning(VERSION), None);
+        assert!(
+            protocol_warning(0)
+                .unwrap()
+                .contains("predates protocol versions")
+        );
+        assert!(
+            protocol_warning(VERSION + 1)
+                .unwrap()
+                .contains("Update the editor")
+        );
     }
 
     /// The editor and what the README shows of it, for the screenshots.

@@ -11,6 +11,7 @@
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
+use besfa_protocol::{Button, PointerEvent, Report, Tool};
 use bevy::{
     camera::{RenderTarget, primitives::Aabb},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
@@ -18,8 +19,7 @@ use bevy::{
     reflect::{TypePath, serde::TypedReflectSerializer},
     transform::TransformSystems,
 };
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     inspect::{Selected, report_selection, send_report},
@@ -29,35 +29,6 @@ use crate::{
 /// Kept out of the Hierarchy and the scene file.
 #[derive(Component)]
 pub struct EditorOnly;
-
-/// What dragging a handle does to the selected entity.
-#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Tool {
-    #[default]
-    Translate,
-    Rotate,
-    Scale,
-}
-
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Button {
-    Left,
-    Middle,
-    Right,
-}
-
-/// One pointer event from the viewport, in viewport pixels. Scrolling is in
-/// pixels too: positive scrolls down, which zooms out.
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
-#[serde(tag = "event", rename_all = "snake_case")]
-pub(crate) enum PointerEvent {
-    Down { x: f32, y: f32, button: Button },
-    Move { x: f32, y: f32 },
-    Up { x: f32, y: f32, button: Button },
-    Scroll { delta: f32 },
-}
 
 /// The scene view's state, fed by the editor's commands.
 #[derive(Resource)]
@@ -598,13 +569,12 @@ fn report_edited(
         serde_json::to_value(TypedReflectSerializer::new(transform, &registry))
             .unwrap_or(Value::Null)
     };
-    send_report(json!({
-        "type": "edited",
-        "id": entity.to_bits(),
-        "component": Transform::type_path(),
-        "before": value(before),
-        "after": value(after),
-    }));
+    send_report(&Report::Edited {
+        id: entity.to_bits(),
+        component: Transform::type_path().into(),
+        before: value(before),
+        after: value(after),
+    });
 }
 
 fn draw(
