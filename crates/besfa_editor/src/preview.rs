@@ -1,12 +1,15 @@
 //! The model preview tab: a glTF model from the Assets tab on its own in
 //! the viewport, with its clips, parts, light and views, screenshots of it,
-//! and a part's components, which pose it. The game loads, poses and
+//! and a part's components, which pose it. What the tab chose and changed is
+//! kept in the project for the next time the model opens. The game loads,
+//! poses and
 //! lights it; this side keeps the controls and tells the game when they
 //! change. The clip's clock runs on both sides by the same rule, so the time
 //! shown is never reported.
 
 use std::{
     collections::{HashMap, HashSet},
+    fs,
     path::PathBuf,
     time::Instant,
 };
@@ -22,7 +25,7 @@ use crate::{
     inspector::{Action, Inspected, Inspector, TRANSFORM, euler_to_quat, quat_to_euler},
     panels::{ACCENT, ERROR, MUTED, TEXT, panel_header, section, tag},
     project,
-    review::{Change, Edits, ROOT},
+    review::{self, Change, Edits, ROOT, Review},
     scene::{Scene, tree_rows},
 };
 
@@ -103,12 +106,26 @@ pub struct ModelPreview {
     pose_name: String,
     /// Make the panel's changes again once the model is back in rest pose.
     replay: bool,
+    /// The clip a review file chose, by name, until the clips are known.
+    wanted_clip: Option<String>,
+    /// Where the review is kept, and the text there now.
+    review_file: PathBuf,
+    written: String,
+    /// Why the review file could not be read or written. One that could not
+    /// be read is left alone.
+    review_error: Option<String>,
 }
 
 impl ModelPreview {
-    /// Previews the model at `path` of the project in the `project` folder.
+    /// Previews the model at `path` of the project in the `project` folder,
+    /// the way its review file says.
     pub fn new(path: String, project: PathBuf) -> Self {
-        Self {
+        let review_file = review::file(&project, &path);
+        let mut preview = Self {
+            review_file,
+            written: String::new(),
+            review_error: None,
+            wanted_clip: None,
             path,
             project,
             loaded: None,
@@ -133,6 +150,73 @@ impl ModelPreview {
             edits: Edits::default(),
             pose_name: String::new(),
             replay: false,
+        };
+        match Review::read(&preview.review_file) {
+            Ok(Some(mut review)) => {
+                preview.edits = review.edits();
+                preview.wanted_clip = review.clip.take();
+                preview.rest = review.rest;
+                preview.speed = review.speed;
+                preview.looping = review.looping;
+                preview.light = review.light;
+                preview.view = review.view;
+                preview.overlays = review.overlays;
+                preview.hidden = review.hidden.into_iter().collect();
+                preview.solo = review.solo;
+                preview.written = preview.review().text();
+            }
+            Ok(None) => preview.written = preview.review().text(),
+            Err(error) => {
+                preview.review_error = Some(format!("Could not read the review: {error}"))
+            }
+        }
+        preview
+    }
+
+    /// What the tab chose and changed, as the review file keeps it.
+    fn review(&self) -> Review {
+        let clips = self.loaded.as_ref().map(|loaded| &loaded.model.clips);
+        let clip = match (self.clip, clips) {
+            (Some(clip), Some(clips)) => clips.get(clip).map(|clip| clip.name.clone()),
+            _ => self.wanted_clip.clone(),
+        };
+        let mut hidden: Vec<String> = self.hidden.iter().cloned().collect();
+        hidden.sort();
+        let mut review = Review {
+            clip,
+            rest: self.rest,
+            speed: self.speed,
+            looping: self.looping,
+            light: self.light,
+            view: self.view,
+            overlays: self.overlays,
+            hidden,
+            solo: self.solo.clone(),
+            ..Review::default()
+        };
+        review.set_edits(&self.edits);
+        review
+    }
+
+    /// Writes the review file when the tab's choices changed. A file that
+    /// could not be read is not overwritten, and the first failure to write
+    /// stops writing until the tab opens again.
+    pub fn save(&mut self) {
+        if self.review_error.is_some() {
+            return;
+        }
+        let text = self.review().text();
+        if text == self.written {
+            return;
+        }
+        let written = self
+            .review_file
+            .parent()
+            .map_or(Ok(()), fs::create_dir_all)
+            .and_then(|()| fs::write(&self.review_file, &text));
+        match written {
+            Ok(()) => self.written = text,
+            Err(error) => self.review_error = Some(format!("Could not save the review: {error}")),
         }
     }
 
@@ -164,6 +248,9 @@ impl ModelPreview {
         self.hidden.retain(|path| known.contains(path));
         self.solo = self.solo.take().filter(|path| known.contains(path));
         let clips = &model.clips;
+        if let Some(name) = self.wanted_clip.take() {
+            self.clip = clips.iter().position(|clip| clip.name == name);
+        }
         if self.clip.is_none_or(|clip| clip >= clips.len()) {
             self.clip = (!clips.is_empty()).then_some(0);
             self.rebase(0.0);
@@ -361,6 +448,9 @@ impl ModelPreview {
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             let model = &loaded.model;
             ui.label(RichText::new(self.name()).strong().color(TEXT));
+            if let Some(error) = &self.review_error {
+                ui.label(RichText::new(error).small().color(ERROR));
+            }
             if let Some(error) = &model.error {
                 ui.label(RichText::new(error).color(ERROR));
                 loaded_back = Some(loaded);
@@ -1020,6 +1110,65 @@ mod tests {
 
         preview.loaded(model(vec![], vec![]));
         assert_eq!(preview.clip, None, "no clips left to play");
+    }
+
+    #[test]
+    fn opens_again_the_way_it_was_left() {
+        let dir = std::env::temp_dir().join(format!("besfa_reopen_{}", std::process::id()));
+        let walk = || {
+            model(
+                vec![clip("Idle"), clip("Walk")],
+                vec![part(1, "Body", None)],
+            )
+        };
+        let mut preview = ModelPreview::new("models/hero.glb".into(), dir.clone());
+        preview.loaded(walk());
+        preview.clip = Some(1);
+        preview.view = View::Top;
+        preview.hidden.insert("Body".into());
+        preview.edits.record(
+            "Body",
+            TRANSFORM,
+            Some(json!({})),
+            Change::Set(json!({"scale": [2, 2, 2]})),
+        );
+        preview.save();
+        assert!(dir.join("besfa/previews/models/hero.glb.besfa").exists());
+
+        let mut again = ModelPreview::new("models/hero.glb".into(), dir.clone());
+        let sent = again.loaded(walk());
+        assert_eq!((again.clip, again.view), (Some(1), View::Top));
+        assert!(again.hidden.contains("Body"));
+        assert!(sent.contains(&Command::Set {
+            id: 1,
+            component: TRANSFORM.into(),
+            value: json!({"scale": [2, 2, 2]})
+        }));
+        // Unchanged: not written again.
+        let written = std::fs::metadata(&again.review_file)
+            .unwrap()
+            .modified()
+            .unwrap();
+        again.save();
+        assert_eq!(
+            std::fs::metadata(&again.review_file)
+                .unwrap()
+                .modified()
+                .unwrap(),
+            written
+        );
+
+        std::fs::write(&again.review_file, "(nonsense").unwrap();
+        let mut broken = ModelPreview::new("models/hero.glb".into(), dir.clone());
+        assert!(broken.review_error.is_some());
+        broken.hidden.insert("Body".into());
+        broken.save();
+        assert_eq!(
+            std::fs::read_to_string(&broken.review_file).unwrap(),
+            "(nonsense",
+            "left alone"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

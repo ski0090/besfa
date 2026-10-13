@@ -35,6 +35,7 @@ my-game/
 │     └─ main.scn.ron
 └─ besfa/
    ├─ project.besfa
+   ├─ previews/
    ├─ terrain/
    └─ animation/
 ```
@@ -58,10 +59,43 @@ my-game/
 )
 ```
 
+## 모델 검토 파일
+
+모델 미리보기 탭은 모델마다 고른 것과 바꾼 것을 `besfa/previews/<에셋 경로>.besfa`(예: `besfa/previews/props/chest-wood.glb.besfa`)에 RON으로 저장하고, 그 모델을 다시 열면 그대로 읽는다. 프로젝트에 두므로 함께 커밋하면 다른 사람도 같은 검토 상태로 연다. 탭의 선택이 바뀔 때마다 바뀐 경우에만 쓴다.
+
+```ron
+(
+    schema_version: 1,
+    clip: Some("walk"),   // 클립 이름, 없으면 첫 클립
+    rest: false,          // true면 클립 없이 읽었을 때의 자세
+    speed: 1.0,
+    looping: true,
+    light: studio,        // studio, daylight, night
+    view: three_quarter,  // front, back, left, right, top, three_quarter
+    overlays: (skeleton: false, markers: true, bounds: false),
+    hidden: ["Scene/chest-wood/Feet"],  // 루트부터 이어 붙인 부품 이름 경로
+    solo: None,
+    changes: [            // 부품("" 은 루트)의 컴포넌트에 한 마지막 변경
+        (part: "Scene/chest-wood/LidHinge", component: "bevy_transform::components::transform::Transform",
+         change: Set({"translation": [0.0, 0.55, 0.32], "rotation": [-0.6, 0.0, 0.0, 0.8], "scale": [1.0, 1.0, 1.0]})),
+        (part: "", component: "my_game::Look", change: Insert),
+    ],
+    originals: [          // 바꾸기 전 값, 없던 컴포넌트는 None. 되돌리기와 자세에 쓴다
+        (part: "Scene/chest-wood/LidHinge", component: "bevy_transform::components::transform::Transform",
+         value: Some({"translation": [0.0, 0.55, 0.32], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0]})),
+    ],
+    poses: [(name: "Open", transforms: {"Scene/chest-wood/LidHinge": {"translation": [0.0, 0.55, 0.32], "rotation": [-0.6, 0.0, 0.0, 0.8], "scale": [1.0, 1.0, 1.0]}})],
+)
+```
+
+- 컴포넌트 값은 게임이 보고하고 `set`으로 받는 JSON 모양 그대로 RON에 쓴다.
+- 빠진 필드는 기본값이다. 이 에디터보다 높은 `schema_version`이나 읽을 수 없는 파일은 패널에 이유를 보이고 덮어쓰지 않는다.
+- 같은 이름 경로의 부품이 없어진 변경은 모델을 읽을 때 건너뛰고, 숨김·단독 보기에서는 버린다.
+
 ## 버전 관리
 
 포맷을 호환되지 않게 변경할 때는 `schema_version`을 올린다. `besfa_data`는 현재 버전과 이전 지원 버전의 파일을 읽고, `besfa migrate`가 최신 포맷으로 변환한다.
 
 ## 구현 상태
 
-씬 파일은 구현되어 있다. `besfa_data` crate와 실제 `.besfa` 파서는 아직 구현되지 않았고, 그 부분은 구현 전에 검토·확정해야 한다.
+씬 파일과 모델 검토 파일(`besfa/previews/`, 에디터의 `review` 모듈이 읽고 쓴다)은 구현되어 있다. `project.besfa`, `besfa_data` crate와 `besfa validate`·`besfa migrate`는 아직 구현되지 않았고, 그 부분은 구현 전에 검토·확정해야 한다.

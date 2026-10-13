@@ -1,11 +1,17 @@
 //! What the model panel changed on the previewed model: components set,
 //! added or removed on its parts and root, and named poses. Changes are kept
 //! by part path, so they apply again whenever the model loads, in a new
-//! game process or after the file is exported again.
+//! game process or after the file is exported again. With the panel's other
+//! choices they are kept in the project, one [`Review`] file per model.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
-use besfa_protocol::Command;
+use besfa_protocol::{Command, LightPreset, Overlays, View};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::inspector::TRANSFORM;
@@ -14,7 +20,7 @@ use crate::inspector::TRANSFORM;
 pub const ROOT: &str = "";
 
 /// A change to one component of a part.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Change {
     Set(Value),
     /// Added with its default value.
@@ -36,7 +42,7 @@ pub struct Edits {
 }
 
 /// Transforms for some parts, by part path.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pose {
     pub name: String,
     pub transforms: BTreeMap<String, Value>,
@@ -147,6 +153,134 @@ impl Edits {
     }
 }
 
+/// The current [`Review`] file format.
+const SCHEMA_VERSION: u32 = 1;
+
+/// How the model panel left a model: its choices and changes, kept in the
+/// project so the model opens the same way, by whoever opens it.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Review {
+    pub schema_version: u32,
+    /// The clip by name; none for the first.
+    pub clip: Option<String>,
+    /// No clip: the model as it loaded.
+    pub rest: bool,
+    pub speed: f32,
+    pub looping: bool,
+    pub light: LightPreset,
+    pub view: View,
+    pub overlays: Overlays,
+    /// Parts by path.
+    pub hidden: Vec<String>,
+    pub solo: Option<String>,
+    pub changes: Vec<PartChange>,
+    pub originals: Vec<Original>,
+    pub poses: Vec<Pose>,
+}
+
+impl Default for Review {
+    fn default() -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            clip: None,
+            rest: false,
+            speed: 1.0,
+            looping: true,
+            light: LightPreset::default(),
+            view: View::default(),
+            overlays: Overlays::default(),
+            hidden: Vec::new(),
+            solo: None,
+            changes: Vec::new(),
+            originals: Vec::new(),
+            poses: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct PartChange {
+    pub part: String,
+    pub component: String,
+    pub change: Change,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct Original {
+    pub part: String,
+    pub component: String,
+    pub value: Option<Value>,
+}
+
+/// Where the review of the model at asset `path` is kept in `project`.
+pub fn file(project: &Path, path: &str) -> PathBuf {
+    project
+        .join("besfa")
+        .join("previews")
+        .join(format!("{path}.besfa"))
+}
+
+impl Review {
+    /// The review in `file`; None while there is none.
+    pub fn read(file: &Path) -> Result<Option<Self>, String> {
+        let Ok(text) = fs::read_to_string(file) else {
+            return Ok(None);
+        };
+        let review: Self = ron::from_str(&text).map_err(|error| error.to_string())?;
+        if review.schema_version > SCHEMA_VERSION {
+            return Err(format!(
+                "written by a newer editor (schema {}); this one reads {SCHEMA_VERSION}",
+                review.schema_version
+            ));
+        }
+        Ok(Some(review))
+    }
+
+    /// The file's text: RON a person can read and change.
+    pub fn text(&self) -> String {
+        let config = ron::ser::PrettyConfig::default().compact_arrays(true);
+        ron::ser::to_string_pretty(self, config).expect("a review always serializes")
+    }
+
+    pub fn edits(&mut self) -> Edits {
+        let key = |part: &str, component: &str| (part.to_owned(), component.to_owned());
+        Edits {
+            changes: std::mem::take(&mut self.changes)
+                .into_iter()
+                .map(|c| (key(&c.part, &c.component), c.change))
+                .collect(),
+            originals: std::mem::take(&mut self.originals)
+                .into_iter()
+                .map(|o| (key(&o.part, &o.component), o.value))
+                .collect(),
+            poses: std::mem::take(&mut self.poses),
+        }
+    }
+
+    pub fn set_edits(&mut self, edits: &Edits) {
+        self.changes = edits
+            .changes
+            .iter()
+            .map(|((part, component), change)| PartChange {
+                part: part.clone(),
+                component: component.clone(),
+                change: change.clone(),
+            })
+            .collect();
+        self.originals = edits
+            .originals
+            .iter()
+            .map(|((part, component), value)| Original {
+                part: part.clone(),
+                component: component.clone(),
+                value: value.clone(),
+            })
+            .collect();
+        self.poses = edits.poses.clone();
+    }
+}
+
 fn command(id: u64, component: &str, change: Change) -> Command {
     let component = component.to_owned();
     match change {
@@ -231,6 +365,52 @@ mod tests {
             ]
         );
         assert!(edits.changes.is_empty());
+    }
+
+    #[test]
+    fn reads_back_what_it_writes_and_refuses_newer_files() {
+        let mut edits = Edits::default();
+        let open = json!({"translation": [0.0, 0.55, 0.32], "rotation": [-0.6, 0.0, 0.0, 0.8]});
+        edits.record(
+            "Chest/Lid",
+            TRANSFORM,
+            Some(json!({"scale": [1.0, 1.0, 1.0]})),
+            Change::Set(open),
+        );
+        edits.record(ROOT, "game::Look", None, Change::Insert);
+        edits.record(
+            "Chest/Feet",
+            "bevy::Visibility",
+            Some(json!("Inherited")),
+            Change::Set(json!("Hidden")),
+        );
+        edits.save_pose("Open");
+        let mut review = Review {
+            clip: Some("walk".into()),
+            view: View::Front,
+            hidden: vec!["Chest/Feet".into()],
+            ..Review::default()
+        };
+        review.set_edits(&edits);
+
+        let dir = std::env::temp_dir().join(format!("besfa_review_{}", std::process::id()));
+        let path = file(&dir, "models/chest.glb");
+        assert!(path.ends_with("besfa/previews/models/chest.glb.besfa"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, review.text()).unwrap();
+        assert!(review.text().contains("schema_version: 1"));
+        let mut read = Review::read(&path).unwrap().unwrap();
+        assert_eq!(read, review);
+        assert_eq!(read.edits(), edits);
+
+        fs::write(&path, "(schema_version: 9)").unwrap();
+        assert!(Review::read(&path).unwrap_err().contains("newer editor"));
+        // Left out: the defaults.
+        fs::write(&path, "(clip: Some(\"idle\"))").unwrap();
+        let read = Review::read(&path).unwrap().unwrap();
+        assert_eq!((read.speed, read.looping), (1.0, true));
+        assert_eq!(Review::read(&dir.join("none.besfa")), Ok(None));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

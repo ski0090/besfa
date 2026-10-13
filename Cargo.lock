@@ -627,6 +627,8 @@ dependencies = [
  "eframe",
  "egui_kittest",
  "image",
+ "ron",
+ "serde",
  "serde_json",
  "wgpu",
  "windows",

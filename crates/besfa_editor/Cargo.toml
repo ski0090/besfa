@@ -12,6 +12,9 @@ wgpu = "30"
 besfa_protocol = { path = "../besfa_protocol" }
 # Keeps component fields in the order the game reports them.
 serde_json = { version = "1", features = ["preserve_order"] }
+# Editor data files under the project's besfa/ folder are RON.
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

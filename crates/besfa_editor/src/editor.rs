@@ -251,7 +251,9 @@ impl Editor {
             .show(ui, |ui| {
                 match self.preview.as_mut().filter(|_| self.previewing) {
                     Some(preview) => {
-                        for command in preview.ui(ui, &self.scene) {
+                        let commands = preview.ui(ui, &self.scene);
+                        preview.save();
+                        for command in commands {
                             self.send(command);
                         }
                     }
