@@ -1,5 +1,6 @@
 //! The model preview: one glTF model from the asset folder, shown in place
-//! of the scene view with its clips, its parts and a choice of light.
+//! of the scene view with its clips, its parts and a choice of light, with
+//! what it is made of and overlays of its skeleton, markers and bounds.
 //!
 //! The model, its camera and its light are on a render layer of their own,
 //! so the scene neither shows in the preview nor lights it, and the scene
@@ -15,12 +16,14 @@ use std::{
 };
 
 use besfa_protocol::{
-    Button, ClipInfo, EntityInfo, LightPreset, PointerEvent, Report, View, clip_time,
+    Button, ClipInfo, EntityInfo, LightPreset, Marker, MaterialInfo, ModelStats, Overlays,
+    PointerEvent, PreviewModel, Report, View, clip_time,
 };
 use bevy::{
     asset::LoadState,
     camera::{Exposure, RenderTarget, primitives::Aabb, visibility::RenderLayers},
-    gltf::Gltf,
+    gltf::{Gltf, GltfMaterialName},
+    mesh::{PrimitiveTopology, skinning::SkinnedMesh},
     prelude::*,
     render::view::screenshot::{Screenshot, ScreenshotCaptured},
     transform::TransformSystems,
@@ -70,6 +73,10 @@ pub(crate) struct ModelPreview {
     animation: Animation,
     /// Meshes `preview_parts` hid, with the visibility they had.
     hid: Vec<(Entity, Visibility)>,
+    overlays: Overlays,
+    /// The model's skin joints and markers, for the overlays.
+    joints: HashSet<Entity>,
+    markers: Vec<Entity>,
     pressed: Option<Button>,
     pointer: Vec2,
 }
@@ -94,6 +101,14 @@ struct PreviewLight(LightPreset);
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct PreviewGizmos;
 
+/// The overlays, drawn over the model.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct OverlayGizmos;
+
+const SKELETON_COLOR: Color = Color::srgb(1.0, 0.75, 0.25);
+const MARKER_COLOR: Color = Color::srgb(0.95, 0.4, 0.95);
+const BOUNDS_COLOR: Color = Color::srgb(0.55, 0.85, 1.0);
+
 pub(crate) struct PreviewPlugin;
 
 impl Plugin for PreviewPlugin {
@@ -103,6 +118,15 @@ impl Plugin for PreviewPlugin {
                 PreviewGizmos,
                 GizmoConfig {
                     render_layers: layer(),
+                    ..default()
+                },
+            )
+            .insert_gizmo_config(
+                OverlayGizmos,
+                GizmoConfig {
+                    render_layers: layer(),
+                    // In front of everything.
+                    depth_bias: -1.0,
                     ..default()
                 },
             )
@@ -240,6 +264,13 @@ pub(crate) fn animate_with(
             speed,
             looping,
         };
+    }
+}
+
+/// Picks what the preview draws over the model.
+pub(crate) fn overlays(world: &mut World, overlays: Overlays) {
+    if let Some(mut preview) = world.get_resource_mut::<ModelPreview>() {
+        preview.overlays = overlays;
     }
 }
 
@@ -451,10 +482,10 @@ fn load(world: &mut World) {
         world.resource_mut::<ModelPreview>().reported = true;
         return send_report(&Report::Preview {
             path,
-            clips: vec![],
-            parts: vec![],
-            size: None,
-            error: Some(error),
+            model: PreviewModel {
+                error: Some(error),
+                ..default()
+            },
         });
     }
     let gltf = preview.gltf.clone();
@@ -530,19 +561,142 @@ fn load(world: &mut World) {
         })
         .collect();
     let bounds = bounds(world, &entities);
+    let (stats, joints, markers) = anatomy(world, root, &entities);
+    let marker_infos = markers
+        .iter()
+        .map(|&(marker, position)| Marker {
+            id: marker.to_bits(),
+            position: position.to_array(),
+        })
+        .collect();
+    let joint_ids = joints.iter().map(|joint| joint.to_bits()).collect();
     let mut preview = world.resource_mut::<ModelPreview>();
     preview.reported = true;
+    preview.joints = joints;
+    preview.markers = markers.into_iter().map(|(marker, _)| marker).collect();
     if preview.bounds.is_none() {
         preview.bounds = bounds;
         preview.fit = true;
     }
     send_report(&Report::Preview {
         path,
-        clips: infos,
-        parts,
-        size: bounds.map(|(min, max)| (max - min).to_array()),
-        error: None,
+        model: PreviewModel {
+            clips: infos,
+            parts,
+            size: bounds.map(|(min, max)| (max - min).to_array()),
+            error: None,
+            stats: Some(stats),
+            joints: joint_ids,
+            markers: marker_infos,
+        },
     });
+}
+
+/// What the meshes under `root` are made of, their skin joints, and the
+/// parts that mark a place with where they are: leaves without a mesh that
+/// are not joints, lights or cameras.
+fn anatomy(
+    world: &World,
+    root: Entity,
+    entities: &[Entity],
+) -> (ModelStats, HashSet<Entity>, Vec<(Entity, Vec3)>) {
+    let meshes = world.resource::<Assets<Mesh>>();
+    let materials = world.resource::<Assets<StandardMaterial>>();
+    let mut stats = ModelStats::default();
+    let mut used: Vec<(AssetId<StandardMaterial>, MaterialInfo)> = Vec::new();
+    let mut joints = HashSet::new();
+    for &entity in entities {
+        if let Some(skin) = world.get::<SkinnedMesh>(entity) {
+            joints.extend(skin.joints.iter().copied());
+        }
+        let Some(mesh) = world.get::<Mesh3d>(entity) else {
+            continue;
+        };
+        stats.meshes += 1;
+        if let Some(mesh) = meshes.get(&mesh.0) {
+            let (vertices, triangles) = mesh_size(mesh);
+            stats.vertices += vertices;
+            stats.triangles += triangles;
+        }
+        let Some(material) = world.get::<MeshMaterial3d<StandardMaterial>>(entity) else {
+            continue;
+        };
+        match used.iter_mut().find(|(id, _)| *id == material.id()) {
+            Some((_, info)) => info.meshes += 1,
+            None => {
+                if let Some(asset) = materials.get(&material.0) {
+                    let name = world.get::<GltfMaterialName>(entity);
+                    let info = material_info(asset, name.map(|name| name.0.clone()));
+                    used.push((material.id(), info));
+                }
+            }
+        }
+    }
+    stats.materials = used.into_iter().map(|(_, info)| info).collect();
+
+    let inverse = world
+        .get::<GlobalTransform>(root)
+        .map_or(bevy::math::Affine3A::IDENTITY, |root| {
+            root.affine().inverse()
+        });
+    let marks = |entity: Entity| {
+        world.get::<Children>(entity).is_none_or(|children| children.is_empty())
+            // The glTF scene's own root.
+            && world.get::<ChildOf>(entity).is_some_and(|parent| parent.parent() != root)
+            && !joints.contains(&entity)
+            && world.get::<Mesh3d>(entity).is_none()
+            && world.get::<Camera>(entity).is_none()
+            && world.get::<PointLight>(entity).is_none()
+            && world.get::<SpotLight>(entity).is_none()
+            && world.get::<DirectionalLight>(entity).is_none()
+    };
+    let markers = entities[1..]
+        .iter()
+        .copied()
+        .filter(|&entity| marks(entity))
+        .filter_map(|marker| {
+            let global = world.get::<GlobalTransform>(marker)?;
+            Some((marker, inverse.transform_point3(global.translation())))
+        })
+        .collect();
+    (stats, joints, markers)
+}
+
+/// The vertices and triangles of `mesh`; none once only the GPU holds it.
+fn mesh_size(mesh: &Mesh) -> (u64, u64) {
+    let vertices = mesh
+        .try_attribute(Mesh::ATTRIBUTE_POSITION)
+        .map_or(0, |positions| positions.len());
+    let corners = match mesh.try_indices_option() {
+        Ok(Some(indices)) => indices.len(),
+        _ => vertices,
+    };
+    let triangles = match mesh.primitive_topology() {
+        PrimitiveTopology::TriangleList => corners / 3,
+        PrimitiveTopology::TriangleStrip => corners.saturating_sub(2),
+        _ => 0,
+    };
+    (vertices as u64, triangles as u64)
+}
+
+fn material_info(material: &StandardMaterial, name: Option<String>) -> MaterialInfo {
+    let textures = [
+        ("base_color", &material.base_color_texture),
+        ("normal", &material.normal_map_texture),
+        ("metallic_roughness", &material.metallic_roughness_texture),
+        ("emissive", &material.emissive_texture),
+        ("occlusion", &material.occlusion_texture),
+    ];
+    MaterialInfo {
+        name,
+        color: material.base_color.to_srgba().to_f32_array(),
+        textures: textures
+            .into_iter()
+            .filter(|(_, texture)| texture.is_some())
+            .map(|(name, _)| name.into())
+            .collect(),
+        meshes: 1,
+    }
 }
 
 /// The world bounds of the meshes among `entities`.
@@ -671,9 +825,14 @@ fn animate(
     }
 }
 
-/// A ground grid a few times the model's size, in meters, and the origin's
-/// axes.
-fn draw(preview: Res<ModelPreview>, mut gizmos: Gizmos<PreviewGizmos>) {
+/// A ground grid a few times the model's size, in meters, the origin's
+/// axes, and the overlays asked for.
+fn draw(
+    preview: Res<ModelPreview>,
+    mut gizmos: Gizmos<PreviewGizmos>,
+    mut over: Gizmos<OverlayGizmos>,
+    nodes: Query<(&GlobalTransform, Option<&ChildOf>)>,
+) {
     let extent = preview
         .bounds
         .map_or(1.0, |(min, max)| (max - min).max_element());
@@ -687,6 +846,43 @@ fn draw(preview: Res<ModelPreview>, mut gizmos: Gizmos<PreviewGizmos>) {
     let length = (extent * 0.25).max(0.25);
     for (axis, color) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().zip(AXIS_COLORS) {
         gizmos.line(Vec3::ZERO, axis * length, color);
+    }
+
+    let small = (extent * 0.01).max(0.002);
+    if preview.overlays.bounds
+        && let Some((min, max)) = preview.bounds
+    {
+        let box_ = Transform::from_translation((min + max) * 0.5).with_scale(max - min);
+        over.cube(box_, BOUNDS_COLOR);
+    }
+    if preview.overlays.skeleton {
+        for &joint in &preview.joints {
+            let Ok((global, parent)) = nodes.get(joint) else {
+                continue;
+            };
+            over.sphere(
+                Isometry3d::from_translation(global.translation()),
+                small,
+                SKELETON_COLOR,
+            );
+            if let Some(parent) = parent.filter(|parent| preview.joints.contains(&parent.parent()))
+                && let Ok((parent, _)) = nodes.get(parent.parent())
+            {
+                over.line(parent.translation(), global.translation(), SKELETON_COLOR);
+            }
+        }
+    }
+    if preview.overlays.markers {
+        for &marker in &preview.markers {
+            if let Ok((global, _)) = nodes.get(marker) {
+                over.axes(*global, small * 6.0);
+                over.sphere(
+                    Isometry3d::from_translation(global.translation()),
+                    small,
+                    MARKER_COLOR,
+                );
+            }
+        }
     }
 }
 
@@ -753,6 +949,32 @@ mod tests {
         assert!((illuminance / 1500.0 - 39.4).abs() < 0.1, "{illuminance}");
         let brightness = world.get::<AmbientLight>(camera).unwrap().brightness;
         assert!((brightness / 120.0 - 39.4).abs() < 0.1, "{brightness}");
+    }
+
+    #[test]
+    fn tells_markers_from_joints_meshes_and_lights() {
+        let mut world = World::new();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        let root = world.spawn(GlobalTransform::default()).id();
+        let scene = world.spawn(ChildOf(root)).id();
+        let at = |x: f32| GlobalTransform::from_translation(Vec3::X * x);
+        let hand = world.spawn((ChildOf(scene), at(1.0))).id();
+        let grip = world.spawn((ChildOf(hand), at(2.0))).id();
+        let finger = world.spawn((ChildOf(hand), at(3.0))).id();
+        let body = world.spawn((ChildOf(scene), at(0.0))).id();
+        let mesh = world.spawn((ChildOf(body), Mesh3d::default())).id();
+        world.entity_mut(mesh).insert(SkinnedMesh {
+            inverse_bindposes: default(),
+            joints: vec![hand, finger],
+        });
+        world.spawn((ChildOf(scene), PointLight::default(), at(4.0)));
+        let entities = subtree(&world, root);
+
+        let (stats, joints, markers) = anatomy(&world, root, &entities);
+        assert_eq!(stats.meshes, 1);
+        assert_eq!(joints, HashSet::from([hand, finger]));
+        assert_eq!(markers, [(grip, Vec3::new(2.0, 0.0, 0.0))]);
     }
 
     #[test]

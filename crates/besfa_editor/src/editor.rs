@@ -515,19 +515,13 @@ impl Editor {
                     seq: None,
                 });
             }
-            Report::Preview {
-                path,
-                clips,
-                parts,
-                size,
-                error,
-            } => {
-                if let Some(error) = &error {
+            Report::Preview { path, model } => {
+                if let Some(error) = &model.error {
                     self.log(format!("Could not preview {path}: {error}"));
                 }
                 if let Some(preview) = self.preview.as_mut().filter(|preview| preview.path == path)
                 {
-                    for command in preview.loaded(clips, parts, size, error) {
+                    for command in preview.loaded(model) {
                         self.send(command);
                     }
                 }

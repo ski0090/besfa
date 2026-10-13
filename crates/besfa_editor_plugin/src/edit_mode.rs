@@ -267,6 +267,10 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             preview::look(world, view);
             Ok(())
         }
+        Command::PreviewOverlays(overlays) => {
+            preview::overlays(world, overlays);
+            Ok(())
+        }
         Command::PreviewScreenshot { path } => {
             if inside(&path) && path.ends_with(".png") {
                 preview::screenshot(world, path.clone(), project_file(&path))

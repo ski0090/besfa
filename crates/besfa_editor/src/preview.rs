@@ -11,8 +11,10 @@ use std::{
     time::Instant,
 };
 
-use besfa_protocol::{ClipInfo, Command, EntityInfo, LightPreset, View, clip_time};
-use eframe::egui::{self, Button, RichText, ScrollArea, Ui};
+use besfa_protocol::{
+    ClipInfo, Command, EntityInfo, LightPreset, ModelStats, Overlays, PreviewModel, View, clip_time,
+};
+use eframe::egui::{self, Button, Color32, RichText, ScrollArea, Ui};
 
 use crate::{
     panels::{ERROR, MUTED, TEXT, panel_header, section, tag},
@@ -54,13 +56,10 @@ const SPEEDS: [f32; 4] = [0.25, 0.5, 1.0, 2.0];
 
 /// What the game reported once the model loaded.
 struct Loaded {
-    clips: Vec<ClipInfo>,
-    parts: Vec<EntityInfo>,
+    model: PreviewModel,
     /// Each part's path of names from the model's root, which a part keeps
     /// when the model loads again and its id changes.
     paths: HashMap<u64, String>,
-    size: Option<[f32; 3]>,
-    error: Option<String>,
 }
 
 pub struct ModelPreview {
@@ -83,6 +82,7 @@ pub struct ModelPreview {
     solo: Option<String>,
     light: LightPreset,
     view: View,
+    overlays: Overlays,
     /// The number of the last screenshot asked for.
     shots: u32,
     /// The last screenshot's path, or why it was not saved.
@@ -107,6 +107,7 @@ impl ModelPreview {
             solo: None,
             light: LightPreset::default(),
             view: View::default(),
+            overlays: Overlays::default(),
             shots: 0,
             shot: None,
         }
@@ -126,24 +127,20 @@ impl ModelPreview {
             },
             Command::PreviewLight { light: self.light },
             Command::PreviewView { view: self.view },
+            Command::PreviewOverlays(self.overlays),
         ]
     }
 
     /// Takes the game's report on the model, keeping the choices that still
     /// apply, and returns what puts the game's model in step with them.
-    pub fn loaded(
-        &mut self,
-        clips: Vec<ClipInfo>,
-        parts: Vec<EntityInfo>,
-        size: Option<[f32; 3]>,
-        error: Option<String>,
-    ) -> Vec<Command> {
+    pub fn loaded(&mut self, model: PreviewModel) -> Vec<Command> {
         // Part ids are the game's entities, new each time the model loads;
         // their paths stay unless the file renamed them.
-        let paths = part_paths(&parts);
+        let paths = part_paths(&model.parts);
         let known: HashSet<&String> = paths.values().collect();
         self.hidden.retain(|path| known.contains(path));
         self.solo = self.solo.take().filter(|path| known.contains(path));
+        let clips = &model.clips;
         if self.clip.is_none_or(|clip| clip >= clips.len()) {
             self.clip = (!clips.is_empty()).then_some(0);
             self.rebase(0.0);
@@ -152,13 +149,7 @@ impl ModelPreview {
             .clip
             .and_then(|clip| clips.get(clip))
             .map_or(0.0, |clip| clip.duration);
-        self.loaded = Some(Loaded {
-            clips,
-            parts,
-            paths,
-            size,
-            error,
-        });
+        self.loaded = Some(Loaded { model, paths });
         let parts = self.loaded.as_ref().map(|loaded| self.parts(loaded));
         [Some(self.animation()), parts]
             .into_iter()
@@ -250,16 +241,21 @@ impl ModelPreview {
             return send;
         };
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            let model = &loaded.model;
             ui.label(RichText::new(self.name()).strong().color(TEXT));
-            if let Some(error) = &loaded.error {
+            if let Some(error) = &model.error {
                 ui.label(RichText::new(error).color(ERROR));
                 return;
             }
-            if let Some([width, height, depth]) = loaded.size {
+            if let Some([width, height, depth]) = model.size {
                 tag(ui, &format!("{width:.2} × {height:.2} × {depth:.2} m"));
             }
-            self.animation_ui(ui, &loaded.clips, &mut send);
+            if let Some(stats) = &model.stats {
+                stats_ui(ui, stats, model.joints.len());
+            }
+            self.animation_ui(ui, &model.clips, &mut send);
             self.view_ui(ui, &mut send);
+            self.overlays_ui(ui, model, &mut send);
             section(ui, "Light");
             ui.horizontal(|ui| {
                 for (light, label) in LIGHTS {
@@ -390,13 +386,61 @@ impl ModelPreview {
         });
     }
 
+    fn overlays_ui(&mut self, ui: &mut Ui, model: &PreviewModel, send: &mut Vec<Command>) {
+        section(ui, "Overlays");
+        let before = self.overlays;
+        ui.horizontal_wrapped(|ui| {
+            let skeleton = format!("Skeleton ({})", model.joints.len());
+            ui.add_enabled(
+                !model.joints.is_empty(),
+                egui::Checkbox::new(&mut self.overlays.skeleton, skeleton),
+            );
+            let markers = format!("Markers ({})", model.markers.len());
+            ui.add_enabled(
+                !model.markers.is_empty(),
+                egui::Checkbox::new(&mut self.overlays.markers, markers),
+            )
+            .on_hover_text(
+                "Parts that mark a place: leaves without a mesh, like Grip or ShotPoint",
+            );
+            ui.checkbox(&mut self.overlays.bounds, "Bounds");
+        });
+        if self.overlays != before {
+            send.push(Command::PreviewOverlays(self.overlays));
+        }
+        if model.markers.is_empty() {
+            return;
+        }
+        let name = |id| {
+            model
+                .parts
+                .iter()
+                .find(|part| part.id == id)
+                .map_or_else(String::new, EntityInfo::label)
+        };
+        egui::CollapsingHeader::new(RichText::new("Marker positions").small().color(MUTED))
+            .id_salt("preview_markers")
+            .show(ui, |ui| {
+                for marker in &model.markers {
+                    let [x, y, z] = marker.position;
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(name(marker.id)).small().color(TEXT));
+                        tag(ui, &format!("{x:.3}, {y:.3}, {z:.3}"));
+                    });
+                }
+            });
+    }
+
     fn parts_ui(&mut self, ui: &mut Ui, loaded: &Loaded, send: &mut Vec<Command>) {
-        if loaded.parts.is_empty() {
+        let model = &loaded.model;
+        if model.parts.is_empty() {
             tag(ui, "No parts");
             return;
         }
+        let markers: HashSet<u64> = model.markers.iter().map(|marker| marker.id).collect();
+        let joints: HashSet<u64> = model.joints.iter().copied().collect();
         let mut changed = false;
-        for (part, depth) in tree_rows(&loaded.parts) {
+        for (part, depth) in tree_rows(&model.parts) {
             let path = &loaded.paths[&part.id];
             let hidden = self.hidden.contains(path);
             ui.horizontal(|ui| {
@@ -428,12 +472,65 @@ impl ModelPreview {
                     label = label.strikethrough().color(MUTED);
                 }
                 ui.label(label);
+                if markers.contains(&part.id) {
+                    tag(ui, "marker");
+                } else if joints.contains(&part.id) {
+                    tag(ui, "joint");
+                }
             });
         }
         if changed {
             send.push(self.parts(loaded));
         }
     }
+}
+
+/// Counts of what the model is made of, and its materials.
+fn stats_ui(ui: &mut Ui, stats: &ModelStats, joints: usize) {
+    let mut counts = format!(
+        "{} triangles · {} vertices · {} mesh{}",
+        stats.triangles,
+        stats.vertices,
+        stats.meshes,
+        plural(stats.meshes)
+    );
+    if joints > 0 {
+        counts += &format!(" · {joints} joints");
+    }
+    tag(ui, &counts);
+    let title = format!("Materials ({})", stats.materials.len());
+    egui::CollapsingHeader::new(RichText::new(title).small().color(MUTED))
+        .id_salt("preview_materials")
+        .show(ui, |ui| {
+            for material in &stats.materials {
+                ui.horizontal(|ui| {
+                    let [r, g, b, a] = material.color.map(|c| (c.clamp(0.0, 1.0) * 255.0) as u8);
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                    ui.painter().rect_filled(
+                        rect,
+                        2.0,
+                        Color32::from_rgba_unmultiplied(r, g, b, a),
+                    );
+                    let name = material.name.as_deref().unwrap_or("Unnamed");
+                    ui.label(RichText::new(name).small().color(TEXT))
+                        .on_hover_text(format!("#{r:02X}{g:02X}{b:02X}, alpha {a}"));
+                    let meshes = material.meshes;
+                    let mut notes = vec![format!("{meshes} mesh{}", plural(meshes))];
+                    notes.extend(
+                        material
+                            .textures
+                            .iter()
+                            .map(|texture| texture.replace('_', " ")),
+                    );
+                    tag(ui, &notes.join(" · "));
+                });
+            }
+        });
+}
+
+fn plural(count: u32) -> &'static str {
+    if count == 1 { "" } else { "es" }
 }
 
 /// Each part's names from the model's root down to it, joined by `/`.
@@ -472,6 +569,14 @@ mod tests {
         }
     }
 
+    fn model(clips: Vec<ClipInfo>, parts: Vec<EntityInfo>) -> PreviewModel {
+        PreviewModel {
+            clips,
+            parts,
+            ..PreviewModel::default()
+        }
+    }
+
     fn clip(name: &str) -> ClipInfo {
         ClipInfo {
             name: name.into(),
@@ -484,7 +589,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let mut preview = ModelPreview::new("models/hero.glb".into(), PathBuf::new());
-        preview.loaded(vec![clip("Idle")], vec![], None, None);
+        preview.loaded(model(vec![clip("Idle")], vec![]));
         preview.playing = false;
         preview.rebase(0.5);
         let mut harness = Harness::new_ui_state(
@@ -508,7 +613,7 @@ mod tests {
                 part(hat, "Hat", Some(head)),
             ]
         };
-        let sent = preview.loaded(vec![clip("Idle"), clip("Walk")], parts(1, 2, 3), None, None);
+        let sent = preview.loaded(model(vec![clip("Idle"), clip("Walk")], parts(1, 2, 3)));
         assert_eq!(preview.clip, Some(0), "the first clip plays");
         assert!(matches!(
             sent[0],
@@ -525,7 +630,7 @@ mod tests {
         assert!(preview.loaded.is_none(), "waits for the game's report");
 
         // Loaded again: the same clips and parts under new ids.
-        let sent = preview.loaded(vec![clip("Idle"), clip("Walk")], parts(4, 5, 6), None, None);
+        let sent = preview.loaded(model(vec![clip("Idle"), clip("Walk")], parts(4, 5, 6)));
         assert_eq!(preview.clip, Some(1));
         assert_eq!(
             sent[1],
@@ -536,7 +641,7 @@ mod tests {
         );
 
         // Re-exported without the hat.
-        let sent = preview.loaded(vec![clip("Idle")], parts(7, 8, 9)[..2].to_vec(), None, None);
+        let sent = preview.loaded(model(vec![clip("Idle")], parts(7, 8, 9)[..2].to_vec()));
         assert!(preview.hidden.is_empty() && preview.solo.as_deref() == Some("Body/Head"));
         assert_eq!(
             sent[1],
@@ -546,7 +651,7 @@ mod tests {
             }
         );
 
-        preview.loaded(vec![], vec![], None, None);
+        preview.loaded(model(vec![], vec![]));
         assert_eq!(preview.clip, None, "no clips left to play");
     }
 

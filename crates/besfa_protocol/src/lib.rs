@@ -20,7 +20,8 @@ use serde_json::Value;
 /// 2. The model preview: [`Command::Preview`] and the commands after it,
 ///    answered by [`Report::Preview`].
 /// 3. The preview's views and screenshots: [`Command::PreviewView`] and
-///    [`Command::PreviewScreenshot`], answered by [`Report::Screenshot`].
+///    [`Command::PreviewScreenshot`], answered by [`Report::Screenshot`];
+///    what a previewed model is made of, and [`Command::PreviewOverlays`].
 pub const VERSION: u32 = 3;
 
 /// Starts every report line.
@@ -169,6 +170,19 @@ pub enum Command {
     PreviewScreenshot {
         path: String,
     },
+    /// What the preview draws over the model.
+    PreviewOverlays(Overlays),
+}
+
+/// What the model preview can draw over the model, over everything else.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Overlays {
+    /// A line from each joint to its parent joint.
+    pub skeleton: bool,
+    /// Each marker's axes.
+    pub markers: bool,
+    /// The model's bounding box.
+    pub bounds: bool,
 }
 
 impl Command {
@@ -324,15 +338,8 @@ pub enum Report {
     /// shown again, or why it could not load.
     Preview {
         path: String,
-        #[serde(default)]
-        clips: Vec<ClipInfo>,
-        /// The model's nodes and meshes; the root's children have no parent.
-        #[serde(default)]
-        parts: Vec<EntityInfo>,
-        /// Width, height and depth of its bounds, in meters.
-        #[serde(default)]
-        size: Option<[f32; 3]>,
-        error: Option<String>,
+        #[serde(flatten)]
+        model: PreviewModel,
     },
     /// The outcome of `preview_screenshot`.
     Screenshot { path: String, error: Option<String> },
@@ -411,6 +418,56 @@ impl ComponentData {
 pub struct SystemInfo {
     pub schedule: String,
     pub name: String,
+}
+
+/// What the game found in a previewed model.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct PreviewModel {
+    pub clips: Vec<ClipInfo>,
+    /// The model's nodes and meshes; the root's children have no parent.
+    pub parts: Vec<EntityInfo>,
+    /// Width, height and depth of its bounds, in meters.
+    pub size: Option<[f32; 3]>,
+    pub error: Option<String>,
+    /// What it is made of; absent from plugins before protocol 3.
+    pub stats: Option<ModelStats>,
+    /// The parts that are skin joints.
+    pub joints: Vec<u64>,
+    /// The parts that mark a place, like a grip or a muzzle: leaves without
+    /// a mesh that are not joints, lights or cameras.
+    pub markers: Vec<Marker>,
+}
+
+/// What a previewed model is made of.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ModelStats {
+    pub triangles: u64,
+    pub vertices: u64,
+    /// Mesh primitives: a glTF mesh has one per material.
+    pub meshes: u32,
+    pub materials: Vec<MaterialInfo>,
+}
+
+/// A material of a previewed model.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MaterialInfo {
+    pub name: Option<String>,
+    /// The base color, sRGB with alpha, each 0 to 1.
+    pub color: [f32; 4],
+    /// Which textures it has: `base_color`, `normal`, `metallic_roughness`,
+    /// `emissive`, `occlusion`.
+    pub textures: Vec<String>,
+    /// How many of the model's meshes use it.
+    pub meshes: u32,
+}
+
+/// A part of a previewed model that marks a place.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Marker {
+    pub id: u64,
+    /// Where it is in the model's space, in meters, as the model loaded.
+    pub position: [f32; 3],
 }
 
 /// An animation clip of a previewed model.
@@ -492,6 +549,17 @@ mod tests {
                 view: View::ThreeQuarter
             }
         );
+        assert_eq!(
+            request(
+                r#"{"command":"preview_overlays","skeleton":true,"markers":false,"bounds":true}"#
+            )
+            .command,
+            Command::PreviewOverlays(Overlays {
+                skeleton: true,
+                markers: false,
+                bounds: true
+            })
+        );
     }
 
     #[test]
@@ -570,23 +638,37 @@ mod tests {
         assert_eq!(Report::parse(&done.line()), Some(done));
         let preview = Report::Preview {
             path: "models/hero.glb".into(),
-            clips: vec![ClipInfo {
-                name: "Walk".into(),
-                duration: 1.25,
-            }],
-            parts: vec![],
-            size: Some([0.5, 1.8, 0.3]),
-            error: None,
+            model: PreviewModel {
+                clips: vec![ClipInfo {
+                    name: "Walk".into(),
+                    duration: 1.25,
+                }],
+                size: Some([0.5, 1.8, 0.3]),
+                stats: Some(ModelStats {
+                    triangles: 12,
+                    ..ModelStats::default()
+                }),
+                markers: vec![Marker {
+                    id: 7,
+                    position: [0.0, 1.0, -0.5],
+                }],
+                ..PreviewModel::default()
+            },
         };
+        assert!(
+            preview.line().contains(r#""clips":[{"name":"Walk""#),
+            "flat"
+        );
         assert_eq!(Report::parse(&preview.line()), Some(preview));
+        // What a protocol 2 plugin sends.
         assert_eq!(
             Report::parse(r#"@besfa {"type":"preview","path":"a.glb","error":"no file"}"#),
             Some(Report::Preview {
                 path: "a.glb".into(),
-                clips: vec![],
-                parts: vec![],
-                size: None,
-                error: Some("no file".into()),
+                model: PreviewModel {
+                    error: Some("no file".into()),
+                    ..PreviewModel::default()
+                },
             })
         );
         let systems = Report::Systems {
