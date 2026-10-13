@@ -27,7 +27,9 @@ use bevy::{
     prelude::*,
     render::view::screenshot::{Screenshot, ScreenshotCaptured},
     transform::TransformSystems,
-    world_serialization::{WorldAssetRoot, WorldInstance, WorldInstanceSpawner},
+    world_serialization::{
+        WorldAssetRoot, WorldInstance, WorldInstanceReady, WorldInstanceSpawner,
+    },
 };
 
 use crate::{
@@ -136,6 +138,7 @@ impl Plugin for PreviewPlugin {
                 },
             )
             .add_systems(Startup, spawn_camera_and_light)
+            .add_observer(respawned)
             .add_systems(
                 Update,
                 ((load, orbit, animate).chain(), lighting).run_if(showing),
@@ -477,6 +480,23 @@ fn lighting(
         brightness: brightness * scale,
         ..default()
     };
+}
+
+/// The model spawned anew, after its file was loaded again: it is reported
+/// again with its new parts, and its clips play through a new graph.
+fn respawned(ready: On<WorldInstanceReady>, mut preview: ResMut<ModelPreview>) {
+    if preview.root != Some(ready.entity) || !preview.reported {
+        return;
+    }
+    let preview = &mut *preview;
+    preview.reported = false;
+    preview.waited = 0;
+    preview.clips = None;
+    preview.rest.clear();
+    preview.hid.clear();
+    preview.selected = None;
+    preview.joints.clear();
+    preview.markers.clear();
 }
 
 /// Keeps what the model spawns, whenever it spawns it, on the preview's

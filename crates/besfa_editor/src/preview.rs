@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 
 use crate::{
     inspector::{Action, Inspected, Inspector, TRANSFORM, euler_to_quat, quat_to_euler},
-    panels::{ACCENT, ERROR, MUTED, TEXT, panel_header, section, tag},
+    panels::{ACCENT, ERROR, MUTED, Reimport, TEXT, panel_header, section, tag},
     project,
     review::{self, Change, Edits, ROOT, Review},
     scene::{Scene, tree_rows},
@@ -419,8 +419,9 @@ impl ModelPreview {
     }
 
     /// The tab's side panel; returns what to tell the game. The `scene`
-    /// says what components the game can add.
-    pub fn ui(&mut self, ui: &mut Ui, scene: &Scene) -> Vec<Command> {
+    /// says what components the game can add; `reimport`, where loading the
+    /// changed file again stands.
+    pub fn ui(&mut self, ui: &mut Ui, scene: &Scene, reimport: Option<&Reimport>) -> Vec<Command> {
         let mut send = Vec::new();
         let mut show_all = false;
         panel_header(ui, "Model", |ui| {
@@ -447,7 +448,12 @@ impl ModelPreview {
         let mut loaded_back = None;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             let model = &loaded.model;
-            ui.label(RichText::new(self.name()).strong().color(TEXT));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(self.name()).strong().color(TEXT));
+                if let Some(reimport) = reimport {
+                    reimport.ui(ui);
+                }
+            });
             if let Some(error) = &self.review_error {
                 ui.label(RichText::new(error).small().color(ERROR));
             }
@@ -1051,7 +1057,7 @@ mod tests {
         preview.rebase(0.5);
         let mut harness = Harness::new_ui_state(
             |ui, preview: &mut ModelPreview| {
-                preview.ui(ui, &Scene::default());
+                preview.ui(ui, &Scene::default(), None);
             },
             preview,
         );

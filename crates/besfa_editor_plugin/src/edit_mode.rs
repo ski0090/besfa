@@ -18,6 +18,7 @@ use crate::{
     edit, input,
     inspect::{Changes, Selected, report_saved, select, send_report},
     preview::{self, ModelPreview},
+    reimport,
     scene::{
         SCENE_PATH, asset_file, instance_prefab, project_file, save, save_instance, save_prefab,
         scene_file,
@@ -272,6 +273,15 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::PreviewSelect { id } => preview::select(world, id),
+        Command::Reimport { path } => {
+            if inside(&path) && (path.ends_with(".glb") || path.ends_with(".gltf")) {
+                reimport::reimport(world, path)
+            } else {
+                Err(format!(
+                    "{path} is not a glTF path inside the asset directory"
+                ))
+            }
+        }
         Command::PreviewScreenshot { path } => {
             if inside(&path) && path.ends_with(".png") {
                 preview::screenshot(world, path.clone(), project_file(&path))

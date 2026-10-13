@@ -21,10 +21,12 @@ mod edit_mode;
 mod input;
 mod inspect;
 mod preview;
+mod reimport;
 mod scene;
 mod scene_view;
 mod viewport;
 
+pub use reimport::Reimported;
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
 pub use scene_view::EditorOnly;
 
@@ -37,7 +39,8 @@ pub fn default_plugins() -> PluginGroupBuilder {
             .add(edit_mode::EditModePlugin)
             .add(inspect::InspectPlugin)
             .add(scene_view::SceneViewPlugin)
-            .add(preview::PreviewPlugin);
+            .add(preview::PreviewPlugin)
+            .add(reimport::ReimportPlugin);
     }
     let Some(config) = viewport::ViewportConfig::from_env() else {
         return plugins;

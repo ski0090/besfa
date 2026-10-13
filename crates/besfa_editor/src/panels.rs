@@ -2,10 +2,10 @@
 //! the log, and what panels and pages share.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use besfa_protocol::SpawnKind;
@@ -170,16 +170,53 @@ struct AssetRow {
     name: String,
     depth: usize,
     folder: bool,
+    modified: Option<SystemTime>,
+}
+
+/// Where loading a changed model file again stands.
+pub enum Reimport {
+    Running,
+    Done(Instant),
+    Failed(String),
+}
+
+/// How long a finished reimport says so.
+const REIMPORTED_SHOWN: Duration = Duration::from_secs(5);
+
+impl Reimport {
+    /// A spinner, a check for a while, or a warning that says why.
+    pub fn ui(&self, ui: &mut Ui) {
+        match self {
+            Reimport::Running => {
+                ui.add(egui::Spinner::new().size(10.0))
+                    .on_hover_text("Reimporting");
+            }
+            Reimport::Done(at) if at.elapsed() < REIMPORTED_SHOWN => {
+                ui.label(RichText::new("✔").small().color(GOOD))
+                    .on_hover_text("Reimported");
+            }
+            Reimport::Done(_) => {}
+            Reimport::Failed(error) => {
+                ui.label(RichText::new("⚠").small().color(ERROR))
+                    .on_hover_text(format!("Could not reimport: {error}"));
+            }
+        }
+    }
 }
 
 /// The project's asset folder as a tree that follows changes on disk.
 /// Models, scenes and prefabs can be added to the scene with a button or
 /// dragged out as their asset path; double-clicking a model previews it.
+/// Models that change on disk are noticed, to load them again.
 pub struct AssetBrowser {
     directory: PathBuf,
     /// None while there is no asset folder.
     rows: Option<Vec<AssetRow>>,
     listed: Option<Instant>,
+    /// Each model's modification time, and whether it changed at the last
+    /// listing, so it may still be being written.
+    models: HashMap<String, (SystemTime, bool)>,
+    pub reimports: HashMap<String, Reimport>,
 }
 
 /// How often the asset folder is listed again.
@@ -192,24 +229,68 @@ impl AssetBrowser {
             directory,
             rows: None,
             listed: None,
+            models: HashMap::new(),
+            reimports: HashMap::new(),
         }
+    }
+
+    /// Lists the folder again now and then, whether or not it shows, and
+    /// returns the models whose files changed and have stayed the same since
+    /// the listing before, so they are written.
+    // ponytail: a .gltf's own file only; watch its .bin and textures too if
+    // models come split.
+    pub fn poll(&mut self, ctx: &egui::Context) -> Vec<String> {
+        ctx.request_repaint_after(ASSET_POLL);
+        if self
+            .listed
+            .is_some_and(|listed| listed.elapsed() < ASSET_POLL)
+        {
+            return Vec::new();
+        }
+        self.list();
+        let mut settled = Vec::new();
+        let models = self
+            .rows
+            .iter()
+            .flatten()
+            .filter(|row| can_preview(&row.path));
+        for row in models {
+            let Some(modified) = row.modified else {
+                continue;
+            };
+            match self.models.get_mut(&row.path) {
+                None => {
+                    self.models.insert(row.path.clone(), (modified, false));
+                }
+                Some((known, changing)) if *known != modified => {
+                    *known = modified;
+                    *changing = true;
+                }
+                Some((_, changing)) if *changing => {
+                    *changing = false;
+                    settled.push(row.path.clone());
+                }
+                Some(_) => {}
+            }
+        }
+        settled
+    }
+
+    fn list(&mut self) {
+        self.rows = self.directory.is_dir().then(|| {
+            let mut rows = Vec::new();
+            list(&self.directory, "", 0, &mut rows);
+            rows
+        });
+        self.listed = Some(Instant::now());
     }
 
     /// Returns what to do with an asset; nothing is added or previewed
     /// unless `can_add`.
     pub fn ui(&mut self, ui: &mut Ui, can_add: bool) -> Option<AssetAction> {
-        if self
-            .listed
-            .is_none_or(|listed| listed.elapsed() >= ASSET_POLL)
-        {
-            self.rows = self.directory.is_dir().then(|| {
-                let mut rows = Vec::new();
-                list(&self.directory, "", 0, &mut rows);
-                rows
-            });
-            self.listed = Some(Instant::now());
+        if self.listed.is_none() {
+            self.list();
         }
-        ui.ctx().request_repaint_after(ASSET_POLL);
         let Some(rows) = &self.rows else {
             ui.centered_and_justified(|ui| {
                 ui.label(RichText::new("No assets folder").color(MUTED))
@@ -258,6 +339,9 @@ impl AssetBrowser {
                     } else {
                         ui.label(label);
                     }
+                    if let Some(reimport) = self.reimports.get(&row.path) {
+                        reimport.ui(ui);
+                    }
                 });
             }
         });
@@ -284,11 +368,13 @@ fn list(directory: &Path, prefix: &str, depth: usize, rows: &mut Vec<AssetRow>) 
     entries.sort_by_key(|(name, path)| (!path.is_dir(), name.to_lowercase()));
     for (name, path) in entries {
         let folder = path.is_dir();
+        let modified = fs::metadata(&path).and_then(|file| file.modified()).ok();
         rows.push(AssetRow {
             path: format!("{prefix}{name}"),
             name: name.clone(),
             depth,
             folder,
+            modified,
         });
         if folder {
             list(&path, &format!("{prefix}{name}/"), depth + 1, rows);
@@ -337,6 +423,34 @@ mod tests {
             ]
         );
         assert!(can_place("models/ship.glb") && can_place("A.scn.ron") && !can_place("b.txt"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn notices_a_model_change_once_it_is_written() {
+        let dir = std::env::temp_dir().join(format!("besfa_models_{}", std::process::id()));
+        fs::create_dir_all(dir.join("models")).unwrap();
+        let ship = dir.join("models/ship.glb");
+        fs::write(&ship, "one").unwrap();
+        fs::write(dir.join("notes.txt"), "").unwrap();
+        let ctx = egui::Context::default();
+        let mut assets = AssetBrowser::new(dir.clone());
+        let mut poll = || {
+            assets.listed = None;
+            assets.poll(&ctx)
+        };
+        assert!(poll().is_empty(), "found, not changed");
+        let later = SystemTime::now() + Duration::from_secs(10);
+        fs::File::options()
+            .write(true)
+            .open(&ship)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        fs::write(dir.join("notes.txt"), "changed").unwrap();
+        assert!(poll().is_empty(), "may still be being written");
+        assert_eq!(poll(), ["models/ship.glb"]);
+        assert!(poll().is_empty(), "once");
         fs::remove_dir_all(dir).unwrap();
     }
 

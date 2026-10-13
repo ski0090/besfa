@@ -24,7 +24,7 @@ use serde_json::Value;
 use crate::{
     inspector::{Action, Inspector},
     panels::{
-        self, ACCENT, AssetAction, AssetBrowser, GOOD, HierarchyAction, MUTED, WARNING,
+        self, ACCENT, AssetAction, AssetBrowser, GOOD, HierarchyAction, MUTED, Reimport, WARNING,
         prebuild_status,
     },
     preview::ModelPreview,
@@ -204,6 +204,9 @@ impl Editor {
         if self.source.settled(&ctx) {
             self.rebuild(prebuild, &ctx);
         }
+        for path in self.assets.poll(&ctx) {
+            self.reimport(path);
+        }
         if self.resize_at.is_some_and(|at| Instant::now() >= at) {
             self.resize_viewport();
         }
@@ -251,7 +254,8 @@ impl Editor {
             .show(ui, |ui| {
                 match self.preview.as_mut().filter(|_| self.previewing) {
                     Some(preview) => {
-                        let commands = preview.ui(ui, &self.scene);
+                        let reimport = self.assets.reimports.get(&preview.path);
+                        let commands = preview.ui(ui, &self.scene, reimport);
                         preview.save();
                         for command in commands {
                             self.send(command);
@@ -345,6 +349,10 @@ impl Editor {
         self.seq = 0;
         self.protocol = None;
         self.ensure_viewport();
+        // The old game cannot answer them; the new one reads the files fresh.
+        self.assets
+            .reimports
+            .retain(|_, reimport| !matches!(reimport, Reimport::Running));
         let shared = self.viewport.as_ref().zip(self.render.as_ref());
         let shared = shared.map(|(viewport, render)| (viewport.name.clone(), adapter_name(render)));
         // Read by besfa_editor_plugin: start paused, play on `play`.
@@ -542,6 +550,19 @@ impl Editor {
                     preview.entity_report(id, changes, components, self.scene.changes());
                 }
             }
+            Report::Reimported { path, error } => {
+                let reimport = match error {
+                    None => {
+                        self.log(format!("Reimported {path}"));
+                        Reimport::Done(Instant::now())
+                    }
+                    Some(error) => {
+                        self.log(format!("Could not reimport {path}: {error}"));
+                        Reimport::Failed(error)
+                    }
+                };
+                self.assets.reimports.insert(path, reimport);
+            }
             Report::Screenshot { path, error } => {
                 match &error {
                     None => self.log(format!("Saved {path}")),
@@ -734,6 +755,16 @@ impl Editor {
     /// Puts the asset at `path` in the scene; the game reports it as spawned.
     fn instantiate(&mut self, path: String) {
         self.edit(Command::Instantiate { path }, vec![]);
+    }
+
+    /// Loads the model at `path` again in the game after its file changed;
+    /// a game that is not running reads it fresh when it starts.
+    fn reimport(&mut self, path: String) {
+        if self.game.is_none() || self.protocol.is_none_or(|version| version < 3) {
+            return;
+        }
+        self.send(Command::Reimport { path: path.clone() });
+        self.assets.reimports.insert(path, Reimport::Running);
     }
 
     /// Opens the model at `path` in the preview tab, replacing the model

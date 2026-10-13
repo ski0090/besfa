@@ -21,8 +21,9 @@ use serde_json::Value;
 ///    answered by [`Report::Preview`].
 /// 3. The preview's views and screenshots: [`Command::PreviewView`] and
 ///    [`Command::PreviewScreenshot`], answered by [`Report::Screenshot`];
-///    what a previewed model is made of, [`Command::PreviewOverlays`], and
-///    [`Command::PreviewSelect`] for a part's components.
+///    what a previewed model is made of, [`Command::PreviewOverlays`],
+///    [`Command::PreviewSelect`] for a part's components, and
+///    [`Command::Reimport`], answered by [`Report::Reimported`].
 pub const VERSION: u32 = 3;
 
 /// Starts every report line.
@@ -178,6 +179,12 @@ pub enum Command {
     /// scene's selection stays.
     PreviewSelect {
         id: Option<u64>,
+    },
+    /// Loads the model file at `path`, relative to the asset directory,
+    /// again after it changed on disk, and reports it as `reimported` once
+    /// every model showing it, placed or previewed, has spawned it anew.
+    Reimport {
+        path: String,
     },
 }
 
@@ -350,6 +357,8 @@ pub enum Report {
     },
     /// The outcome of `preview_screenshot`.
     Screenshot { path: String, error: Option<String> },
+    /// The outcome of `reimport`.
+    Reimported { path: String, error: Option<String> },
     /// A report from a newer plugin than this protocol knows.
     #[serde(other)]
     Unknown,
