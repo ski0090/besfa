@@ -23,6 +23,7 @@ use serde_json::Value;
 
 use crate::{
     inspect::{Selected, report_selection, send_report},
+    preview::{ModelPreview, PreviewCamera},
     scene::SceneEntity,
 };
 
@@ -91,16 +92,16 @@ struct Drag {
 /// Orbits `focus` from `distance` away, `yaw` and `pitch` in radians.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct EditorCamera {
-    focus: Vec3,
-    yaw: f32,
-    pitch: f32,
-    distance: f32,
+    pub(crate) focus: Vec3,
+    pub(crate) yaw: f32,
+    pub(crate) pitch: f32,
+    pub(crate) distance: f32,
     /// Took over the pose of a game camera.
-    adopted: bool,
+    pub(crate) adopted: bool,
 }
 
 /// After every game camera, so the editor's view is the one left.
-const EDITOR_CAMERA_ORDER: isize = 1_000_000;
+pub(crate) const EDITOR_CAMERA_ORDER: isize = 1_000_000;
 
 /// A game camera switched off in edit mode, with the switch it gets back once
 /// the game plays. Two active cameras would both show: a second camera
@@ -118,7 +119,7 @@ pub(crate) struct Parked {
 const GRAB_PIXELS: f32 = 8.0;
 const CLICK_PIXELS: f32 = 4.0;
 
-const AXIS_COLORS: [Color; 3] = [
+pub(crate) const AXIS_COLORS: [Color; 3] = [
     Color::srgb(0.93, 0.3, 0.3),
     Color::srgb(0.45, 0.85, 0.35),
     Color::srgb(0.35, 0.55, 1.0),
@@ -146,14 +147,21 @@ impl Plugin for SceneViewPlugin {
                 Update,
                 (adopt_game_camera, fly, handle_pointer)
                     .chain()
-                    .run_if(|view: Res<SceneView>| view.active),
+                    .run_if(shown),
             )
             .add_systems(
                 PostUpdate,
-                (draw.after(TransformSystems::Propagate), park_game_cameras)
-                    .run_if(|view: Res<SceneView>| view.active),
+                (
+                    draw.after(TransformSystems::Propagate).run_if(shown),
+                    park_game_cameras.run_if(|view: Res<SceneView>| view.active),
+                ),
             );
     }
+}
+
+/// In edit mode, unless the model preview shows instead.
+fn shown(view: Res<SceneView>, preview: Option<Res<ModelPreview>>) -> bool {
+    view.active && !preview.is_some_and(|preview| preview.showing)
 }
 
 /// Stops the scene view and removes the editor camera, so the game's own
@@ -209,7 +217,11 @@ fn park_game_cameras(
     mut commands: Commands,
     mut cameras: Query<
         (Entity, &mut Camera, &RenderTarget),
-        (Without<EditorCamera>, Without<Parked>),
+        (
+            Without<EditorCamera>,
+            Without<PreviewCamera>,
+            Without<Parked>,
+        ),
     >,
 ) {
     for (entity, mut camera, target) in &mut cameras {
@@ -246,19 +258,19 @@ impl EditorCamera {
         Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0)
     }
 
-    fn transform(&self) -> Transform {
+    pub(crate) fn transform(&self) -> Transform {
         let rotation = self.rotation();
         Transform::from_translation(self.focus + rotation * Vec3::Z * self.distance)
             .with_rotation(rotation)
     }
 
-    fn orbit(&mut self, delta: Vec2) {
+    pub(crate) fn orbit(&mut self, delta: Vec2) {
         self.yaw -= delta.x * 0.005;
         self.pitch = (self.pitch - delta.y * 0.005).clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
     }
 
     /// Moves the view with the pointer, faster the farther out it is.
-    fn pan(&mut self, delta: Vec2) {
+    pub(crate) fn pan(&mut self, delta: Vec2) {
         let rotation = self.rotation();
         self.focus += (rotation * Vec3::NEG_X * delta.x + rotation * Vec3::Y * delta.y)
             * self.distance
@@ -283,7 +295,7 @@ impl EditorCamera {
         self.focus += way.normalize_or_zero() * speed * seconds;
     }
 
-    fn zoom(&mut self, scroll: f32) {
+    pub(crate) fn zoom(&mut self, scroll: f32) {
         self.distance = (self.distance * (1.0 + scroll * 0.001)).clamp(0.05, 5000.0);
     }
 }
@@ -308,7 +320,8 @@ fn spawn_editor_camera(mut commands: Commands) {
 /// Starts the view where the game's camera looks once the scene has one.
 fn adopt_game_camera(
     mut editor: Query<&mut EditorCamera>,
-    game: Query<&Transform, (With<Camera>, Without<EditorCamera>)>,
+    // Not the preview's camera, nor one inside the previewed model.
+    game: Query<&Transform, (With<Camera>, Without<EditorOnly>)>,
 ) {
     let Ok(mut editor) = editor.single_mut() else {
         return;

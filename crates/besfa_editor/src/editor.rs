@@ -23,7 +23,11 @@ use serde_json::Value;
 
 use crate::{
     inspector::{Action, Inspector},
-    panels::{self, ACCENT, AssetBrowser, GOOD, HierarchyAction, MUTED, WARNING, prebuild_status},
+    panels::{
+        self, ACCENT, AssetAction, AssetBrowser, GOOD, HierarchyAction, MUTED, WARNING,
+        prebuild_status,
+    },
+    preview::ModelPreview,
     process::{CliProcess, Output, Prebuild},
     project::{self, Project},
     scene::{Edit, EditHistory, Scene},
@@ -114,6 +118,10 @@ pub struct Editor {
     inspector: Inspector,
     assets: AssetBrowser,
     assets_tab: bool,
+    /// The model preview's tab, while it is open.
+    preview: Option<ModelPreview>,
+    /// The viewport shows the model preview instead of the scene.
+    previewing: bool,
     dialog: Option<Dialog>,
     /// The window may close: nothing is unsaved, or the user chose.
     closing: bool,
@@ -156,6 +164,8 @@ impl Editor {
             save_after_ui: false,
             inspector: Inspector::default(),
             assets_tab: false,
+            preview: None,
+            previewing: false,
             dialog: None,
             closing: false,
             leave: false,
@@ -221,8 +231,12 @@ impl Editor {
                 ui.separator();
                 if !self.assets_tab {
                     panels::log(ui, &self.logs);
-                } else if let Some(path) = self.assets.ui(ui, !self.playing) {
-                    self.instantiate(path);
+                } else {
+                    match self.assets.ui(ui, !self.playing) {
+                        Some(AssetAction::Add(path)) => self.instantiate(path),
+                        Some(AssetAction::Preview(path)) => self.open_preview(path),
+                        None => {}
+                    }
                 }
             });
         egui::Panel::left("hierarchy")
@@ -235,8 +249,17 @@ impl Editor {
         egui::Panel::right("inspector")
             .default_size(320.0)
             .show(ui, |ui| {
-                if let Some(action) = self.inspector.ui(ui, &self.scene, !self.playing) {
-                    self.on_inspector(action);
+                match self.preview.as_mut().filter(|_| self.previewing) {
+                    Some(preview) => {
+                        for command in preview.ui(ui) {
+                            self.send(command);
+                        }
+                    }
+                    None => {
+                        if let Some(action) = self.inspector.ui(ui, &self.scene, !self.playing) {
+                            self.on_inspector(action);
+                        }
+                    }
                 }
             });
         egui::CentralPanel::default().show(ui, |ui| self.viewport_ui(ui, &ctx));
@@ -351,6 +374,16 @@ impl Editor {
         if self.tool != Tool::Translate {
             self.send(Command::Tool { tool: self.tool });
         }
+        // The game plays without the preview; a new edit session loads it again.
+        if play {
+            self.previewing = false;
+        } else if self.previewing
+            && let Some(preview) = &mut self.preview
+        {
+            for command in preview.commands() {
+                self.send(command);
+            }
+        }
         self.playing = play;
     }
 
@@ -365,6 +398,8 @@ impl Editor {
         if self.scene.dirty {
             self.save();
         }
+        // Playing drops the game's preview.
+        self.previewing = false;
         self.send(Command::Play);
         self.playing = true;
     }
@@ -479,6 +514,23 @@ impl Editor {
                     redo: vec![set(after)],
                     seq: None,
                 });
+            }
+            Report::Preview {
+                path,
+                clips,
+                parts,
+                size,
+                error,
+            } => {
+                if let Some(error) = &error {
+                    self.log(format!("Could not preview {path}: {error}"));
+                }
+                if let Some(preview) = self.preview.as_mut().filter(|preview| preview.path == path)
+                {
+                    for command in preview.loaded(clips, parts, size, error) {
+                        self.send(command);
+                    }
+                }
             }
             Report::Saved { .. } => {
                 if let Some((_, then)) = self.pending_save.take() {
@@ -665,6 +717,74 @@ impl Editor {
         self.edit(Command::Instantiate { path }, vec![]);
     }
 
+    /// Opens the model at `path` in the preview tab, replacing the model
+    /// there, once the game's plugin knows how.
+    fn open_preview(&mut self, path: String) {
+        if self.protocol.is_none_or(|version| version < 2) {
+            return self.log(
+                "The model preview needs the game running with besfa_editor_plugin speaking \
+                 protocol 2 or later. Update the plugin.",
+            );
+        }
+        self.preview = Some(ModelPreview::new(path));
+        self.show_preview(true);
+    }
+
+    /// Shows the preview tab, or the scene; the game drops the model while
+    /// the scene shows and loads it again on the way back.
+    fn show_preview(&mut self, show: bool) {
+        self.previewing = show && self.preview.is_some();
+        if self.previewing {
+            let commands = self.preview.as_mut().map(ModelPreview::commands);
+            for command in commands.into_iter().flatten() {
+                self.send(command);
+            }
+        } else {
+            self.send(Command::Preview { path: None });
+        }
+    }
+
+    fn close_preview(&mut self) {
+        if self.previewing {
+            self.show_preview(false);
+        }
+        self.preview = None;
+    }
+
+    /// The Scene tab and the model preview's tab, while one is open.
+    fn tabs(&mut self, ui: &mut Ui) {
+        let Some(preview) = &self.preview else {
+            return;
+        };
+        let name = format!("⛶ {}", preview.name());
+        let path = preview.path.clone();
+        let mut show = None;
+        let mut close = false;
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!self.previewing, "Scene").clicked() && self.previewing {
+                show = Some(false);
+            }
+            let tab = Button::selectable(self.previewing, name);
+            if ui
+                .add_enabled(!self.playing, tab)
+                .on_hover_text(path)
+                .clicked()
+                && !self.previewing
+            {
+                show = Some(true);
+            }
+            close = ui
+                .small_button("🗙")
+                .on_hover_text("Close the preview")
+                .clicked();
+        });
+        if close {
+            self.close_preview();
+        } else if let Some(show) = show {
+            self.show_preview(show);
+        }
+    }
+
     fn set_tool(&mut self, tool: Tool) {
         self.tool = tool;
         self.send(Command::Tool { tool });
@@ -691,6 +811,13 @@ impl Editor {
             return project::open_url(project::BEVY_ASSETS);
         }
         if ctx.text_edit_focused() {
+            return;
+        }
+        // The scene is out of sight: only framing the model is left.
+        if self.previewing {
+            if pressed(Modifiers::NONE, Key::F) {
+                self.send(Command::Focus);
+            }
             return;
         }
         if pressed(Modifiers::COMMAND, Key::D) {
@@ -775,7 +902,7 @@ impl Editor {
                 for (tool, icon, tooltip, _) in TOOLS {
                     let button = Button::selectable(self.tool == tool, icon);
                     if ui
-                        .add_enabled(!self.playing, button)
+                        .add_enabled(!self.playing && !self.previewing, button)
                         .on_hover_text(tooltip)
                         .clicked()
                     {
@@ -830,6 +957,7 @@ impl Editor {
     }
 
     fn viewport_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        self.tabs(ui);
         let panel = ui.available_rect_before_wrap();
         self.fit_viewport(panel.size() * ui.pixels_per_point(), ctx);
         let shown = self.viewport.as_ref().filter(|_| self.game.is_some());
@@ -851,15 +979,23 @@ impl Editor {
             self.send(command);
         }
         if !self.playing {
+            let hint = if self.previewing {
+                "Drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  F fit"
+            } else {
+                "Click select  ·  Right-drag orbit  ·  Right-hold + WASD/QE fly  ·  Middle-drag pan  ·  Scroll zoom  ·  F focus"
+            };
             ui.painter().text(
                 rect.left_bottom() + egui::vec2(8.0, -8.0),
                 egui::Align2::LEFT_BOTTOM,
-                "Click select  ·  Right-drag orbit  ·  Right-hold + WASD/QE fly  ·  Middle-drag pan  ·  Scroll zoom  ·  F focus",
+                hint,
                 egui::FontId::proportional(11.0),
                 Color32::from_white_alpha(0x99),
             );
         }
-        // Assets dragged from the Assets tab land in the scene.
+        // Assets dragged from the Assets tab land in the scene, when it shows.
+        if self.previewing {
+            return;
+        }
         if response.dnd_hover_payload::<String>().is_some() {
             ui.painter()
                 .rect_stroke(rect, 0.0, (2.0, ACCENT), egui::StrokeKind::Inside);

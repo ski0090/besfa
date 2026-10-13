@@ -20,6 +20,7 @@ mod edit;
 mod edit_mode;
 mod input;
 mod inspect;
+mod preview;
 mod scene;
 mod scene_view;
 mod viewport;
@@ -35,7 +36,8 @@ pub fn default_plugins() -> PluginGroupBuilder {
         plugins = plugins
             .add(edit_mode::EditModePlugin)
             .add(inspect::InspectPlugin)
-            .add(scene_view::SceneViewPlugin);
+            .add(scene_view::SceneViewPlugin)
+            .add(preview::PreviewPlugin);
     }
     let Some(config) = viewport::ViewportConfig::from_env() else {
         return plugins;

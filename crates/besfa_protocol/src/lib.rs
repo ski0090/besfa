@@ -17,7 +17,9 @@ use serde_json::Value;
 ///
 /// 1. [`Report::Hello`], and requests with a `seq` answered by
 ///    [`Report::Done`].
-pub const VERSION: u32 = 1;
+/// 2. The model preview: [`Command::Preview`] and the commands after it,
+///    answered by [`Report::Preview`].
+pub const VERSION: u32 = 2;
 
 /// Starts every report line.
 pub const REPORT_PREFIX: &str = "@besfa ";
@@ -128,6 +130,33 @@ pub enum Command {
     Viewport {
         name: String,
     },
+    /// Shows the glTF model at `path`, relative to the asset directory, in
+    /// the model preview instead of the scene view, loading it unless it is
+    /// already the one previewed, and reports it once it has loaded. Without
+    /// a path the scene view shows again and the model is dropped. Edit mode
+    /// only; `play` drops the preview too.
+    Preview {
+        path: Option<String>,
+    },
+    /// Poses the previewed model with clip `clip`, in the order reported, at
+    /// `time` seconds, moving on at `speed` times real time: 0 holds it. See
+    /// [`clip_time`].
+    PreviewAnimation {
+        clip: Option<usize>,
+        time: f32,
+        speed: f32,
+        looping: bool,
+    },
+    /// Hides the previewed model's parts in `hidden` with everything under
+    /// them; with `solo`, only that part and what is under it shows.
+    PreviewParts {
+        hidden: Vec<u64>,
+        solo: Option<u64>,
+    },
+    /// Lights the preview.
+    PreviewLight {
+        light: LightPreset,
+    },
 }
 
 impl Command {
@@ -136,7 +165,12 @@ impl Command {
     pub fn is_input(&self) -> bool {
         matches!(
             self,
-            Command::Pointer(_) | Command::Key { .. } | Command::FocusLost | Command::Fly { .. }
+            Command::Pointer(_)
+                | Command::Key { .. }
+                | Command::FocusLost
+                | Command::Fly { .. }
+                // Sent while the time slider is dragged.
+                | Command::PreviewAnimation { .. }
         )
     }
 }
@@ -161,6 +195,35 @@ pub enum Tool {
     Translate,
     Rotate,
     Scale,
+}
+
+/// How the model preview is lit.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LightPreset {
+    /// A key light from the front, above and to the side, with soft fill.
+    #[default]
+    Studio,
+    /// A high, warm sun and bright sky.
+    Daylight,
+    /// Dim, cool moonlight from behind, which shows outlines and rims.
+    Night,
+}
+
+/// Where a previewed clip `duration` seconds long is `seconds` of real time
+/// after `time`, played at `speed`: wrapped around when `looping`, held at
+/// either end otherwise. The editor and the game both move the clock this
+/// way, so neither has to report it.
+pub fn clip_time(time: f32, seconds: f32, speed: f32, duration: f32, looping: bool) -> f32 {
+    if duration <= 0.0 {
+        return 0.0;
+    }
+    let time = time + seconds * speed;
+    if looping {
+        time.rem_euclid(duration)
+    } else {
+        time.clamp(0.0, duration)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,6 +292,20 @@ pub enum Report {
     },
     /// The request with this `seq` has run; it failed if there is an error.
     Done { seq: u64, error: Option<String> },
+    /// The model `preview` asked for, once it has loaded and every time it is
+    /// shown again, or why it could not load.
+    Preview {
+        path: String,
+        #[serde(default)]
+        clips: Vec<ClipInfo>,
+        /// The model's nodes and meshes; the root's children have no parent.
+        #[serde(default)]
+        parts: Vec<EntityInfo>,
+        /// Width, height and depth of its bounds, in meters.
+        #[serde(default)]
+        size: Option<[f32; 3]>,
+        error: Option<String>,
+    },
     /// A report from a newer plugin than this protocol knows.
     #[serde(other)]
     Unknown,
@@ -306,6 +383,14 @@ pub struct SystemInfo {
     pub name: String,
 }
 
+/// An animation clip of a previewed model.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ClipInfo {
+    pub name: String,
+    /// In seconds.
+    pub duration: f32,
+}
+
 /// A component type the editor can add to an entity.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ComponentType {
@@ -361,6 +446,26 @@ mod tests {
             Command::Select { id: None }
         );
         assert!(serde_json::from_str::<Request>("play").is_err());
+        assert_eq!(
+            request(r#"{"command":"preview_light","light":"night"}"#).command,
+            Command::PreviewLight {
+                light: LightPreset::Night
+            }
+        );
+        assert_eq!(
+            request(r#"{"seq":1,"command":"preview"}"#).command,
+            Command::Preview { path: None }
+        );
+    }
+
+    #[test]
+    fn previewed_clips_wrap_when_looping_and_hold_otherwise() {
+        assert_eq!(clip_time(0.5, 1.0, 1.0, 2.0, true), 1.5);
+        assert_eq!(clip_time(1.5, 1.0, 1.0, 2.0, true), 0.5);
+        assert_eq!(clip_time(0.5, 1.0, -1.0, 2.0, true), 1.5, "backwards");
+        assert_eq!(clip_time(1.5, 1.0, 1.0, 2.0, false), 2.0);
+        assert_eq!(clip_time(1.5, 9.0, 0.0, 2.0, false), 1.5, "held");
+        assert_eq!(clip_time(1.0, 1.0, 1.0, 0.0, true), 0.0, "a pose");
     }
 
     #[test]
@@ -427,6 +532,27 @@ mod tests {
             r#"@besfa {"type":"done","seq":2,"error":"no"}"#
         );
         assert_eq!(Report::parse(&done.line()), Some(done));
+        let preview = Report::Preview {
+            path: "models/hero.glb".into(),
+            clips: vec![ClipInfo {
+                name: "Walk".into(),
+                duration: 1.25,
+            }],
+            parts: vec![],
+            size: Some([0.5, 1.8, 0.3]),
+            error: None,
+        };
+        assert_eq!(Report::parse(&preview.line()), Some(preview));
+        assert_eq!(
+            Report::parse(r#"@besfa {"type":"preview","path":"a.glb","error":"no file"}"#),
+            Some(Report::Preview {
+                path: "a.glb".into(),
+                clips: vec![],
+                parts: vec![],
+                size: None,
+                error: Some("no file".into()),
+            })
+        );
         let systems = Report::Systems {
             game_crate: Some("game".into()),
             systems: vec![],

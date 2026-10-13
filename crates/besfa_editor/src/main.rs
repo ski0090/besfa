@@ -8,6 +8,7 @@ mod editor;
 mod hub;
 mod inspector;
 mod panels;
+mod preview;
 mod process;
 mod project;
 mod scene;

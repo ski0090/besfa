@@ -9,7 +9,7 @@ use std::{
 };
 
 use besfa_protocol::SpawnKind;
-use eframe::egui::{self, Color32, Id, Label, RichText, ScrollArea, Ui};
+use eframe::egui::{self, Color32, Id, Label, PointerButton, RichText, ScrollArea, Ui};
 
 use crate::{
     process::{Prebuild, PrebuildPhase},
@@ -150,6 +150,19 @@ pub fn can_place(path: &str) -> bool {
         .any(|extension| path.ends_with(extension))
 }
 
+/// glTF models, which the model preview shows.
+pub fn can_preview(path: &str) -> bool {
+    path.ends_with(".glb") || path.ends_with(".gltf")
+}
+
+/// What the Assets tab asks for, with an asset path.
+pub enum AssetAction {
+    /// Put it in the scene.
+    Add(String),
+    /// Open it in the model preview.
+    Preview(String),
+}
+
 /// One row of the asset tree: a path relative to the asset folder, with
 /// forward slashes as asset paths have them.
 struct AssetRow {
@@ -161,7 +174,7 @@ struct AssetRow {
 
 /// The project's asset folder as a tree that follows changes on disk.
 /// Models, scenes and prefabs can be added to the scene with a button or
-/// dragged out as their asset path.
+/// dragged out as their asset path; double-clicking a model previews it.
 pub struct AssetBrowser {
     directory: PathBuf,
     /// None while there is no asset folder.
@@ -182,8 +195,9 @@ impl AssetBrowser {
         }
     }
 
-    /// Returns an asset path to put in the scene, when `can_add`.
-    pub fn ui(&mut self, ui: &mut Ui, can_add: bool) -> Option<String> {
+    /// Returns what to do with an asset; nothing is added or previewed
+    /// unless `can_add`.
+    pub fn ui(&mut self, ui: &mut Ui, can_add: bool) -> Option<AssetAction> {
         if self
             .listed
             .is_none_or(|listed| listed.elapsed() >= ASSET_POLL)
@@ -202,7 +216,7 @@ impl AssetBrowser {
             });
             return None;
         };
-        let mut add = None;
+        let mut action = None;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             for row in rows {
                 let placeable = can_add && !row.folder && can_place(&row.path);
@@ -217,15 +231,29 @@ impl AssetBrowser {
                 ui.horizontal(|ui| {
                     ui.add_space(row.depth as f32 * 16.0);
                     if placeable {
-                        ui.dnd_drag_source(Id::new(("asset", &row.path)), row.path.clone(), |ui| {
+                        let id = Id::new(("asset", &row.path));
+                        let name = ui.dnd_drag_source(id, row.path.clone(), |ui| {
                             ui.label(label);
                         });
+                        // The drag source on top takes the row's clicks from
+                        // egui, so a double-click over it is read directly.
+                        // Not `hovered`: egui clears it while the button is down.
+                        if can_preview(&row.path) {
+                            let name = name.response.on_hover_text("Double-click to preview");
+                            if name.contains_pointer()
+                                && ui.input(|i| {
+                                    i.pointer.button_double_clicked(PointerButton::Primary)
+                                })
+                            {
+                                action = Some(AssetAction::Preview(row.path.clone()));
+                            }
+                        }
                         if ui
                             .small_button("➕")
                             .on_hover_text("Add to scene")
                             .clicked()
                         {
-                            add = Some(row.path.clone());
+                            action = Some(AssetAction::Add(row.path.clone()));
                         }
                     } else {
                         ui.label(label);
@@ -233,7 +261,7 @@ impl AssetBrowser {
                 });
             }
         });
-        add
+        action
     }
 }
 
@@ -309,6 +337,60 @@ mod tests {
             ]
         );
         assert!(can_place("models/ship.glb") && can_place("A.scn.ron") && !can_place("b.txt"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn previews_a_model_on_double_click_adds_it_and_drags_it() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let dir = std::env::temp_dir().join(format!("besfa_preview_{}", std::process::id()));
+        fs::create_dir_all(dir.join("models")).unwrap();
+        fs::write(dir.join("models/ship.glb"), "").unwrap();
+        // Clicks take a few steps; at 60 a second two still make a double-click.
+        let mut harness = Harness::builder().with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, (assets, action): &mut (AssetBrowser, Option<AssetAction>)| {
+                if let Some(asked) = assets.ui(ui, true) {
+                    *action = Some(asked);
+                }
+            },
+            (AssetBrowser::new(dir.clone()), None),
+        );
+        harness.run();
+        let name = "⛶ ship.glb";
+
+        harness.get_by_label(name).click();
+        harness.step();
+        assert!(harness.state().1.is_none(), "one click does nothing");
+        harness.get_by_label(name).click();
+        harness.step();
+        assert!(
+            matches!(&harness.state().1, Some(AssetAction::Preview(path)) if path == "models/ship.glb")
+        );
+
+        harness.state_mut().1 = None;
+        harness.get_by_label("➕").click();
+        harness.run();
+        assert!(
+            matches!(&harness.state().1, Some(AssetAction::Add(path)) if path == "models/ship.glb")
+        );
+
+        let at = harness.get_by_label(name).rect().center();
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+        harness.event(egui::Event::PointerMoved(at + egui::vec2(40.0, 0.0)));
+        harness.step();
+        harness.step();
+        let payload = egui::DragAndDrop::payload::<String>(&harness.ctx);
+        assert_eq!(
+            payload.as_deref().map(String::as_str),
+            Some("models/ship.glb")
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }

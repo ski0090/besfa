@@ -17,6 +17,7 @@ use bevy::{input::InputSystems, prelude::*};
 use crate::{
     edit, input,
     inspect::{Changes, Selected, report_saved, select, send_report},
+    preview::{self, ModelPreview},
     scene::{
         SCENE_PATH, asset_file, instance_prefab, save, save_instance, save_prefab, scene_file,
     },
@@ -98,6 +99,8 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
     let result = match command {
         Command::Play => {
             world.resource_mut::<Time<Virtual>>().unpause();
+            // First, so a camera inside the model is not handed back.
+            preview::close(world);
             scene_view::stop(world);
             info!("Playing.");
             Ok(())
@@ -179,6 +182,12 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             return result.map(drop);
         }
         Command::Pointer(event) => {
+            if let Some(mut preview) = world.get_resource_mut::<ModelPreview>()
+                && preview.showing
+            {
+                preview.events.push(event);
+                return Ok(());
+            }
             match world.get_resource_mut::<SceneView>() {
                 Some(mut view) if view.active => view.events.push(event),
                 _ => input::pointer(world, event),
@@ -200,8 +209,13 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             }
             Ok(())
         }
+        // Frames the previewed model, or the selection in the scene view.
         Command::Focus => {
-            if let Some(mut view) = world.get_resource_mut::<SceneView>() {
+            if let Some(mut preview) = world.get_resource_mut::<ModelPreview>()
+                && preview.showing
+            {
+                preview.fit = true;
+            } else if let Some(mut view) = world.get_resource_mut::<SceneView>() {
                 view.focus = true;
             }
             Ok(())
@@ -212,6 +226,10 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             forward,
             fast,
         } => {
+            // The preview takes the button's release, which would stop it.
+            if preview::showing_in(world) {
+                return Ok(());
+            }
             if let Some(mut view) = world.get_resource_mut::<SceneView>() {
                 view.fly = Vec3::new(right, up, forward);
                 view.fast = fast;
@@ -219,6 +237,31 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::Viewport { name } => viewport::reopen(world, &name),
+        Command::Preview { path } => {
+            if path.is_some()
+                && !world
+                    .get_resource::<SceneView>()
+                    .is_some_and(|view| view.active)
+            {
+                Err("models are previewed in edit mode".into())
+            } else {
+                preview::show(world, path)
+            }
+        }
+        Command::PreviewAnimation {
+            clip,
+            time,
+            speed,
+            looping,
+        } => {
+            preview::animate_with(world, clip, time, speed, looping);
+            Ok(())
+        }
+        Command::PreviewParts { hidden, solo } => preview::parts(world, &hidden, solo),
+        Command::PreviewLight { light } => {
+            preview::light(world, light);
+            Ok(())
+        }
     };
     if let Err(error) = &result {
         error!("Could not apply the editor's change: {error}");
