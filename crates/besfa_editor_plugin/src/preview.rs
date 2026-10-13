@@ -16,7 +16,7 @@ use std::{
 use besfa_protocol::{Button, ClipInfo, EntityInfo, LightPreset, PointerEvent, Report, clip_time};
 use bevy::{
     asset::LoadState,
-    camera::{primitives::Aabb, visibility::RenderLayers},
+    camera::{Exposure, primitives::Aabb, visibility::RenderLayers},
     gltf::Gltf,
     prelude::*,
     transform::TransformSystems,
@@ -81,8 +81,9 @@ struct Animation {
 #[derive(Component)]
 pub(crate) struct PreviewCamera(EditorCamera);
 
-#[derive(Component)]
-struct PreviewLight;
+/// The preview's light, by the preset the editor chose.
+#[derive(Component, Default)]
+struct PreviewLight(LightPreset);
 
 /// The preview's grid, drawn on its layer only.
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -100,14 +101,11 @@ impl Plugin for PreviewPlugin {
                     ..default()
                 },
             )
+            .add_systems(Startup, spawn_camera_and_light)
             .add_systems(
-                Startup,
-                (spawn_camera_and_light, |world: &mut World| {
-                    light(world, LightPreset::default());
-                })
-                    .chain(),
+                Update,
+                ((load, orbit, animate).chain(), lighting).run_if(showing),
             )
-            .add_systems(Update, (load, orbit, animate).chain().run_if(showing))
             .add_systems(
                 PostUpdate,
                 // After the scene spawner, before the Hierarchy is reported.
@@ -142,12 +140,13 @@ fn spawn_camera_and_light(mut commands: Commands) {
             near: 0.01,
             ..default()
         }),
+        AmbientLight::default(),
         layer(),
     ));
     commands.spawn((
         Name::new("Preview light"),
         EditorOnly,
-        PreviewLight,
+        PreviewLight::default(),
         DirectionalLight::default(),
         layer(),
     ));
@@ -293,10 +292,29 @@ fn meshes_to_hide(
         .collect()
 }
 
-/// Lights the model's front, -Z, except at night.
+/// Chooses the preview's light, which `lighting` keeps up.
 pub(crate) fn light(world: &mut World, preset: LightPreset) {
-    // Lux and cd/m², for Bevy's default camera exposure.
-    let (illuminance, color, from, ambient, sky) = match preset {
+    let mut lights = world.query::<&mut PreviewLight>();
+    for mut light in lights.iter_mut(world) {
+        light.0 = preset;
+    }
+}
+
+/// Lights the model's front, -Z, except at night. The presets are set for
+/// Bevy's default exposure and scaled to the one the game gives the
+/// preview's camera: duskhold gives every camera sunlight's, which left all
+/// three nearly black and alike.
+fn lighting(
+    mut lights: Query<(&PreviewLight, &mut DirectionalLight, &mut Transform)>,
+    mut cameras: Query<(Option<&Exposure>, &mut AmbientLight), With<PreviewCamera>>,
+) {
+    let (Ok((preset, mut light, mut transform)), Ok((exposure, mut ambient))) =
+        (lights.single_mut(), cameras.single_mut())
+    else {
+        return;
+    };
+    // Lux and cd/m².
+    let (illuminance, color, from, brightness, sky) = match preset.0 {
         LightPreset::Studio => (
             6000.0,
             Color::WHITE,
@@ -319,28 +337,20 @@ pub(crate) fn light(world: &mut World, preset: LightPreset) {
             Color::srgb(0.4, 0.45, 0.7),
         ),
     };
-    let mut lights =
-        world.query_filtered::<(&mut DirectionalLight, &mut Transform), With<PreviewLight>>();
-    for (mut light, mut transform) in lights.iter_mut(world) {
-        *light = DirectionalLight {
-            illuminance,
-            color,
-            shadow_maps_enabled: true,
-            ..default()
-        };
-        *transform = Transform::from_translation(from).looking_at(Vec3::ZERO, Vec3::Y);
-    }
-    let cameras: Vec<Entity> = world
-        .query_filtered::<Entity, With<PreviewCamera>>()
-        .iter(world)
-        .collect();
-    for camera in cameras {
-        world.entity_mut(camera).insert(AmbientLight {
-            color: sky,
-            brightness: ambient,
-            ..default()
-        });
-    }
+    let ev100 = exposure.map_or(Exposure::EV100_BLENDER, |exposure| exposure.ev100);
+    let scale = (ev100 - Exposure::EV100_BLENDER).exp2();
+    *light = DirectionalLight {
+        illuminance: illuminance * scale,
+        color,
+        shadow_maps_enabled: true,
+        ..default()
+    };
+    *transform = Transform::from_translation(from).looking_at(Vec3::ZERO, Vec3::Y);
+    *ambient = AmbientLight {
+        color: sky,
+        brightness: brightness * scale,
+        ..default()
+    };
 }
 
 /// Keeps what the model spawns, whenever it spawns it, on the preview's
@@ -637,6 +647,38 @@ mod tests {
             [],
             "the root is not a part"
         );
+    }
+
+    #[test]
+    fn lights_as_brightly_under_the_exposure_the_game_sets() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        let camera = world
+            .spawn((
+                PreviewCamera(framing(Vec3::ZERO, Vec3::ONE)),
+                AmbientLight::default(),
+            ))
+            .id();
+        let light = world
+            .spawn((
+                PreviewLight(LightPreset::Night),
+                DirectionalLight::default(),
+            ))
+            .id();
+        world.run_system_once(lighting).unwrap();
+        assert_eq!(
+            world.get::<DirectionalLight>(light).unwrap().illuminance,
+            1500.0
+        );
+
+        world.entity_mut(camera).insert(Exposure::SUNLIGHT);
+        world.run_system_once(lighting).unwrap();
+        let illuminance = world.get::<DirectionalLight>(light).unwrap().illuminance;
+        // 2^(15 - 9.7) ≈ 39 times as bright.
+        assert!((illuminance / 1500.0 - 39.4).abs() < 0.1, "{illuminance}");
+        let brightness = world.get::<AmbientLight>(camera).unwrap().brightness;
+        assert!((brightness / 120.0 - 39.4).abs() < 0.1, "{brightness}");
     }
 
     #[test]

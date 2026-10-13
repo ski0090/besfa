@@ -36,6 +36,9 @@ pub struct ModelPreview {
     loaded: Option<Loaded>,
     clip: Option<usize>,
     playing: bool,
+    /// The chosen clip's length, apart from `loaded`, which the panel
+    /// takes while it shows.
+    duration: f32,
     /// The clip's time at `since`.
     time: f32,
     since: Instant,
@@ -53,6 +56,7 @@ impl ModelPreview {
             loaded: None,
             clip: None,
             playing: true,
+            duration: 0.0,
             time: 0.0,
             since: Instant::now(),
             speed: 1.0,
@@ -96,6 +100,10 @@ impl ModelPreview {
             self.clip = (!clips.is_empty()).then_some(0);
             self.rebase(0.0);
         }
+        self.duration = self
+            .clip
+            .and_then(|clip| clips.get(clip))
+            .map_or(0.0, |clip| clip.duration);
         self.loaded = Some(Loaded {
             clips,
             parts,
@@ -105,17 +113,10 @@ impl ModelPreview {
         vec![self.animation(), self.parts()]
     }
 
-    fn duration(&self) -> f32 {
-        let clips = self.loaded.as_ref().map(|loaded| loaded.clips.as_slice());
-        self.clip
-            .and_then(|clip| clips?.get(clip))
-            .map_or(0.0, |clip| clip.duration)
-    }
-
     fn now(&self) -> f32 {
         let speed = if self.playing { self.speed } else { 0.0 };
         let seconds = self.since.elapsed().as_secs_f32();
-        clip_time(self.time, seconds, speed, self.duration(), self.looping)
+        clip_time(self.time, seconds, speed, self.duration, self.looping)
     }
 
     /// Restarts the clock at `time`, before a control changes how it runs.
@@ -207,6 +208,7 @@ impl ModelPreview {
                         .clicked()
                     {
                         self.clip = Some(index);
+                        self.duration = clip.duration;
                         self.rebase(0.0);
                         changed = true;
                     }
@@ -329,6 +331,24 @@ mod tests {
             name: name.into(),
             duration: 1.0,
         }
+    }
+
+    #[test]
+    fn shows_the_clip_time_while_the_panel_holds_the_report() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut preview = ModelPreview::new("models/hero.glb".into());
+        preview.loaded(vec![clip("Idle")], vec![], None, None);
+        preview.playing = false;
+        preview.rebase(0.5);
+        let mut harness = Harness::new_ui_state(
+            |ui, preview: &mut ModelPreview| {
+                preview.ui(ui);
+            },
+            preview,
+        );
+        harness.run();
+        harness.get_by_label("0.50 / 1.00 s");
     }
 
     #[test]
