@@ -20,12 +20,14 @@ mod edit;
 mod edit_mode;
 mod input;
 mod inspect;
+mod part_changes;
 mod preview;
 mod reimport;
 mod scene;
 mod scene_view;
 mod viewport;
 
+pub use part_changes::{PartChange, PartChanges};
 pub use reimport::Reimported;
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
 pub use scene_view::EditorOnly;
@@ -33,7 +35,11 @@ pub use scene_view::EditorOnly;
 /// `DefaultPlugins` plus the scene file, adjusted to start in edit mode and
 /// render into the editor viewport when the editor launched the game.
 pub fn default_plugins() -> PluginGroupBuilder {
-    let mut plugins = DefaultPlugins.build().add(scene::ScenePlugin);
+    // Saved changes to placed models' parts apply in play as well.
+    let mut plugins = DefaultPlugins
+        .build()
+        .add(scene::ScenePlugin)
+        .add(part_changes::PartChangesPlugin);
     if edit_mode::requested() {
         plugins = plugins
             .add(edit_mode::EditModePlugin)

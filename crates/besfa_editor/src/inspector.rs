@@ -278,6 +278,10 @@ fn placement(
         tag(
             ui,
             &match placed.and_then(|p| p.asset.as_deref()) {
+                // The game keeps changes to a model's parts on the model.
+                Some(asset) if asset.ends_with(".glb") || asset.ends_with(".gltf") => {
+                    format!("Part of {asset}; changes to it are saved on the placed model.")
+                }
                 Some(asset) => format!("Part of {asset}; Save scene skips it."),
                 None => "Spawned by the game while it runs; Save scene skips it.".into(),
             },

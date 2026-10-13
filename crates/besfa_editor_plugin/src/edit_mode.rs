@@ -17,6 +17,7 @@ use bevy::{input::InputSystems, prelude::*};
 use crate::{
     edit, input,
     inspect::{Changes, Selected, report_saved, select, send_report},
+    part_changes,
     preview::{self, ModelPreview},
     reimport,
     scene::{
@@ -124,13 +125,21 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             id,
             component,
             value,
-        } => entity(id).and_then(|entity| edit::set(world, entity, &component, &value)),
-        Command::Insert { id, component } => {
-            entity(id).and_then(|entity| edit::insert(world, entity, &component))
-        }
-        Command::Remove { id, component } => {
-            entity(id).and_then(|entity| edit::remove(world, entity, &component))
-        }
+        } => entity(id).and_then(|entity| {
+            edit::set(world, entity, &component, &value)?;
+            part_changes::edited(world, entity, &component);
+            Ok(())
+        }),
+        Command::Insert { id, component } => entity(id).and_then(|entity| {
+            edit::insert(world, entity, &component)?;
+            part_changes::edited(world, entity, &component);
+            Ok(())
+        }),
+        Command::Remove { id, component } => entity(id).and_then(|entity| {
+            edit::remove(world, entity, &component)?;
+            part_changes::edited(world, entity, &component);
+            Ok(())
+        }),
         Command::Spawn { kind } => {
             let entity = edit::spawn(world, kind);
             spawned(world, entity);
