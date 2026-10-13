@@ -96,6 +96,11 @@ struct Animation {
     looping: bool,
 }
 
+/// A model shown apart from the scene: what it spawns goes on the root's
+/// render layer and stays out of the Hierarchy and the scene file.
+#[derive(Component)]
+pub(crate) struct Isolated;
+
 /// Orbits the previewed model the way the scene view's camera does.
 #[derive(Component)]
 pub(crate) struct PreviewCamera(EditorCamera);
@@ -146,8 +151,10 @@ impl Plugin for PreviewPlugin {
             .add_systems(
                 PostUpdate,
                 // After the scene spawner, before the Hierarchy is reported.
-                (mark_model, draw.after(TransformSystems::Propagate)).run_if(showing),
-            );
+                draw.after(TransformSystems::Propagate).run_if(showing),
+            )
+            // After the scene spawner, before the Hierarchy is reported.
+            .add_systems(PostUpdate, isolate);
     }
 }
 
@@ -209,6 +216,7 @@ pub(crate) fn show(world: &mut World, path: Option<String>) -> Result<(), String
         let root = world
             .spawn((
                 Name::new("Model preview"),
+                Isolated,
                 EditorOnly,
                 layer(),
                 Transform::default(),
@@ -442,8 +450,17 @@ fn lighting(
     else {
         return;
     };
+    (*light, *transform, *ambient) = lit(preset.0, exposure);
+}
+
+/// The light, where it shines from and the ambient light of `preset`, as
+/// bright under `exposure` as under Bevy's default.
+pub(crate) fn lit(
+    preset: LightPreset,
+    exposure: Option<&Exposure>,
+) -> (DirectionalLight, Transform, AmbientLight) {
     // Lux and cd/m².
-    let (illuminance, color, from, brightness, sky) = match preset.0 {
+    let (illuminance, color, from, brightness, sky) = match preset {
         LightPreset::Studio => (
             6000.0,
             Color::WHITE,
@@ -468,18 +485,20 @@ fn lighting(
     };
     let ev100 = exposure.map_or(Exposure::EV100_BLENDER, |exposure| exposure.ev100);
     let scale = (ev100 - Exposure::EV100_BLENDER).exp2();
-    *light = DirectionalLight {
-        illuminance: illuminance * scale,
-        color,
-        shadow_maps_enabled: true,
-        ..default()
-    };
-    *transform = Transform::from_translation(from).looking_at(Vec3::ZERO, Vec3::Y);
-    *ambient = AmbientLight {
-        color: sky,
-        brightness: brightness * scale,
-        ..default()
-    };
+    (
+        DirectionalLight {
+            illuminance: illuminance * scale,
+            color,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::from_translation(from).looking_at(Vec3::ZERO, Vec3::Y),
+        AmbientLight {
+            color: sky,
+            brightness: brightness * scale,
+            ..default()
+        },
+    )
 }
 
 /// The model spawned anew, after its file was loaded again: it is reported
@@ -499,20 +518,19 @@ fn respawned(ready: On<WorldInstanceReady>, mut preview: ResMut<ModelPreview>) {
     preview.markers.clear();
 }
 
-/// Keeps what the model spawns, whenever it spawns it, on the preview's
-/// layer and out of the Hierarchy.
-fn mark_model(
+/// Keeps what an isolated model spawns, whenever it spawns it, on the
+/// model's layer and out of the Hierarchy.
+fn isolate(
     mut commands: Commands,
-    preview: Res<ModelPreview>,
+    roots: Query<(Entity, &RenderLayers), With<Isolated>>,
     children: Query<&Children>,
     unmarked: Query<(), Without<EditorOnly>>,
 ) {
-    let Some(root) = preview.root else {
-        return;
-    };
-    for entity in children.iter_descendants(root) {
-        if unmarked.contains(entity) {
-            commands.entity(entity).insert((EditorOnly, layer()));
+    for (root, layers) in &roots {
+        for entity in children.iter_descendants(root) {
+            if unmarked.contains(entity) {
+                commands.entity(entity).insert((EditorOnly, layers.clone()));
+            }
         }
     }
 }
@@ -765,7 +783,7 @@ fn material_info(material: &StandardMaterial, name: Option<String>) -> MaterialI
 }
 
 /// The world bounds of the meshes among `entities`.
-fn bounds(world: &World, entities: &[Entity]) -> Option<(Vec3, Vec3)> {
+pub(crate) fn bounds(world: &World, entities: &[Entity]) -> Option<(Vec3, Vec3)> {
     let mut min = Vec3::INFINITY;
     let mut max = Vec3::NEG_INFINITY;
     for &entity in entities {
@@ -793,7 +811,7 @@ fn bounds(world: &World, entities: &[Entity]) -> Option<(Vec3, Vec3)> {
 /// Looking at the model from `view`, near enough to fill the view with it.
 /// Models made for Bevy face its forward, -Z; the camera sits along its own
 /// +Z, so a yaw of π puts it in front.
-fn framing(min: Vec3, max: Vec3, view: View) -> EditorCamera {
+pub(crate) fn framing(min: Vec3, max: Vec3, view: View) -> EditorCamera {
     let radius = ((max - min).length() * 0.5).max(0.05);
     // Half of Bevy's default vertical field of view, 45°.
     let half_view = FRAC_PI_2 * 0.25;

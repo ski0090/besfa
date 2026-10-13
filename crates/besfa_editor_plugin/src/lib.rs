@@ -25,6 +25,7 @@ mod preview;
 mod reimport;
 mod scene;
 mod scene_view;
+mod thumbnail;
 mod viewport;
 
 pub use part_changes::{PartChange, PartChanges};
@@ -46,7 +47,8 @@ pub fn default_plugins() -> PluginGroupBuilder {
             .add(inspect::InspectPlugin)
             .add(scene_view::SceneViewPlugin)
             .add(preview::PreviewPlugin)
-            .add(reimport::ReimportPlugin);
+            .add(reimport::ReimportPlugin)
+            .add(thumbnail::ThumbnailPlugin);
     }
     let Some(config) = viewport::ViewportConfig::from_env() else {
         return plugins;

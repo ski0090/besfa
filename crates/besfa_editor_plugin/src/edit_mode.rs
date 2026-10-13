@@ -25,7 +25,7 @@ use crate::{
         scene_file,
     },
     scene_view::{self, SceneView},
-    viewport,
+    thumbnail, viewport,
 };
 
 pub(crate) fn requested() -> bool {
@@ -282,6 +282,18 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::PreviewSelect { id } => preview::select(world, id),
+        Command::Thumbnail { path, file } => {
+            if !(inside(&path) && (path.ends_with(".glb") || path.ends_with(".gltf"))) {
+                Err(format!(
+                    "{path} is not a glTF path inside the asset directory"
+                ))
+            } else if !(inside(&file) && file.ends_with(".png")) {
+                Err(format!("{file} is not a .png path inside the project"))
+            } else {
+                thumbnail::request(world, path, project_file(&file));
+                Ok(())
+            }
+        }
         Command::Reimport { path } => {
             if inside(&path) && (path.ends_with(".glb") || path.ends_with(".gltf")) {
                 reimport::reimport(world, path)

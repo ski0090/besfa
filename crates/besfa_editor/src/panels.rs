@@ -204,10 +204,24 @@ impl Reimport {
     }
 }
 
+/// Where the game writes models' thumbnails, in the project: a build
+/// folder version control leaves out.
+const THUMBNAILS: &str = "target/besfa/thumbnails";
+
+/// The thumbnail of the model at asset `path`, relative to the project.
+pub fn thumbnail_file(path: &str) -> String {
+    format!("{THUMBNAILS}/{path}.png")
+}
+
+/// Thumbnails' sides in the tree and in a model's tooltip, in points.
+const THUMBNAIL_ROW: f32 = 18.0;
+const THUMBNAIL_TIP: f32 = 128.0;
+
 /// The project's asset folder as a tree that follows changes on disk.
 /// Models, scenes and prefabs can be added to the scene with a button or
 /// dragged out as their asset path; double-clicking a model previews it.
-/// Models that change on disk are noticed, to load them again.
+/// Models show their thumbnails, and models that change on disk are
+/// noticed, to load them again and picture them anew.
 pub struct AssetBrowser {
     directory: PathBuf,
     /// None while there is no asset folder.
@@ -217,6 +231,13 @@ pub struct AssetBrowser {
     /// listing, so it may still be being written.
     models: HashMap<String, (SystemTime, bool)>,
     pub reimports: HashMap<String, Reimport>,
+    /// Each model thumbnail's modification time, at the last listing.
+    thumbnails: HashMap<String, SystemTime>,
+    /// Thumbnails read, by the modification time of the file read; None
+    /// for a file that could not be read.
+    textures: HashMap<String, (SystemTime, Option<egui::TextureHandle>)>,
+    /// The model's modification time each thumbnail was asked for at.
+    asked: HashMap<String, SystemTime>,
 }
 
 /// How often the asset folder is listed again.
@@ -231,7 +252,47 @@ impl AssetBrowser {
             listed: None,
             models: HashMap::new(),
             reimports: HashMap::new(),
+            thumbnails: HashMap::new(),
+            textures: HashMap::new(),
+            asked: HashMap::new(),
         }
+    }
+
+    fn project(&self) -> &Path {
+        self.directory.parent().unwrap_or(&self.directory)
+    }
+
+    /// Models without a thumbnail, or with one older than the model, not
+    /// asked for since the model last changed.
+    pub fn wanted_thumbnails(&self) -> Vec<String> {
+        self.models
+            .iter()
+            .filter(|(path, (modified, _))| {
+                self.thumbnails
+                    .get(*path)
+                    .is_none_or(|made| made < modified)
+                    && self.asked.get(*path) != Some(modified)
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
+    /// Notes that the game was asked for the thumbnail of `path`.
+    pub fn asked(&mut self, path: &str) {
+        if let Some((modified, _)) = self.models.get(path) {
+            self.asked.insert(path.to_owned(), *modified);
+        }
+    }
+
+    /// A new game process: what the last one was asked for and did not
+    /// write is asked for again.
+    pub fn forget_asked(&mut self) {
+        self.asked.clear();
+    }
+
+    /// Lists the folder at the next poll, for a file just written.
+    pub fn refresh(&mut self) {
+        self.listed = None;
     }
 
     /// Lists the folder again now and then, whether or not it shows, and
@@ -276,6 +337,7 @@ impl AssetBrowser {
         settled
     }
 
+    /// The folder's files, and the models' thumbnails.
     fn list(&mut self) {
         self.rows = self.directory.is_dir().then(|| {
             let mut rows = Vec::new();
@@ -283,6 +345,18 @@ impl AssetBrowser {
             rows
         });
         self.listed = Some(Instant::now());
+        let project = self.project().to_path_buf();
+        self.thumbnails = self
+            .rows
+            .iter()
+            .flatten()
+            .filter(|row| can_preview(&row.path))
+            .filter_map(|row| {
+                let file = project.join(thumbnail_file(&row.path));
+                let made = fs::metadata(file).and_then(|file| file.modified()).ok()?;
+                Some((row.path.clone(), made))
+            })
+            .collect();
     }
 
     /// Returns what to do with an asset; nothing is added or previewed
@@ -291,7 +365,15 @@ impl AssetBrowser {
         if self.listed.is_none() {
             self.list();
         }
-        let Some(rows) = &self.rows else {
+        let project = self.project().to_path_buf();
+        let Self {
+            rows,
+            thumbnails,
+            textures,
+            reimports,
+            ..
+        } = self;
+        let Some(rows) = rows else {
             ui.centered_and_justified(|ui| {
                 ui.label(RichText::new("No assets folder").color(MUTED))
             });
@@ -308,19 +390,42 @@ impl AssetBrowser {
                 } else {
                     "🗋"
                 };
-                let label = RichText::new(format!("{icon} {}", row.name)).color(TEXT);
+                let thumbnail = thumbnails.get(&row.path).and_then(|&made| {
+                    let file = project.join(thumbnail_file(&row.path));
+                    texture(ui.ctx(), textures, &row.path, &file, made)
+                });
+                let label = RichText::new(&row.name).color(TEXT);
+                let picture = |ui: &mut Ui, side: f32| {
+                    if let Some(texture) = &thumbnail {
+                        ui.image((texture.id(), egui::vec2(side, side)));
+                    }
+                };
+                // The thumbnail, or the icon, in a slot of the same size.
+                let slot = |ui: &mut Ui| {
+                    let side = egui::vec2(THUMBNAIL_ROW, THUMBNAIL_ROW);
+                    match &thumbnail {
+                        Some(texture) => ui.image((texture.id(), side)),
+                        None => ui.add_sized(side, Label::new(RichText::new(icon).color(TEXT))),
+                    };
+                };
                 ui.horizontal(|ui| {
                     ui.add_space(row.depth as f32 * 16.0);
                     if placeable {
                         let id = Id::new(("asset", &row.path));
                         let name = ui.dnd_drag_source(id, row.path.clone(), |ui| {
-                            ui.label(label);
+                            ui.horizontal(|ui| {
+                                slot(ui);
+                                ui.label(label);
+                            });
                         });
                         // The drag source on top takes the row's clicks from
                         // egui, so a double-click over it is read directly.
                         // Not `hovered`: egui clears it while the button is down.
                         if can_preview(&row.path) {
-                            let name = name.response.on_hover_text("Double-click to preview");
+                            let name = name.response.on_hover_ui(|ui| {
+                                picture(ui, THUMBNAIL_TIP);
+                                ui.label("Double-click to preview");
+                            });
                             if name.contains_pointer()
                                 && ui.input(|i| {
                                     i.pointer.button_double_clicked(PointerButton::Primary)
@@ -337,9 +442,10 @@ impl AssetBrowser {
                             action = Some(AssetAction::Add(row.path.clone()));
                         }
                     } else {
+                        slot(ui);
                         ui.label(label);
                     }
-                    if let Some(reimport) = self.reimports.get(&row.path) {
+                    if let Some(reimport) = reimports.get(&row.path) {
                         reimport.ui(ui);
                     }
                 });
@@ -347,6 +453,27 @@ impl AssetBrowser {
         });
         action
     }
+}
+
+/// The thumbnail of the model at `path` from `file`, written at `made`; read
+/// again once the file changes.
+fn texture(
+    ctx: &egui::Context,
+    textures: &mut HashMap<String, (SystemTime, Option<egui::TextureHandle>)>,
+    path: &str,
+    file: &Path,
+    made: SystemTime,
+) -> Option<egui::TextureHandle> {
+    if textures.get(path).is_none_or(|(read, _)| *read != made) {
+        let texture = image::open(file).ok().map(|image| {
+            let image = image.to_rgba8();
+            let size = [image.width() as usize, image.height() as usize];
+            let pixels = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+            ctx.load_texture(path, pixels, egui::TextureOptions::LINEAR)
+        });
+        textures.insert(path.to_owned(), (made, texture));
+    }
+    textures.get(path)?.1.clone()
 }
 
 /// `directory`'s folders, then its files, each folder followed by what is in
@@ -427,6 +554,42 @@ mod tests {
     }
 
     #[test]
+    fn asks_for_missing_and_old_thumbnails_once() {
+        let dir = std::env::temp_dir().join(format!("besfa_thumbnails_{}", std::process::id()));
+        let assets = dir.join("assets");
+        fs::create_dir_all(assets.join("models")).unwrap();
+        fs::write(assets.join("models/ship.glb"), "").unwrap();
+        fs::write(assets.join("models/boat.glb"), "").unwrap();
+        let ctx = egui::Context::default();
+        let mut browser = AssetBrowser::new(assets.clone());
+        browser.poll(&ctx);
+        let mut wanted = browser.wanted_thumbnails();
+        wanted.sort();
+        assert_eq!(wanted, ["models/boat.glb", "models/ship.glb"]);
+
+        browser.asked("models/ship.glb");
+        let boat = dir.join(thumbnail_file("models/boat.glb"));
+        fs::create_dir_all(boat.parent().unwrap()).unwrap();
+        fs::write(&boat, "").unwrap();
+        browser.refresh();
+        browser.poll(&ctx);
+        assert!(browser.wanted_thumbnails().is_empty(), "asked, and made");
+
+        // The model changed after its thumbnail was made.
+        let later = SystemTime::now() + Duration::from_secs(10);
+        fs::File::options()
+            .write(true)
+            .open(assets.join("models/boat.glb"))
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        browser.refresh();
+        browser.poll(&ctx);
+        assert_eq!(browser.wanted_thumbnails(), ["models/boat.glb"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn notices_a_model_change_once_it_is_written() {
         let dir = std::env::temp_dir().join(format!("besfa_models_{}", std::process::id()));
         fs::create_dir_all(dir.join("models")).unwrap();
@@ -471,7 +634,7 @@ mod tests {
             (AssetBrowser::new(dir.clone()), None),
         );
         harness.run();
-        let name = "⛶ ship.glb";
+        let name = "ship.glb";
 
         harness.get_by_label(name).click();
         harness.step();

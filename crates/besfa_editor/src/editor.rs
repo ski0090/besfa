@@ -207,6 +207,7 @@ impl Editor {
         for path in self.assets.poll(&ctx) {
             self.reimport(path);
         }
+        self.ask_thumbnails();
         if self.resize_at.is_some_and(|at| Instant::now() >= at) {
             self.resize_viewport();
         }
@@ -353,6 +354,7 @@ impl Editor {
         self.assets
             .reimports
             .retain(|_, reimport| !matches!(reimport, Reimport::Running));
+        self.assets.forget_asked();
         let shared = self.viewport.as_ref().zip(self.render.as_ref());
         let shared = shared.map(|(viewport, render)| (viewport.name.clone(), adapter_name(render)));
         // Read by besfa_editor_plugin: start paused, play on `play`.
@@ -563,6 +565,10 @@ impl Editor {
                 };
                 self.assets.reimports.insert(path, reimport);
             }
+            Report::Thumbnail { path, error } => match error {
+                Some(error) => self.log(format!("Could not picture {path}: {error}")),
+                None => self.assets.refresh(),
+            },
             Report::Screenshot { path, error } => {
                 match &error {
                     None => self.log(format!("Saved {path}")),
@@ -755,6 +761,19 @@ impl Editor {
     /// Puts the asset at `path` in the scene; the game reports it as spawned.
     fn instantiate(&mut self, path: String) {
         self.edit(Command::Instantiate { path }, vec![]);
+    }
+
+    /// Asks the game in edit mode to picture the models without an up to
+    /// date thumbnail.
+    fn ask_thumbnails(&mut self) {
+        if self.game.is_none() || self.playing || self.protocol.is_none_or(|version| version < 3) {
+            return;
+        }
+        for path in self.assets.wanted_thumbnails() {
+            let file = panels::thumbnail_file(&path);
+            self.assets.asked(&path);
+            self.send(Command::Thumbnail { path, file });
+        }
     }
 
     /// Loads the model at `path` again in the game after its file changed;

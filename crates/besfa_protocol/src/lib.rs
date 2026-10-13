@@ -22,8 +22,9 @@ use serde_json::Value;
 /// 3. The preview's views and screenshots: [`Command::PreviewView`] and
 ///    [`Command::PreviewScreenshot`], answered by [`Report::Screenshot`];
 ///    what a previewed model is made of, [`Command::PreviewOverlays`],
-///    [`Command::PreviewSelect`] for a part's components, and
-///    [`Command::Reimport`], answered by [`Report::Reimported`].
+///    [`Command::PreviewSelect`] for a part's components,
+///    [`Command::Reimport`], answered by [`Report::Reimported`], and
+///    [`Command::Thumbnail`], answered by [`Report::Thumbnail`].
 pub const VERSION: u32 = 3;
 
 /// Starts every report line.
@@ -185,6 +186,14 @@ pub enum Command {
     /// every model showing it, placed or previewed, has spawned it anew.
     Reimport {
         path: String,
+    },
+    /// Renders the glTF model at `path`, relative to the asset directory,
+    /// on its own and writes the picture to `file`, a PNG file relative to
+    /// the project; reports it as `thumbnail`. One model at a time, in the
+    /// order asked.
+    Thumbnail {
+        path: String,
+        file: String,
     },
 }
 
@@ -357,6 +366,8 @@ pub enum Report {
     },
     /// The outcome of `preview_screenshot`.
     Screenshot { path: String, error: Option<String> },
+    /// The outcome of `thumbnail`.
+    Thumbnail { path: String, error: Option<String> },
     /// The outcome of `reimport`.
     Reimported { path: String, error: Option<String> },
     /// A report from a newer plugin than this protocol knows.
