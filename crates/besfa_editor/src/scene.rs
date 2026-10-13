@@ -5,6 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use besfa_protocol::{Command, ComponentData, ComponentType, EntityInfo, Report, SystemInfo};
 
+use crate::inspector::Inspected;
+
 /// What the running game reports about its world, and whether the editor
 /// changed it since the last save.
 #[derive(Default)]
@@ -27,6 +29,25 @@ pub struct Scene {
 }
 
 impl Scene {
+    /// The selected entity, for the inspector.
+    pub fn inspected(&self) -> Inspected<'_> {
+        let entity = self.selected_entity();
+        Inspected {
+            selected: self.selected,
+            entity,
+            placement: entity.and_then(|entity| self.placement(entity)),
+            components: &self.components,
+            systems: &self.systems,
+            addable: &self.addable,
+            crate_name: self.crate_name.as_deref(),
+        }
+    }
+
+    /// The count of `set`, `insert` and `remove` commands sent to this game.
+    pub fn changes(&self) -> u64 {
+        self.changes
+    }
+
     pub fn selected_entity(&self) -> Option<&EntityInfo> {
         self.entities
             .iter()

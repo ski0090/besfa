@@ -9,12 +9,9 @@ use besfa_protocol::{ComponentData, ComponentType, EntityInfo, SystemInfo, crate
 use eframe::egui::{self, Id, Label, RichText, ScrollArea, TextEdit, Ui};
 use serde_json::{Value, json};
 
-use crate::{
-    panels::{MUTED, TEXT, panel_header, section, tag},
-    scene::Scene,
-};
+use crate::panels::{MUTED, TEXT, panel_header, section, tag};
 
-const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
+pub const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
 const NAME: &str = "bevy_ecs::name::Name";
 
 /// Fields Bevy recomputes while the game runs, out of the simple view.
@@ -31,6 +28,21 @@ pub enum Action {
     ApplyPrefab(u64),
 }
 
+/// What the inspector shows: the scene's selected entity, or a part of the
+/// previewed model, with what the game reported about it.
+pub struct Inspected<'a> {
+    pub selected: Option<u64>,
+    pub entity: Option<&'a EntityInfo>,
+    /// The placed file the entity is part of, if any.
+    pub placement: Option<&'a EntityInfo>,
+    pub components: &'a [ComponentData],
+    pub systems: &'a [SystemInfo],
+    /// Components the game can add with a default value.
+    pub addable: &'a [ComponentType],
+    /// The game's own crate, listed before Bevy's.
+    pub crate_name: Option<&'a str>,
+}
+
 #[derive(Default)]
 pub struct Inspector {
     details: bool,
@@ -39,115 +51,147 @@ pub struct Inspector {
 }
 
 impl Inspector {
-    pub fn ui(&mut self, ui: &mut Ui, scene: &Scene, can_apply_prefab: bool) -> Option<Action> {
-        let mut action = None;
-        panel_header(ui, "Inspector", |ui| {
-            let (icon, tip) = if self.details {
-                ("⏶", "Hide details")
-            } else {
-                ("⏷", "Show details")
-            };
-            if ui.small_button(icon).on_hover_text(tip).clicked() {
-                self.details = !self.details;
+    pub fn ui(&mut self, ui: &mut Ui, scene: &Inspected, can_apply_prefab: bool) -> Option<Action> {
+        panel_header(ui, "Inspector", |ui| self.details_button(ui));
+        ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                ui.add_space(8.0);
+                self.contents(ui, scene, can_apply_prefab)
+            })
+            .inner
+    }
+
+    /// Switches between what there is to edit and every detail.
+    pub fn details_button(&mut self, ui: &mut Ui) {
+        let (icon, tip) = if self.details {
+            ("⏶", "Hide details")
+        } else {
+            ("⏷", "Show details")
+        };
+        if ui.small_button(icon).on_hover_text(tip).clicked() {
+            self.details = !self.details;
+        }
+    }
+
+    /// The inspector without its header, for a panel that scrolls it.
+    pub fn contents(
+        &mut self,
+        ui: &mut Ui,
+        scene: &Inspected,
+        can_apply_prefab: bool,
+    ) -> Option<Action> {
+        let name = self.name(ui, scene);
+        self.components(ui, scene, can_apply_prefab).or(name)
+    }
+
+    /// Simply, the name's field; otherwise the entity's label.
+    pub fn name(&mut self, ui: &mut Ui, scene: &Inspected) -> Option<Action> {
+        let (selected, entity) = (scene.selected, scene.entity);
+        match self
+            .name_component(scene)
+            .and_then(|name| name.value.as_ref())
+        {
+            Some(value) => value_editor(ui, Id::new((selected, NAME)), value, false, &[])
+                .map(|value| Action::Set(NAME.into(), value)),
+            None => {
+                let text = match (selected, entity) {
+                    (None, _) => "Select an entity in the Hierarchy".into(),
+                    (Some(id), None) => format!("Entity {id} is gone"),
+                    (_, Some(entity)) => entity.label(),
+                };
+                let color = if entity.is_some() { TEXT } else { MUTED };
+                ui.label(RichText::new(text).strong().color(color));
+                None
             }
-        });
-        let selected = scene.selected;
-        let entity = scene.selected_entity();
-        // Simply, the name is edited in the header.
-        let name = scene
+        }
+    }
+
+    /// The `Name` component when [`Self::name`] edits it.
+    fn name_component<'a>(&self, scene: &Inspected<'a>) -> Option<&'a ComponentData> {
+        scene
             .components
             .iter()
             .find(|component| component.path == NAME && component.editable())
-            .filter(|_| !self.details);
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            ui.add_space(8.0);
-            match name.and_then(|name| name.value.as_ref()) {
-                Some(value) => {
-                    if let Some(value) =
-                        value_editor(ui, Id::new((selected, NAME)), value, false, &[])
-                    {
-                        action = Some(Action::Set(NAME.into(), value));
-                    }
+            .filter(|_| !self.details)
+    }
+
+    /// Where the entity comes from, its components and the game's systems.
+    pub fn components(
+        &mut self,
+        ui: &mut Ui,
+        scene: &Inspected,
+        can_apply_prefab: bool,
+    ) -> Option<Action> {
+        let mut action = None;
+        let (selected, entity) = (scene.selected, scene.entity);
+        let name = self.name_component(scene);
+        if let Some(entity) = entity {
+            placement(ui, scene, entity, can_apply_prefab, &mut action);
+        }
+        if selected.is_some() {
+            section(ui, "Components");
+            let mut tile = |ui: &mut Ui, component: &ComponentData| {
+                if let Some(change) = component_tile(ui, selected, component, self.details) {
+                    action = Some(change);
                 }
-                None => {
-                    let text = match (selected, entity) {
-                        (None, _) => "Select an entity in the Hierarchy".into(),
-                        (Some(id), None) => format!("Entity {id} is gone"),
-                        (_, Some(entity)) => entity.label(),
-                    };
-                    let color = if entity.is_some() { TEXT } else { MUTED };
-                    ui.label(RichText::new(text).strong().color(color));
-                }
-            }
-            if let Some(entity) = entity {
-                placement(ui, scene, entity, can_apply_prefab, &mut action);
-            }
-            if selected.is_some() {
-                section(ui, "Components");
-                let mut tile = |ui: &mut Ui, component: &ComponentData| {
-                    if let Some(change) = component_tile(ui, selected, component, self.details) {
-                        action = Some(change);
-                    }
-                };
-                if self.details {
-                    // Groups that hold something the scene file keeps start open.
-                    let expand = |components: &[&ComponentData]| components.iter().any(|c| c.saved);
-                    crate_groups(
-                        ui,
-                        "components",
-                        &scene.components,
-                        |c| c.crate_name(),
-                        scene,
-                        expand,
-                        &mut tile,
-                    );
-                } else {
-                    for component in editable(scene, name) {
-                        tile(ui, component);
-                    }
-                }
-                if entity.is_some() && ui.button("➕ Add component").clicked() {
-                    self.adding = Some(String::new());
-                }
-            }
-            let system_row = |ui: &mut Ui, system: &SystemInfo| {
-                let name = system
-                    .name
-                    .strip_prefix(&format!("{}::", crate_of(&system.name)));
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    ui.label(RichText::new(&system.schedule).small().color(MUTED));
-                    ui.label(
-                        RichText::new(name.unwrap_or(&system.name))
-                            .small()
-                            .color(TEXT),
-                    );
-                });
             };
             if self.details {
-                section(ui, "Systems");
+                // Groups that hold something the scene file keeps start open.
+                let expand = |components: &[&ComponentData]| components.iter().any(|c| c.saved);
                 crate_groups(
                     ui,
-                    "systems",
-                    &scene.systems,
-                    |s| crate_of(&s.name),
-                    scene,
-                    |_| false,
-                    system_row,
+                    "components",
+                    scene.components,
+                    |c| c.crate_name(),
+                    scene.crate_name,
+                    expand,
+                    &mut tile,
                 );
             } else {
-                let game = |system: &&SystemInfo| {
-                    Some(crate_of(&system.name)) == scene.crate_name.as_deref()
-                };
-                let systems: Vec<_> = scene.systems.iter().filter(game).collect();
-                if !systems.is_empty() {
-                    section(ui, "Systems");
-                    for system in systems {
-                        system_row(ui, system);
-                    }
+                for component in editable(scene, name) {
+                    tile(ui, component);
                 }
             }
-        });
+            if entity.is_some() && ui.button("➕ Add component").clicked() {
+                self.adding = Some(String::new());
+            }
+        }
+        let system_row = |ui: &mut Ui, system: &SystemInfo| {
+            let name = system
+                .name
+                .strip_prefix(&format!("{}::", crate_of(&system.name)));
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                ui.label(RichText::new(&system.schedule).small().color(MUTED));
+                ui.label(
+                    RichText::new(name.unwrap_or(&system.name))
+                        .small()
+                        .color(TEXT),
+                );
+            });
+        };
+        if self.details {
+            section(ui, "Systems");
+            crate_groups(
+                ui,
+                "systems",
+                scene.systems,
+                |s| crate_of(&s.name),
+                scene.crate_name,
+                |_| false,
+                system_row,
+            );
+        } else {
+            let game = |system: &&SystemInfo| Some(crate_of(&system.name)) == scene.crate_name;
+            let systems: Vec<_> = scene.systems.iter().filter(game).collect();
+            if !systems.is_empty() {
+                section(ui, "Systems");
+                for system in systems {
+                    system_row(ui, system);
+                }
+            }
+        }
         if let Some(path) = self.add_component(ui.ctx(), scene) {
             action = Some(Action::Insert(path));
         }
@@ -156,7 +200,7 @@ impl Inspector {
 
     /// Picks a component type the entity does not have by name; returns its
     /// type path.
-    fn add_component(&mut self, ctx: &egui::Context, scene: &Scene) -> Option<String> {
+    fn add_component(&mut self, ctx: &egui::Context, scene: &Inspected) -> Option<String> {
         let query = self.adding.as_mut()?;
         let mut picked = None;
         let mut cancel = false;
@@ -209,14 +253,12 @@ impl Inspector {
 /// What there is to edit, Transform first: the components the scene file
 /// keeps, and the game's own, where an unreflected one is tagged so. The
 /// `name` edited in the header is left out.
-fn editable<'a>(scene: &'a Scene, name: Option<&ComponentData>) -> Vec<&'a ComponentData> {
+fn editable<'a>(scene: &Inspected<'a>, name: Option<&ComponentData>) -> Vec<&'a ComponentData> {
     let mut shown: Vec<_> = scene
         .components
         .iter()
         .filter(|c| !name.is_some_and(|name| name.path == c.path))
-        .filter(|c| {
-            c.saved && c.value.is_some() || Some(c.crate_name()) == scene.crate_name.as_deref()
-        })
+        .filter(|c| c.saved && c.value.is_some() || Some(c.crate_name()) == scene.crate_name)
         .collect();
     shown.sort_by_key(|c| c.path != TRANSFORM);
     shown
@@ -226,12 +268,12 @@ fn editable<'a>(scene: &'a Scene, name: Option<&ComponentData>) -> Vec<&'a Compo
 /// to keep changes made inside a placed prefab.
 fn placement(
     ui: &mut Ui,
-    scene: &Scene,
+    scene: &Inspected,
     entity: &EntityInfo,
     can_apply: bool,
     action: &mut Option<Action>,
 ) {
-    let placed = scene.placement(entity);
+    let placed = scene.placement;
     if !entity.scene {
         tag(
             ui,
@@ -261,7 +303,7 @@ fn crate_groups<T>(
     section: &str,
     items: &[T],
     crate_of: impl Fn(&T) -> &str,
-    scene: &Scene,
+    game: Option<&str>,
     expand: impl Fn(&[&T]) -> bool,
     mut show: impl FnMut(&mut Ui, &T),
 ) {
@@ -269,7 +311,6 @@ fn crate_groups<T>(
     for item in items {
         groups.entry(crate_of(item)).or_default().push(item);
     }
-    let game = scene.crate_name.as_deref();
     let mut crates: Vec<_> = groups.into_iter().collect();
     crates.sort_by_key(|(name, _)| Some(*name) != game);
     for (name, items) in crates {

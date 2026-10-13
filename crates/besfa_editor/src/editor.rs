@@ -251,12 +251,13 @@ impl Editor {
             .show(ui, |ui| {
                 match self.preview.as_mut().filter(|_| self.previewing) {
                     Some(preview) => {
-                        for command in preview.ui(ui) {
+                        for command in preview.ui(ui, &self.scene) {
                             self.send(command);
                         }
                     }
                     None => {
-                        if let Some(action) = self.inspector.ui(ui, &self.scene, !self.playing) {
+                        let scene = self.scene.inspected();
+                        if let Some(action) = self.inspector.ui(ui, &scene, !self.playing) {
                             self.on_inspector(action);
                         }
                     }
@@ -426,6 +427,9 @@ impl Editor {
             self.seq
         });
         self.scene.sent(&command);
+        if let Some(preview) = &mut self.preview {
+            preview.sent(&command);
+        }
         game.send(&serde_json::to_string(&Request { seq, command }).unwrap());
         seq
     }
@@ -524,6 +528,16 @@ impl Editor {
                     for command in preview.loaded(model) {
                         self.send(command);
                     }
+                }
+            }
+            // The scene took it if it is the selection's.
+            Report::Entity {
+                id,
+                changes,
+                components,
+            } => {
+                if let Some(preview) = &mut self.preview {
+                    preview.entity_report(id, changes, components, self.scene.changes());
                 }
             }
             Report::Screenshot { path, error } => {

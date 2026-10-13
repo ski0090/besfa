@@ -11,6 +11,7 @@ mod panels;
 mod preview;
 mod process;
 mod project;
+mod review;
 mod scene;
 mod viewport;
 

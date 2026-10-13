@@ -21,7 +21,8 @@ use serde_json::Value;
 ///    answered by [`Report::Preview`].
 /// 3. The preview's views and screenshots: [`Command::PreviewView`] and
 ///    [`Command::PreviewScreenshot`], answered by [`Report::Screenshot`];
-///    what a previewed model is made of, and [`Command::PreviewOverlays`].
+///    what a previewed model is made of, [`Command::PreviewOverlays`], and
+///    [`Command::PreviewSelect`] for a part's components.
 pub const VERSION: u32 = 3;
 
 /// Starts every report line.
@@ -143,7 +144,7 @@ pub enum Command {
     },
     /// Poses the previewed model with clip `clip`, in the order reported, at
     /// `time` seconds, moving on at `speed` times real time: 0 holds it. See
-    /// [`clip_time`].
+    /// [`clip_time`]. Without a clip the model takes the pose it loaded in.
     PreviewAnimation {
         clip: Option<usize>,
         time: f32,
@@ -172,6 +173,12 @@ pub enum Command {
     },
     /// What the preview draws over the model.
     PreviewOverlays(Overlays),
+    /// Picks the previewed model's part, or its root, whose components the
+    /// game reports in an `entity` report as it does the selection's. The
+    /// scene's selection stays.
+    PreviewSelect {
+        id: Option<u64>,
+    },
 }
 
 /// What the model preview can draw over the model, over everything else.
@@ -424,6 +431,9 @@ pub struct SystemInfo {
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
 pub struct PreviewModel {
+    /// The entity the model spawned under, which takes components like a
+    /// placed model's root does.
+    pub root: Option<u64>,
     pub clips: Vec<ClipInfo>,
     /// The model's nodes and meshes; the root's children have no parent.
     pub parts: Vec<EntityInfo>,

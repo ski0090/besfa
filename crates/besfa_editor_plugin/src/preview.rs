@@ -71,6 +71,11 @@ pub(crate) struct ModelPreview {
     /// Frames the spawned model has waited for its meshes' bounds.
     waited: u32,
     animation: Animation,
+    /// Every node's transform as the model loaded, for its pose without a
+    /// clip.
+    rest: Vec<(Entity, Transform)>,
+    /// The part or root whose components are reported.
+    pub(crate) selected: Option<Entity>,
     /// Meshes `preview_parts` hid, with the visibility they had.
     hid: Vec<(Entity, Visibility)>,
     overlays: Overlays,
@@ -257,14 +262,48 @@ pub(crate) fn animate_with(
     speed: f32,
     looping: bool,
 ) {
-    if let Some(mut preview) = world.get_resource_mut::<ModelPreview>() {
-        preview.animation = Animation {
-            clip,
-            time,
-            speed,
-            looping,
-        };
+    let Some(mut preview) = world.get_resource_mut::<ModelPreview>() else {
+        return;
+    };
+    let stopped = clip.is_none() && preview.animation.clip.is_some();
+    preview.animation = Animation {
+        clip,
+        time,
+        speed,
+        looping,
+    };
+    // Without a clip the model goes back to how it loaded, once, so it can
+    // be posed by hand.
+    if stopped {
+        let (root, rest) = (preview.root, preview.rest.clone());
+        for entity in root.map(|root| subtree(world, root)).unwrap_or_default() {
+            if let Some(mut player) = world.get_mut::<AnimationPlayer>(entity) {
+                player.stop_all();
+            }
+        }
+        for (entity, transform) in rest {
+            if let Some(mut now) = world.get_mut::<Transform>(entity) {
+                *now = transform;
+            }
+        }
     }
+}
+
+/// Picks the part whose components are reported; only the model's own.
+pub(crate) fn select(world: &mut World, id: Option<u64>) -> Result<(), String> {
+    let Some(mut preview) = world.get_resource_mut::<ModelPreview>() else {
+        return Err("no model is previewed".into());
+    };
+    let Some(entity) = id.and_then(Entity::try_from_bits) else {
+        preview.selected = None;
+        return Ok(());
+    };
+    let root = preview.root.ok_or("no model is previewed")?;
+    if !subtree(world, root).contains(&entity) {
+        return Err(format!("{id:?} is not part of the previewed model"));
+    }
+    world.resource_mut::<ModelPreview>().selected = Some(entity);
+    Ok(())
 }
 
 /// Picks what the preview draws over the model.
@@ -532,6 +571,11 @@ fn load(world: &mut World) {
         })
         .collect();
     if world.resource::<ModelPreview>().clips.is_none() {
+        let rest = entities
+            .iter()
+            .filter_map(|&entity| Some((entity, *world.get::<Transform>(entity)?)))
+            .collect();
+        world.resource_mut::<ModelPreview>().rest = rest;
         let (graph, nodes) = AnimationGraph::from_clips(clip_handles);
         let graph = world.resource_mut::<Assets<AnimationGraph>>().add(graph);
         for &entity in &entities {
@@ -581,6 +625,7 @@ fn load(world: &mut World) {
     send_report(&Report::Preview {
         path,
         model: PreviewModel {
+            root: Some(root.to_bits()),
             clips: infos,
             parts,
             size: bounds.map(|(min, max)| (max - min).to_array()),

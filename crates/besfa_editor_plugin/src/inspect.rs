@@ -26,6 +26,7 @@ use serde_json::Value;
 
 use crate::{
     edit::Deleted,
+    preview::ModelPreview,
     scene::{HANDLE_PATHS, SceneEntity, left_out},
     scene_view::{EditorOnly, Parked},
 };
@@ -117,8 +118,31 @@ fn write_if_changed(last: &mut String, report: Report) {
 
 // ponytail: serializes the world every frame to find changes, which is fine
 // for scenes of hundreds of entities. Track change ticks if it shows up.
-fn report(world: &mut World, mut last_entities: Local<String>, mut last_entity: Local<String>) {
+fn report(
+    world: &mut World,
+    mut last_entities: Local<String>,
+    mut last_entity: Local<String>,
+    mut last_part: Local<String>,
+) {
     write_if_changed(&mut last_entities, entities(world));
+
+    // The model preview's part, reported the way the selection is.
+    let part = world
+        .get_resource::<ModelPreview>()
+        .and_then(|preview| preview.selected);
+    match part.map(|part| (part, components(world, part))) {
+        Some((part, Some(components))) => write_if_changed(
+            &mut last_part,
+            Report::Entity {
+                id: part.to_bits(),
+                changes: Some(world.resource::<Changes>().0),
+                components,
+            },
+        ),
+        // Gone with the model; the editor picks the part again by name.
+        Some((_, None)) => world.resource_mut::<ModelPreview>().selected = None,
+        None => last_part.clear(),
+    }
 
     let Some(entity) = world.resource::<Selected>().0 else {
         last_entity.clear();
