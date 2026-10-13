@@ -10,15 +10,19 @@
 
 use std::{
     collections::HashSet,
-    f32::consts::{FRAC_PI_2, PI},
+    f32::consts::{FRAC_PI_2, FRAC_PI_4, PI},
+    path::{Path, PathBuf},
 };
 
-use besfa_protocol::{Button, ClipInfo, EntityInfo, LightPreset, PointerEvent, Report, clip_time};
+use besfa_protocol::{
+    Button, ClipInfo, EntityInfo, LightPreset, PointerEvent, Report, View, clip_time,
+};
 use bevy::{
     asset::LoadState,
-    camera::{Exposure, primitives::Aabb, visibility::RenderLayers},
+    camera::{Exposure, RenderTarget, primitives::Aabb, visibility::RenderLayers},
     gltf::Gltf,
     prelude::*,
+    render::view::screenshot::{Screenshot, ScreenshotCaptured},
     transform::TransformSystems,
     world_serialization::{WorldAssetRoot, WorldInstance, WorldInstanceSpawner},
 };
@@ -47,8 +51,9 @@ pub(crate) struct ModelPreview {
     pub(crate) showing: bool,
     /// Pointer events since the last frame.
     pub(crate) events: Vec<PointerEvent>,
-    /// Frame the model on the next frame.
+    /// Frame the model on the next frame, from `view`.
     pub(crate) fit: bool,
+    view: View,
     path: Option<String>,
     /// The entity the model spawns under.
     root: Option<Entity>,
@@ -128,7 +133,11 @@ fn spawn_camera_and_light(mut commands: Commands) {
     commands.spawn((
         Name::new("Preview camera"),
         EditorOnly,
-        PreviewCamera(framing(Vec3::splat(-0.5), Vec3::splat(0.5))),
+        PreviewCamera(framing(
+            Vec3::splat(-0.5),
+            Vec3::splat(0.5),
+            View::default(),
+        )),
         Camera3d::default(),
         Camera {
             order: EDITOR_CAMERA_ORDER + 1,
@@ -232,6 +241,53 @@ pub(crate) fn animate_with(
             looping,
         };
     }
+}
+
+/// Frames the model from `view`, and keeps to it when framing it again.
+pub(crate) fn look(world: &mut World, view: View) {
+    if let Some(mut preview) = world.get_resource_mut::<ModelPreview>() {
+        preview.view = view;
+        preview.fit = true;
+    }
+}
+
+/// Saves what the preview's camera shows to `file` once it renders the
+/// frame, and reports it as `path`.
+pub(crate) fn screenshot(world: &mut World, path: String, file: PathBuf) -> Result<(), String> {
+    let target = world
+        .query_filtered::<(&Camera, &RenderTarget), With<PreviewCamera>>()
+        .iter(world)
+        .find(|(camera, _)| camera.is_active)
+        .map(|(_, target)| target.clone())
+        .ok_or("no model is previewed")?;
+    world
+        .spawn(Screenshot(target))
+        .observe(move |captured: On<ScreenshotCaptured>| {
+            let error = save_png(&captured.image, &file).err();
+            match &error {
+                None => info!("Saved {path}"),
+                Some(error) => error!("Could not save {path}: {error}"),
+            }
+            send_report(&Report::Screenshot {
+                path: path.clone(),
+                error,
+            });
+        });
+    Ok(())
+}
+
+fn save_png(image: &Image, file: &Path) -> Result<(), String> {
+    if let Some(folder) = file.parent() {
+        std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+    }
+    let image = image
+        .clone()
+        .try_into_dynamic()
+        .map_err(|error| error.to_string())?;
+    image
+        .to_rgb8()
+        .save(file)
+        .map_err(|error| error.to_string())
 }
 
 /// Hides the meshes under `hidden` parts, and with `solo` the ones outside
@@ -515,16 +571,26 @@ fn bounds(world: &World, entities: &[Entity]) -> Option<(Vec3, Vec3)> {
     (min.x <= max.x).then_some((min, max))
 }
 
-/// Looking at the model's front from above one side, near enough to fill
-/// the view with it. Models made for Bevy face its forward, -Z.
-fn framing(min: Vec3, max: Vec3) -> EditorCamera {
+/// Looking at the model from `view`, near enough to fill the view with it.
+/// Models made for Bevy face its forward, -Z; the camera sits along its own
+/// +Z, so a yaw of π puts it in front.
+fn framing(min: Vec3, max: Vec3, view: View) -> EditorCamera {
     let radius = ((max - min).length() * 0.5).max(0.05);
     // Half of Bevy's default vertical field of view, 45°.
     let half_view = FRAC_PI_2 * 0.25;
+    let (yaw, pitch) = match view {
+        View::Front => (PI, 0.0),
+        View::Back => (0.0, 0.0),
+        View::Left => (-FRAC_PI_2, 0.0),
+        View::Right => (FRAC_PI_2, 0.0),
+        // Straight down, with the model's front at the bottom.
+        View::Top => (PI, -FRAC_PI_2 + 0.001),
+        View::ThreeQuarter => (PI - FRAC_PI_4, -0.35),
+    };
     EditorCamera {
         focus: (min + max) * 0.5,
-        yaw: PI - 0.6,
-        pitch: -0.3,
+        yaw,
+        pitch,
         distance: radius / half_view.sin() * 1.1,
         adopted: false,
     }
@@ -559,9 +625,13 @@ fn orbit(
             PointerEvent::Scroll { delta } => camera.0.zoom(delta),
         }
     }
-    if let (true, Some((min, max))) = (preview.fit, preview.bounds) {
+    // Once the model is reported, with or without meshes to frame.
+    if preview.fit && preview.reported {
         preview.fit = false;
-        camera.0 = framing(min, max);
+        let (min, max) = preview
+            .bounds
+            .unwrap_or((Vec3::splat(-0.5), Vec3::splat(0.5)));
+        camera.0 = framing(min, max, preview.view);
     }
     *transform = camera.0.transform();
 }
@@ -660,7 +730,7 @@ mod tests {
         let mut world = World::new();
         let camera = world
             .spawn((
-                PreviewCamera(framing(Vec3::ZERO, Vec3::ONE)),
+                PreviewCamera(framing(Vec3::ZERO, Vec3::ONE, View::Front)),
                 AmbientLight::default(),
             ))
             .id();
@@ -687,10 +757,23 @@ mod tests {
 
     #[test]
     fn frames_the_whole_model() {
-        let camera = framing(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 2.0, 0.5));
+        let (min, max) = (Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 2.0, 0.5));
+        let camera = framing(min, max, View::ThreeQuarter);
         assert_eq!(camera.focus, Vec3::new(0.0, 1.0, 0.0));
         let eye = camera.transform().translation;
-        assert!(eye.z < 0.0 && eye.y > 1.0, "in front and above: {eye}");
+        assert!(
+            eye.z < 0.0 && eye.x > 0.0 && eye.y > 1.0,
+            "in front, to the model's right and above: {eye}"
+        );
         assert!(eye.distance(camera.focus) > 1.2, "the model fits");
+        let from = |view| {
+            let camera = framing(min, max, view);
+            (camera.transform().translation - camera.focus).normalize()
+        };
+        assert!(from(View::Front).abs_diff_eq(Vec3::NEG_Z, 1e-3));
+        assert!(from(View::Back).abs_diff_eq(Vec3::Z, 1e-3));
+        assert!(from(View::Right).abs_diff_eq(Vec3::X, 1e-3));
+        assert!(from(View::Left).abs_diff_eq(Vec3::NEG_X, 1e-3));
+        assert!(from(View::Top).abs_diff_eq(Vec3::Y, 1e-2));
     }
 }

@@ -1,21 +1,48 @@
 //! The model preview tab: a glTF model from the Assets tab on its own in
-//! the viewport, with its clips, parts and light. The game loads, poses and
+//! the viewport, with its clips, parts, light and views, and screenshots of
+//! it. The game loads, poses and
 //! lights it; this side keeps the controls and tells the game when they
 //! change. The clip's clock runs on both sides by the same rule, so the time
 //! shown is never reported.
 
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     time::Instant,
 };
 
-use besfa_protocol::{ClipInfo, Command, EntityInfo, LightPreset, clip_time};
+use besfa_protocol::{ClipInfo, Command, EntityInfo, LightPreset, View, clip_time};
 use eframe::egui::{self, Button, RichText, ScrollArea, Ui};
 
 use crate::{
     panels::{ERROR, MUTED, TEXT, panel_header, section, tag},
+    project,
     scene::tree_rows,
 };
+
+const VIEWS: [(View, &str, &str); 6] = [
+    (
+        View::Front,
+        "Front",
+        "Look at the model's front, its -Z side",
+    ),
+    (View::Back, "Back", "Look at the model's back"),
+    (View::Left, "Left", "Look at the model's left side"),
+    (
+        View::Right,
+        "Right",
+        "Look at the model's right side, its +X side",
+    ),
+    (View::Top, "Top", "Look down on the model"),
+    (
+        View::ThreeQuarter,
+        "¾",
+        "Look at the model's front from above and to its right",
+    ),
+];
+
+/// Where screenshots go, in the project.
+const SCREENSHOTS: &str = "screenshots";
 
 const LIGHTS: [(LightPreset, &str); 3] = [
     (LightPreset::Studio, "Studio"),
@@ -39,6 +66,7 @@ struct Loaded {
 pub struct ModelPreview {
     /// Relative to the asset folder.
     pub path: String,
+    project: PathBuf,
     loaded: Option<Loaded>,
     clip: Option<usize>,
     playing: bool,
@@ -54,12 +82,19 @@ pub struct ModelPreview {
     hidden: HashSet<String>,
     solo: Option<String>,
     light: LightPreset,
+    view: View,
+    /// The number of the last screenshot asked for.
+    shots: u32,
+    /// The last screenshot's path, or why it was not saved.
+    shot: Option<Result<String, String>>,
 }
 
 impl ModelPreview {
-    pub fn new(path: String) -> Self {
+    /// Previews the model at `path` of the project in the `project` folder.
+    pub fn new(path: String, project: PathBuf) -> Self {
         Self {
             path,
+            project,
             loaded: None,
             clip: None,
             playing: true,
@@ -71,6 +106,9 @@ impl ModelPreview {
             hidden: HashSet::new(),
             solo: None,
             light: LightPreset::default(),
+            view: View::default(),
+            shots: 0,
+            shot: None,
         }
     }
 
@@ -87,6 +125,7 @@ impl ModelPreview {
                 path: Some(self.path.clone()),
             },
             Command::PreviewLight { light: self.light },
+            Command::PreviewView { view: self.view },
         ]
     }
 
@@ -131,6 +170,30 @@ impl ModelPreview {
         let speed = if self.playing { self.speed } else { 0.0 };
         let seconds = self.since.elapsed().as_secs_f32();
         clip_time(self.time, seconds, speed, self.duration, self.looping)
+    }
+
+    /// Notes the game's answer to a screenshot.
+    pub fn screenshot(&mut self, path: String, error: Option<String>) {
+        self.shot = Some(match error {
+            None => Ok(path),
+            Some(error) => Err(error),
+        });
+    }
+
+    /// The next free `screenshots/<model>-<n>.png`, counting on from the
+    /// last one asked for, which the game may not have written yet.
+    fn next_screenshot(&mut self) -> String {
+        let name = self.name().to_owned();
+        let stem = name
+            .rsplit_once('.')
+            .map_or(name.as_str(), |(stem, _)| stem);
+        let path = |n| format!("{SCREENSHOTS}/{stem}-{n}.png");
+        let mut n = self.shots + 1;
+        while self.project.join(path(n)).exists() {
+            n += 1;
+        }
+        self.shots = n;
+        path(n)
     }
 
     /// Restarts the clock at `time`, before a control changes how it runs.
@@ -196,6 +259,7 @@ impl ModelPreview {
                 tag(ui, &format!("{width:.2} × {height:.2} × {depth:.2} m"));
             }
             self.animation_ui(ui, &loaded.clips, &mut send);
+            self.view_ui(ui, &mut send);
             section(ui, "Light");
             ui.horizontal(|ui| {
                 for (light, label) in LIGHTS {
@@ -286,6 +350,44 @@ impl ModelPreview {
         if changed {
             send.push(self.animation());
         }
+    }
+
+    fn view_ui(&mut self, ui: &mut Ui, send: &mut Vec<Command>) {
+        section(ui, "View");
+        ui.horizontal_wrapped(|ui| {
+            for (view, label, tip) in VIEWS {
+                if ui.button(label).on_hover_text(tip).clicked() {
+                    self.view = view;
+                    send.push(Command::PreviewView { view });
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui
+                .button("📷 Screenshot")
+                .on_hover_text(format!("Save what the viewport shows to {SCREENSHOTS}/"))
+                .clicked()
+            {
+                let path = self.next_screenshot();
+                send.push(Command::PreviewScreenshot { path });
+            }
+            match &self.shot {
+                Some(Ok(path)) => {
+                    if ui
+                        .small_button("🗁")
+                        .on_hover_text("Open the screenshots folder")
+                        .clicked()
+                    {
+                        project::reveal(&self.project.join(SCREENSHOTS).to_string_lossy());
+                    }
+                    tag(ui, path);
+                }
+                Some(Err(error)) => {
+                    ui.label(RichText::new(error).small().color(ERROR));
+                }
+                None => {}
+            }
+        });
     }
 
     fn parts_ui(&mut self, ui: &mut Ui, loaded: &Loaded, send: &mut Vec<Command>) {
@@ -381,7 +483,7 @@ mod tests {
     fn shows_the_clip_time_while_the_panel_holds_the_report() {
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let mut preview = ModelPreview::new("models/hero.glb".into());
+        let mut preview = ModelPreview::new("models/hero.glb".into(), PathBuf::new());
         preview.loaded(vec![clip("Idle")], vec![], None, None);
         preview.playing = false;
         preview.rebase(0.5);
@@ -397,7 +499,7 @@ mod tests {
 
     #[test]
     fn keeps_choices_that_still_apply_when_the_model_reloads() {
-        let mut preview = ModelPreview::new("models/hero.glb".into());
+        let mut preview = ModelPreview::new("models/hero.glb".into(), PathBuf::new());
         assert_eq!(preview.name(), "hero.glb");
         let parts = |body, head, hat| {
             vec![
@@ -446,5 +548,17 @@ mod tests {
 
         preview.loaded(vec![], vec![], None, None);
         assert_eq!(preview.clip, None, "no clips left to play");
+    }
+
+    #[test]
+    fn numbers_screenshots_after_the_ones_on_disk() {
+        let dir = std::env::temp_dir().join(format!("besfa_shots_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(SCREENSHOTS)).unwrap();
+        std::fs::write(dir.join("screenshots/hero-1.png"), "").unwrap();
+        let mut preview = ModelPreview::new("models/hero.glb".into(), dir.clone());
+        assert_eq!(preview.next_screenshot(), "screenshots/hero-2.png");
+        // Not written yet, still not taken twice.
+        assert_eq!(preview.next_screenshot(), "screenshots/hero-3.png");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

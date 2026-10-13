@@ -532,6 +532,15 @@ impl Editor {
                     }
                 }
             }
+            Report::Screenshot { path, error } => {
+                match &error {
+                    None => self.log(format!("Saved {path}")),
+                    Some(error) => self.log(format!("Could not save {path}: {error}")),
+                }
+                if let Some(preview) = &mut self.preview {
+                    preview.screenshot(path, error);
+                }
+            }
             Report::Saved { .. } => {
                 if let Some((_, then)) = self.pending_save.take() {
                     self.after_save(then, ctx);
@@ -720,13 +729,13 @@ impl Editor {
     /// Opens the model at `path` in the preview tab, replacing the model
     /// there, once the game's plugin knows how.
     fn open_preview(&mut self, path: String) {
-        if self.protocol.is_none_or(|version| version < 2) {
+        if self.protocol.is_none_or(|version| version < 3) {
             return self.log(
                 "The model preview needs the game running with besfa_editor_plugin speaking \
-                 protocol 2 or later. Update the plugin.",
+                 protocol 3 or later. Update the plugin.",
             );
         }
-        self.preview = Some(ModelPreview::new(path));
+        self.preview = Some(ModelPreview::new(path, PathBuf::from(&self.project.path)));
         self.show_preview(true);
     }
 

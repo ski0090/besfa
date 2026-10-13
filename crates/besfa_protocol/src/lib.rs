@@ -19,7 +19,9 @@ use serde_json::Value;
 ///    [`Report::Done`].
 /// 2. The model preview: [`Command::Preview`] and the commands after it,
 ///    answered by [`Report::Preview`].
-pub const VERSION: u32 = 2;
+/// 3. The preview's views and screenshots: [`Command::PreviewView`] and
+///    [`Command::PreviewScreenshot`], answered by [`Report::Screenshot`].
+pub const VERSION: u32 = 3;
 
 /// Starts every report line.
 pub const REPORT_PREFIX: &str = "@besfa ";
@@ -157,6 +159,16 @@ pub enum Command {
     PreviewLight {
         light: LightPreset,
     },
+    /// Looks at the previewed model from `view`, framed to it. Framing it
+    /// again (`focus`) keeps to this view.
+    PreviewView {
+        view: View,
+    },
+    /// Saves what the preview shows to `path`, a PNG file relative to the
+    /// project, and reports it as `screenshot`.
+    PreviewScreenshot {
+        path: String,
+    },
 }
 
 impl Command {
@@ -208,6 +220,22 @@ pub enum LightPreset {
     Daylight,
     /// Dim, cool moonlight from behind, which shows outlines and rims.
     Night,
+}
+
+/// Where the preview looks at the model from. Models face Bevy's forward,
+/// -Z, so the front view looks at the model from -Z, and the model's right
+/// is +X.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum View {
+    Front,
+    Back,
+    Left,
+    Right,
+    Top,
+    /// From the front, above and to the model's right.
+    #[default]
+    ThreeQuarter,
 }
 
 /// Where a previewed clip `duration` seconds long is `seconds` of real time
@@ -306,6 +334,8 @@ pub enum Report {
         size: Option<[f32; 3]>,
         error: Option<String>,
     },
+    /// The outcome of `preview_screenshot`.
+    Screenshot { path: String, error: Option<String> },
     /// A report from a newer plugin than this protocol knows.
     #[serde(other)]
     Unknown,
@@ -455,6 +485,12 @@ mod tests {
         assert_eq!(
             request(r#"{"seq":1,"command":"preview"}"#).command,
             Command::Preview { path: None }
+        );
+        assert_eq!(
+            request(r#"{"command":"preview_view","view":"three_quarter"}"#).command,
+            Command::PreviewView {
+                view: View::ThreeQuarter
+            }
         );
     }
 

@@ -19,7 +19,8 @@ use crate::{
     inspect::{Changes, Selected, report_saved, select, send_report},
     preview::{self, ModelPreview},
     scene::{
-        SCENE_PATH, asset_file, instance_prefab, save, save_instance, save_prefab, scene_file,
+        SCENE_PATH, asset_file, instance_prefab, project_file, save, save_instance, save_prefab,
+        scene_file,
     },
     scene_view::{self, SceneView},
     viewport,
@@ -262,6 +263,17 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             preview::light(world, light);
             Ok(())
         }
+        Command::PreviewView { view } => {
+            preview::look(world, view);
+            Ok(())
+        }
+        Command::PreviewScreenshot { path } => {
+            if inside(&path) && path.ends_with(".png") {
+                preview::screenshot(world, path.clone(), project_file(&path))
+            } else {
+                Err(format!("{path} is not a .png path inside the project"))
+            }
+        }
     };
     if let Err(error) = &result {
         error!("Could not apply the editor's change: {error}");
@@ -277,14 +289,18 @@ fn spawned(world: &mut World, entity: Entity) {
     select(world, Some(entity));
 }
 
-/// A file under the asset directory, named the way asset paths are.
-fn asset_path(path: &str) -> Result<std::path::PathBuf, String> {
-    let inside = !path.starts_with('/')
+/// Whether `path` is relative and stays inside the folder it is joined to.
+fn inside(path: &str) -> bool {
+    !path.starts_with('/')
         && !path.contains(':')
         && path
             .split(['/', '\\'])
-            .all(|part| !part.is_empty() && part != "..");
-    if inside && path.ends_with(".scn.ron") {
+            .all(|part| !part.is_empty() && part != "..")
+}
+
+/// A file under the asset directory, named the way asset paths are.
+fn asset_path(path: &str) -> Result<std::path::PathBuf, String> {
+    if inside(path) && path.ends_with(".scn.ron") {
         Ok(asset_file(path))
     } else {
         Err(format!(

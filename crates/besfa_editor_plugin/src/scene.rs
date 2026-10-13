@@ -187,7 +187,13 @@ pub(crate) fn scene_file() -> PathBuf {
 
 /// Where the asset at `path`, relative to the asset directory, is on disk.
 pub(crate) fn asset_file(path: &str) -> PathBuf {
-    FileAssetReader::get_base_path().join("assets").join(path)
+    project_file("assets").join(path)
+}
+
+/// Where `path`, relative to the project, is on disk: the folder the asset
+/// directory is in.
+pub(crate) fn project_file(path: &str) -> PathBuf {
+    FileAssetReader::get_base_path().join(path)
 }
 
 /// Writes the scene entities to `path` in the scene file format.
