@@ -20,7 +20,7 @@ use bevy::{
     gltf::Gltf,
     prelude::*,
     transform::TransformSystems,
-    world_serialization::WorldAssetRoot,
+    world_serialization::{WorldAssetRoot, WorldInstance, WorldInstanceSpawner},
 };
 
 use crate::{
@@ -402,14 +402,18 @@ fn load(world: &mut World) {
         });
     }
     let gltf = preview.gltf.clone();
-    let entities = subtree(world, root);
-    // The scene spawns after the file loads, and its meshes get bounds the
-    // frame after. Some never do, like skinned meshes left unculled.
-    // ponytail: a model whose scene is empty stays loading; report it after
-    // a timeout too if such files turn up.
-    if entities.len() == 1 {
+    // The scene spawns after the file loads, and may hold nothing.
+    let spawned = world.get::<WorldInstance>(root).is_some_and(|instance| {
+        world
+            .resource::<WorldInstanceSpawner>()
+            .instance_is_ready(**instance)
+    });
+    if !spawned {
         return;
     }
+    let entities = subtree(world, root);
+    // Meshes get bounds the frame after they spawn. Some never do, like
+    // skinned meshes left unculled.
     if entities
         .iter()
         .any(|&entity| world.get::<Mesh3d>(entity).is_some() && world.get::<Aabb>(entity).is_none())

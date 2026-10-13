@@ -4,7 +4,10 @@
 //! change. The clip's clock runs on both sides by the same rule, so the time
 //! shown is never reported.
 
-use std::{collections::HashSet, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 
 use besfa_protocol::{ClipInfo, Command, EntityInfo, LightPreset, clip_time};
 use eframe::egui::{self, Button, RichText, ScrollArea, Ui};
@@ -26,6 +29,9 @@ const SPEEDS: [f32; 4] = [0.25, 0.5, 1.0, 2.0];
 struct Loaded {
     clips: Vec<ClipInfo>,
     parts: Vec<EntityInfo>,
+    /// Each part's path of names from the model's root, which a part keeps
+    /// when the model loads again and its id changes.
+    paths: HashMap<u64, String>,
     size: Option<[f32; 3]>,
     error: Option<String>,
 }
@@ -44,8 +50,9 @@ pub struct ModelPreview {
     since: Instant,
     speed: f32,
     looping: bool,
-    hidden: HashSet<u64>,
-    solo: Option<u64>,
+    /// Parts by path; see [`Loaded::paths`].
+    hidden: HashSet<String>,
+    solo: Option<String>,
     light: LightPreset,
 }
 
@@ -92,10 +99,12 @@ impl ModelPreview {
         size: Option<[f32; 3]>,
         error: Option<String>,
     ) -> Vec<Command> {
-        // Part ids are the game's entities, new in a new game process.
-        let ids: HashSet<u64> = parts.iter().map(|part| part.id).collect();
-        self.hidden.retain(|id| ids.contains(id));
-        self.solo = self.solo.filter(|id| ids.contains(id));
+        // Part ids are the game's entities, new each time the model loads;
+        // their paths stay unless the file renamed them.
+        let paths = part_paths(&parts);
+        let known: HashSet<&String> = paths.values().collect();
+        self.hidden.retain(|path| known.contains(path));
+        self.solo = self.solo.take().filter(|path| known.contains(path));
         if self.clip.is_none_or(|clip| clip >= clips.len()) {
             self.clip = (!clips.is_empty()).then_some(0);
             self.rebase(0.0);
@@ -107,10 +116,15 @@ impl ModelPreview {
         self.loaded = Some(Loaded {
             clips,
             parts,
+            paths,
             size,
             error,
         });
-        vec![self.animation(), self.parts()]
+        let parts = self.loaded.as_ref().map(|loaded| self.parts(loaded));
+        [Some(self.animation()), parts]
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     fn now(&self) -> f32 {
@@ -134,28 +148,35 @@ impl ModelPreview {
         }
     }
 
-    fn parts(&self) -> Command {
+    fn parts(&self, loaded: &Loaded) -> Command {
+        let id = |wanted: &String| {
+            loaded
+                .paths
+                .iter()
+                .find_map(|(&id, path)| (path == wanted).then_some(id))
+        };
         Command::PreviewParts {
-            hidden: self.hidden.iter().copied().collect(),
-            solo: self.solo,
+            hidden: self.hidden.iter().filter_map(id).collect(),
+            solo: self.solo.as_ref().and_then(id),
         }
     }
 
     /// The tab's side panel; returns what to tell the game.
     pub fn ui(&mut self, ui: &mut Ui) -> Vec<Command> {
         let mut send = Vec::new();
+        let mut show_all = false;
         panel_header(ui, "Model", |ui| {
-            if (!self.hidden.is_empty() || self.solo.is_some())
+            show_all = (!self.hidden.is_empty() || self.solo.is_some())
                 && ui
                     .small_button("👁")
                     .on_hover_text("Show all parts")
-                    .clicked()
-            {
-                self.hidden.clear();
-                self.solo = None;
-                send.push(self.parts());
-            }
+                    .clicked();
         });
+        if show_all {
+            self.hidden.clear();
+            self.solo = None;
+            send.extend(self.loaded.as_ref().map(|loaded| self.parts(loaded)));
+        }
         // Put back below; taken so the controls can change the rest.
         let Some(loaded) = self.loaded.take() else {
             ui.label(RichText::new(self.name()).strong().color(TEXT));
@@ -185,7 +206,7 @@ impl ModelPreview {
                 }
             });
             section(ui, "Parts");
-            self.parts_ui(ui, &loaded.parts, &mut send);
+            self.parts_ui(ui, &loaded, &mut send);
         });
         self.loaded = Some(loaded);
         send
@@ -267,14 +288,15 @@ impl ModelPreview {
         }
     }
 
-    fn parts_ui(&mut self, ui: &mut Ui, parts: &[EntityInfo], send: &mut Vec<Command>) {
-        if parts.is_empty() {
+    fn parts_ui(&mut self, ui: &mut Ui, loaded: &Loaded, send: &mut Vec<Command>) {
+        if loaded.parts.is_empty() {
             tag(ui, "No parts");
             return;
         }
         let mut changed = false;
-        for (part, depth) in tree_rows(parts) {
-            let hidden = self.hidden.contains(&part.id);
+        for (part, depth) in tree_rows(&loaded.parts) {
+            let path = &loaded.paths[&part.id];
+            let hidden = self.hidden.contains(path);
             ui.horizontal(|ui| {
                 ui.add_space(depth as f32 * 16.0);
                 let eye = RichText::new("👁").color(if hidden { MUTED } else { TEXT });
@@ -284,19 +306,19 @@ impl ModelPreview {
                     .clicked()
                 {
                     if hidden {
-                        self.hidden.remove(&part.id);
+                        self.hidden.remove(path);
                     } else {
-                        self.hidden.insert(part.id);
+                        self.hidden.insert(path.clone());
                     }
                     changed = true;
                 }
-                let solo = self.solo == Some(part.id);
+                let solo = self.solo.as_ref() == Some(path);
                 if ui
                     .add(Button::selectable(solo, "S").small())
                     .on_hover_text("Show only this part")
                     .clicked()
                 {
-                    self.solo = (!solo).then_some(part.id);
+                    self.solo = (!solo).then(|| path.clone());
                     changed = true;
                 }
                 let mut label = RichText::new(part.label()).color(TEXT);
@@ -307,20 +329,42 @@ impl ModelPreview {
             });
         }
         if changed {
-            send.push(self.parts());
+            send.push(self.parts(loaded));
         }
     }
+}
+
+/// Each part's names from the model's root down to it, joined by `/`.
+/// glTF exporters keep node names unique, so this names a part across
+/// loads; an unnamed part goes by the label of its id.
+fn part_paths(parts: &[EntityInfo]) -> HashMap<u64, String> {
+    let by_id: HashMap<u64, &EntityInfo> = parts.iter().map(|part| (part.id, part)).collect();
+    parts
+        .iter()
+        .map(|part| {
+            let mut names = Vec::new();
+            let mut current = Some(part);
+            // Bounded, so a parent cycle, a game bug, cannot hang the editor.
+            for _ in 0..=parts.len() {
+                let Some(part) = current else { break };
+                names.push(part.label());
+                current = part.parent.and_then(|parent| by_id.get(&parent).copied());
+            }
+            names.reverse();
+            (part.id, names.join("/"))
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn part(id: u64) -> EntityInfo {
+    fn part(id: u64, name: &str, parent: Option<u64>) -> EntityInfo {
         EntityInfo {
             id,
-            name: None,
-            parent: None,
+            name: Some(name.into()),
+            parent,
             scene: true,
             asset: None,
         }
@@ -355,12 +399,14 @@ mod tests {
     fn keeps_choices_that_still_apply_when_the_model_reloads() {
         let mut preview = ModelPreview::new("models/hero.glb".into());
         assert_eq!(preview.name(), "hero.glb");
-        let sent = preview.loaded(
-            vec![clip("Idle"), clip("Walk")],
-            vec![part(1), part(2)],
-            None,
-            None,
-        );
+        let parts = |body, head, hat| {
+            vec![
+                part(body, "Body", None),
+                part(head, "Head", Some(body)),
+                part(hat, "Hat", Some(head)),
+            ]
+        };
+        let sent = preview.loaded(vec![clip("Idle"), clip("Walk")], parts(1, 2, 3), None, None);
         assert_eq!(preview.clip, Some(0), "the first clip plays");
         assert!(matches!(
             sent[0],
@@ -368,23 +414,33 @@ mod tests {
         ));
 
         preview.clip = Some(1);
-        preview.hidden.insert(2);
-        preview.solo = Some(1);
+        preview.hidden.insert("Body/Head/Hat".into());
+        preview.solo = Some("Body/Head".into());
         let commands = preview.commands();
         assert!(
             matches!(&commands[0], Command::Preview { path: Some(path) } if path == "models/hero.glb")
         );
         assert!(preview.loaded.is_none(), "waits for the game's report");
 
-        // A new game process: the same clips, new part ids.
-        let sent = preview.loaded(vec![clip("Idle"), clip("Walk")], vec![part(3)], None, None);
+        // Loaded again: the same clips and parts under new ids.
+        let sent = preview.loaded(vec![clip("Idle"), clip("Walk")], parts(4, 5, 6), None, None);
         assert_eq!(preview.clip, Some(1));
-        assert!(preview.hidden.is_empty() && preview.solo.is_none());
+        assert_eq!(
+            sent[1],
+            Command::PreviewParts {
+                hidden: vec![6],
+                solo: Some(5)
+            }
+        );
+
+        // Re-exported without the hat.
+        let sent = preview.loaded(vec![clip("Idle")], parts(7, 8, 9)[..2].to_vec(), None, None);
+        assert!(preview.hidden.is_empty() && preview.solo.as_deref() == Some("Body/Head"));
         assert_eq!(
             sent[1],
             Command::PreviewParts {
                 hidden: vec![],
-                solo: None
+                solo: Some(8)
             }
         );
 
