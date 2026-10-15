@@ -70,8 +70,9 @@ impl Plugin for InspectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Selected>()
             .init_resource::<Changes>()
+            .init_resource::<EntitiesChanged>()
             // Last: after Update and transform propagation, so values are current.
-            .add_systems(Last, report);
+            .add_systems(Last, (note_entity_changes, report).chain());
     }
 
     /// Every plugin has added its systems by now and no schedule is running,
@@ -116,8 +117,68 @@ fn write_if_changed(last: &mut String, report: Report) {
     }
 }
 
-// ponytail: serializes the world every frame to find changes, which is fine
-// for scenes of hundreds of entities. Track change ticks if it shows up.
+/// Whether what the entities report shows may have changed since it was
+/// last written. It starts out unwritten.
+#[derive(Resource)]
+struct EntitiesChanged(bool);
+
+impl Default for EntitiesChanged {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// Notes a change to what the entities report shows: a name, a parent, a
+/// saved or placed mark, or an entity joining or leaving the list. A
+/// despawn removes every component, so the removals cover it.
+#[allow(clippy::type_complexity, reason = "a system's parameters")]
+fn note_entity_changes(
+    changed: Query<
+        (),
+        (
+            Or<(
+                Changed<Name>,
+                Changed<ChildOf>,
+                Changed<SceneEntity>,
+                Changed<DynamicWorldRoot>,
+                Changed<WorldAssetRoot>,
+                Added<Transform>,
+                Added<EditorOnly>,
+                Added<Deleted>,
+            )>,
+            Allow<Disabled>,
+        ),
+    >,
+    mut removed: (
+        RemovedComponents<Name>,
+        RemovedComponents<ChildOf>,
+        RemovedComponents<SceneEntity>,
+        RemovedComponents<DynamicWorldRoot>,
+        RemovedComponents<WorldAssetRoot>,
+        RemovedComponents<Transform>,
+        RemovedComponents<EditorOnly>,
+        RemovedComponents<Deleted>,
+    ),
+    mut entities_changed: ResMut<EntitiesChanged>,
+) {
+    // Every reader is read, so a removal counts once.
+    let removals = [
+        removed.0.read().count(),
+        removed.1.read().count(),
+        removed.2.read().count(),
+        removed.3.read().count(),
+        removed.4.read().count(),
+        removed.5.read().count(),
+        removed.6.read().count(),
+        removed.7.read().count(),
+    ];
+    if !changed.is_empty() || removals.iter().any(|&count| count > 0) {
+        entities_changed.0 = true;
+    }
+}
+
+// ponytail: any change sends the whole list again, every frame for a game
+// that spawns named entities every frame; report differences if that shows up.
 fn report(
     world: &mut World,
     mut last_entities: Local<String>,
@@ -129,7 +190,11 @@ fn report(
     if world.contains_resource::<crate::scene::Loading>() {
         return;
     }
-    write_if_changed(&mut last_entities, entities(world));
+    // Thousands of entities, in a scene of placed models, are too many to
+    // list every frame.
+    if std::mem::take(&mut world.resource_mut::<EntitiesChanged>().0) {
+        write_if_changed(&mut last_entities, entities(world));
+    }
 
     // The model preview's part, reported the way the selection is.
     let part = world
@@ -407,6 +472,40 @@ mod tests {
         assert_eq!(find(parent).parent, None);
         assert_eq!(find(child).name, None);
         assert_eq!(find(child).parent, Some(parent.to_bits()));
+    }
+
+    #[test]
+    fn notes_only_changes_the_entities_report_shows() {
+        fn changed(app: &mut App) -> bool {
+            app.update();
+            std::mem::take(&mut app.world_mut().resource_mut::<EntitiesChanged>().0)
+        }
+        let mut app = App::new();
+        app.init_resource::<EntitiesChanged>()
+            .add_systems(Update, note_entity_changes);
+        let cube = app
+            .world_mut()
+            .spawn((Name::new("Cube"), Transform::default()))
+            .id();
+        assert!(changed(&mut app), "spawned");
+        assert!(!changed(&mut app));
+
+        app.world_mut()
+            .get_mut::<Transform>(cube)
+            .unwrap()
+            .translation
+            .x = 1.0;
+        assert!(!changed(&mut app), "a move is not listed");
+        *app.world_mut().get_mut::<Name>(cube).unwrap() = Name::new("Box");
+        assert!(changed(&mut app), "renamed");
+        app.world_mut().entity_mut(cube).insert((Disabled, Deleted));
+        assert!(changed(&mut app), "deleted");
+        app.world_mut()
+            .entity_mut(cube)
+            .remove::<(Disabled, Deleted)>();
+        assert!(changed(&mut app), "restored");
+        app.world_mut().despawn(cube);
+        assert!(changed(&mut app), "despawned");
     }
 
     #[test]
