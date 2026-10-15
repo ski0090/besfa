@@ -648,6 +648,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "besfa_mcp"
+version = "0.1.0"
+dependencies = [
+ "besfa_protocol",
+ "serde_json",
+]
+
+[[package]]
 name = "besfa_protocol"
 version = "0.1.0"
 dependencies = [

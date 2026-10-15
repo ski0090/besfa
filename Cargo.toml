@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/besfa_cli", "crates/besfa_editor", "crates/besfa_editor_plugin", "crates/besfa_protocol"]
+members = ["crates/besfa_cli", "crates/besfa_editor", "crates/besfa_editor_plugin", "crates/besfa_mcp", "crates/besfa_protocol"]
 resolver = "3"

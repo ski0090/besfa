@@ -1,0 +1,9 @@
+[package]
+name = "besfa_mcp"
+version = "0.1.0"
+edition = "2024"
+description = "MCP server that runs a Besfa game in edit mode and passes it editor commands"
+
+[dependencies]
+besfa_protocol = { path = "../besfa_protocol" }
+serde_json = "1.0"
