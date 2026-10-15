@@ -12,6 +12,7 @@ mod preview;
 mod process;
 mod project;
 mod review;
+mod scatter;
 mod scene;
 mod terrain;
 mod viewport;

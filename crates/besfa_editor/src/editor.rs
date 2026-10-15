@@ -12,7 +12,9 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use besfa_protocol::{Command, Placement, Report, Request, TerrainBrush, Tool, VERSION};
+use besfa_protocol::{
+    Command, Placement, Report, Request, ScatterBrush, TerrainBrush, Tool, VERSION,
+};
 use eframe::{
     egui::{
         self, Button, Color32, Key, KeyboardShortcut, Modifiers, RichText, Ui, ViewportCommand,
@@ -22,7 +24,7 @@ use eframe::{
 use serde_json::Value;
 
 use crate::{
-    inspector::{Action, Inspector},
+    inspector::{Action, Inspector, TRANSFORM},
     panels::{
         self, ACCENT, AssetAction, AssetBrowser, GOOD, HierarchyAction, MUTED, Reimport, WARNING,
         prebuild_status,
@@ -30,6 +32,7 @@ use crate::{
     preview::ModelPreview,
     process::{CliProcess, Output, Prebuild},
     project::{self, Project},
+    scatter::ScatterTools,
     scene::{Edit, EditHistory, Scene},
     terrain::TERRAIN,
     viewport::{ViewportInput, ViewportTexture, adapter_name},
@@ -37,6 +40,11 @@ use crate::{
 
 /// The protocol whose plugins make and sculpt terrain from the editor.
 const TERRAIN_PROTOCOL: u32 = 6;
+
+/// The protocols whose plugins drop things to the ground and scatter them
+/// with the scene view's brush.
+const DROP_PROTOCOL: u32 = 7;
+const SCATTER_PROTOCOL: u32 = 8;
 
 /// The log keeps the latest lines.
 const MAX_LOG_LINES: usize = 2000;
@@ -97,6 +105,11 @@ pub struct Editor {
     protocol: Option<u32>,
     /// The terrain brush the game paints with, as last sent.
     brush: Option<TerrainBrush>,
+    /// The scatter brush, as last sent.
+    scatter_brush: Option<ScatterBrush>,
+    scatter: ScatterTools,
+    /// The right panel shows the Scatter tab instead of the Inspector.
+    scatter_tab: bool,
     /// The viewport panel's size in physical pixels, which the texture
     /// follows once it settles.
     wanted_viewport: Option<[u32; 2]>,
@@ -157,6 +170,9 @@ impl Editor {
             seq: 0,
             protocol: None,
             brush: None,
+            scatter_brush: None,
+            scatter: ScatterTools::default(),
+            scatter_tab: false,
             wanted_viewport: None,
             resize_at: None,
             input: ViewportInput::default(),
@@ -271,18 +287,28 @@ impl Editor {
                         }
                     }
                     None => {
-                        self.inspector.can_sculpt =
-                            self.protocol >= Some(TERRAIN_PROTOCOL) && !self.playing;
-                        let scene = self.scene.inspected();
-                        if let Some(action) = self.inspector.ui(ui, &scene, !self.playing) {
-                            self.on_inspector(action);
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut self.scatter_tab, false, "Inspector");
+                            ui.selectable_value(&mut self.scatter_tab, true, "Scatter");
+                        });
+                        if self.scatter_tab {
+                            egui::ScrollArea::vertical()
+                                .auto_shrink(false)
+                                .show(ui, |ui| self.scatter.ui(ui));
+                        } else {
+                            self.inspector.can_sculpt =
+                                self.protocol >= Some(TERRAIN_PROTOCOL) && !self.playing;
+                            let scene = self.scene.inspected();
+                            if let Some(action) = self.inspector.ui(ui, &scene, !self.playing) {
+                                self.on_inspector(action);
+                            }
                         }
                     }
                 }
             });
         egui::CentralPanel::default().show(ui, |ui| self.viewport_ui(ui, &ctx));
         self.dialogs(&ctx);
-        self.send_brush(&ctx);
+        self.send_brushes(&ctx);
 
         if std::mem::take(&mut self.save_after_ui) {
             self.save();
@@ -361,6 +387,7 @@ impl Editor {
         self.seq = 0;
         self.protocol = None;
         self.brush = None;
+        self.scatter_brush = None;
         self.ensure_viewport();
         // The old game cannot answer them; the new one reads the files fresh.
         self.assets
@@ -527,6 +554,35 @@ impl Editor {
             Report::Entities { .. } if self.protocol.is_none() => {
                 self.protocol = Some(0);
                 self.log(protocol_warning(0).unwrap_or_default());
+            }
+            // What one drop moved, undone in one step.
+            Report::Moved { moves } if !moves.is_empty() => {
+                let set = |id, value| Self::set_command(id, TRANSFORM, value);
+                self.record(Edit {
+                    undo: moves.iter().map(|m| set(m.id, m.before.clone())).collect(),
+                    redo: moves.into_iter().map(|m| set(m.id, m.after)).collect(),
+                    seq: None,
+                });
+                self.scene.mark_dirty();
+            }
+            // One scatter stroke: what it placed and what it erased.
+            Report::Scattered { added, removed } => {
+                let delete = |&id| Command::Delete { id };
+                let restore = |&id| Command::Restore { id };
+                self.record(Edit {
+                    undo: added
+                        .iter()
+                        .map(delete)
+                        .chain(removed.iter().map(restore))
+                        .collect(),
+                    redo: added
+                        .iter()
+                        .map(restore)
+                        .chain(removed.iter().map(delete))
+                        .collect(),
+                    seq: None,
+                });
+                self.scene.mark_dirty();
             }
             // A stroke the scene view's brush painted.
             Report::TerrainPainted { stroke, .. } => {
@@ -898,7 +954,12 @@ impl Editor {
     /// Tells the game which terrain brush to paint the selection with,
     /// when that changed: a brush is picked, the selection is a terrain,
     /// and the scene shows in edit mode. Shift turns Raise into Lower.
-    fn send_brush(&mut self, ctx: &egui::Context) {
+    fn send_brushes(&mut self, ctx: &egui::Context) {
+        // Scatter is turned on with the terrain tool put away, so both at
+        // once means a terrain tool was picked since.
+        if self.scatter.on && self.inspector.terrain.tool.is_some() {
+            self.scatter.on = false;
+        }
         let terrain = self.scene.components.iter().any(|c| c.path == TERRAIN);
         let shift = ctx.input(|i| i.modifiers.shift);
         let brush = self
@@ -909,6 +970,27 @@ impl Editor {
         if brush != self.brush && self.game.is_some() {
             self.brush = brush;
             self.send(Command::TerrainBrush { brush });
+        }
+        let scatter = self.scatter.brush(shift).filter(|_| self.can_scatter());
+        if scatter != self.scatter_brush && self.game.is_some() {
+            self.scatter_brush = scatter.clone();
+            self.send(Command::ScatterBrush { brush: scatter });
+        }
+    }
+
+    /// The game's plugin scatters with the scene view's brush, and the
+    /// scene shows in edit mode.
+    fn can_scatter(&self) -> bool {
+        self.protocol >= Some(SCATTER_PROTOCOL) && !self.playing && !self.previewing
+    }
+
+    /// Puts the selection down on the surface below it; the game reports
+    /// what moved, which records the undo.
+    fn drop_to_surface(&mut self) {
+        if let Some(id) = self.scene.selected
+            && self.protocol >= Some(DROP_PROTOCOL)
+        {
+            self.send(Command::DropToSurface { ids: vec![id] });
         }
     }
 
@@ -949,6 +1031,9 @@ impl Editor {
         }
         if pressed(Modifiers::NONE, Key::Escape) {
             self.inspector.terrain.tool = None;
+            self.scatter.on = false;
+        } else if pressed(Modifiers::NONE, Key::End) {
+            self.drop_to_surface();
         } else if pressed(Modifiers::COMMAND, Key::D) {
             self.duplicate();
         } else if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
@@ -1000,6 +1085,13 @@ impl Editor {
                     {
                         self.replay(false);
                     }
+                    let drop = Button::new("Drop to surface").shortcut_text("End");
+                    let can_drop = self.scene.selected.is_some()
+                        && !self.playing
+                        && self.protocol >= Some(DROP_PROTOCOL);
+                    if ui.add_enabled(can_drop, drop).clicked() {
+                        self.drop_to_surface();
+                    }
                 });
                 ui.menu_button("Window", |ui| {
                     let assets = Button::new("Bevy Assets").shortcut_text("Ctrl+9");
@@ -1036,6 +1128,18 @@ impl Editor {
                         .clicked()
                     {
                         self.set_tool(tool);
+                    }
+                }
+                let scatter = Button::selectable(self.scatter.on, "⁙");
+                if ui
+                    .add_enabled(self.can_scatter(), scatter)
+                    .on_hover_text("Scatter")
+                    .clicked()
+                {
+                    self.scatter.on = !self.scatter.on;
+                    if self.scatter.on {
+                        self.scatter_tab = true;
+                        self.inspector.terrain.tool = None;
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1110,6 +1214,8 @@ impl Editor {
         if !self.playing {
             let hint = if self.previewing {
                 "Drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  F fit"
+            } else if self.scatter_brush.is_some() {
+                "Paint to place; hold Shift to erase.  ·  Right-drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  Esc stop"
             } else if self.brush.is_some() {
                 "Paint to sculpt; hold Shift to invert.  ·  Right-drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  Esc stop"
             } else {
