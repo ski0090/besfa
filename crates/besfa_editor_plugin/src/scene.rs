@@ -17,10 +17,13 @@ use bevy::{
     },
     camera::{
         CameraMainTextureUsages, Exposure, RenderTarget,
-        primitives::{Aabb, CubemapFrusta, Frustum, Sphere as BoundingSphere},
-        visibility::{CubemapVisibleEntities, VisibilityClass, VisibleEntities},
+        primitives::{Aabb, CascadesFrusta, CubemapFrusta, Frustum, Sphere as BoundingSphere},
+        visibility::{
+            CascadesVisibleEntities, CubemapVisibleEntities, VisibilityClass, VisibleEntities,
+        },
     },
     ecs::component::{ComponentId, ComponentInfo},
+    light::Cascades,
     prelude::*,
     reflect::{PartialReflect, TypeRegistry, serde::TypedReflectSerializer},
     render::{
@@ -509,7 +512,9 @@ fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn Partial
 
 /// Components that do not belong in the file: what the plugin or Bevy
 /// builds from other components when the scene loads (`Children` follows
-/// from each child's `ChildOf`), camera settings Bevy does not make
+/// from each child's `ChildOf`), a directional light's shadow cascades,
+/// which Bevy works out for each camera every frame, camera settings Bevy
+/// does not make
 /// serializable, the render target, which the editor points at its viewport
 /// after the camera spawns, and the plugin's note of a camera it switched off.
 // ponytail: what the template's entities carry; grow it as files show more.
@@ -532,6 +537,9 @@ pub(crate) fn left_out(type_id: TypeId) -> bool {
         TypeId::of::<CubemapFrusta>(),
         TypeId::of::<VisibleEntities>(),
         TypeId::of::<CubemapVisibleEntities>(),
+        TypeId::of::<Cascades>(),
+        TypeId::of::<CascadesFrusta>(),
+        TypeId::of::<CascadesVisibleEntities>(),
         TypeId::of::<SyncToRenderWorld>(),
         TypeId::of::<RenderEntity>(),
         TypeId::of::<CameraMainTextureUsages>(),
@@ -565,6 +573,35 @@ mod tests {
         fn load_from_path_erased(&mut self, _: TypeId, path: AssetPath<'static>) -> UntypedHandle {
             unreachable!("the test scene references {path}")
         }
+    }
+
+    #[test]
+    fn leaves_a_lights_shadow_cascades_out() {
+        let mut app = test_app();
+        app.register_type::<DirectionalLight>()
+            .register_type::<Cascades>()
+            .register_type::<CascadesFrusta>()
+            .register_type::<CascadesVisibleEntities>();
+        // What Bevy works out for a camera each frame.
+        let camera = Entity::from_raw_u32(7).unwrap();
+        let mut cascades = Cascades::default();
+        cascades
+            .cascades
+            .insert(camera, vec![bevy::light::cascade::Cascade::default()]);
+        let mut frusta = CascadesFrusta::default();
+        frusta.frusta.insert(camera, vec![Frustum::default()]);
+        let sun = app
+            .world_mut()
+            .spawn((SceneEntity, DirectionalLight::default(), cascades, frusta))
+            .id();
+        let dir = std::env::temp_dir().join(format!("besfa-sun-{}", std::process::id()));
+        let path = dir.join(SCENE_PATH);
+        save(app.world_mut(), &path).expect("the scene should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(ron.contains("DirectionalLight"), "{ron}");
+        assert!(!ron.contains("Cascades"), "{ron}");
+        assert!(app.world().get::<CascadesFrusta>(sun).is_some());
     }
 
     fn test_app() -> App {
