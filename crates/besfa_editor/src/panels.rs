@@ -206,15 +206,9 @@ pub fn hierarchy(
     let rows = scene.rows();
     let entity = |&(at, _): &(usize, usize)| &scene.entities[at];
     let depth = |&(_, depth): &(usize, usize)| depth;
-    // Placed models and prefabs start folded: their parts, thousands in a
-    // big scene, are not saved and are seldom what is picked here.
-    let fold = |row: &(usize, usize)| {
-        let entity = entity(row);
-        (
-            Id::new(("hierarchy fold", entity.id)),
-            entity.asset.is_none(),
-        )
-    };
+    // Folds start closed, as Unity's do: placed models' parts, thousands in a
+    // big scene, and a group's members are seldom what is picked here.
+    let fold = |row: &(usize, usize)| (Id::new(("hierarchy fold", entity(row).id)), false);
     // A new selection, picked in the scene view too, opens the folds above
     // it once it is listed.
     let at = rows
@@ -850,12 +844,9 @@ mod tests {
             scene,
         );
         harness.run();
-        // Ship's fold.
-        harness.get_all_by_label("Fold").next().unwrap().click();
-        harness.run();
-        assert!(harness.query_by_label("Mast").is_none(), "folded");
+        assert!(harness.query_by_label("Hull").is_none(), "starts folded");
 
-        // As a pick in the scene view selects it.
+        // As a pick in the scene view selects it, two folds down.
         harness.state_mut().select(Some(3));
         harness.run();
         assert!(harness.query_by_label("Mast").is_some());
