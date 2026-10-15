@@ -116,7 +116,8 @@ pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Result<Entity, String
     };
     let mut entity = world.spawn((SceneEntity, Transform::default()));
     match kind {
-        SpawnKind::Empty => entity.insert(Name::new("Entity")),
+        // So what goes under it as a group shows.
+        SpawnKind::Empty => entity.insert((Name::new("Entity"), Visibility::default())),
         SpawnKind::Cube => entity.insert((
             Name::new("Cube"),
             MeshShape::default(),

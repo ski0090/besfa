@@ -335,6 +335,7 @@ fn scatter_group(world: &mut World) -> Entity {
                 ScatterGroup,
                 Name::new("Scatter"),
                 Transform::default(),
+                Visibility::default(),
             ))
             .id()
     })
