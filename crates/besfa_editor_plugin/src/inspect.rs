@@ -124,6 +124,11 @@ fn report(
     mut last_entity: Local<String>,
     mut last_part: Local<String>,
 ) {
+    // Not before the scene file has spawned, or what it holds would show
+    // up as made by the game.
+    if world.contains_resource::<crate::scene::Loading>() {
+        return;
+    }
     write_if_changed(&mut last_entities, entities(world));
 
     // The model preview's part, reported the way the selection is.

@@ -7,6 +7,7 @@
 
 use std::{
     any::TypeId,
+    collections::HashSet,
     path::{Path, PathBuf},
 };
 
@@ -19,10 +20,15 @@ use bevy::{
         CameraMainTextureUsages, Exposure, RenderTarget,
         primitives::{Aabb, CascadesFrusta, CubemapFrusta, Frustum, Sphere as BoundingSphere},
         visibility::{
-            CascadesVisibleEntities, CubemapVisibleEntities, VisibilityClass, VisibleEntities,
+            CascadesVisibleEntities, CubemapVisibleEntities, VisibilityClass, VisibilitySystems,
+            VisibleEntities,
         },
     },
-    ecs::component::{ComponentId, ComponentInfo},
+    ecs::{
+        component::{ComponentId, ComponentInfo},
+        entity_disabling::Disabled,
+        query::Allow,
+    },
     light::Cascades,
     prelude::*,
     reflect::{PartialReflect, TypeRegistry, serde::TypedReflectSerializer},
@@ -31,7 +37,7 @@ use bevy::{
         sync_world::{RenderEntity, SyncToRenderWorld},
         view::ColorGrading,
     },
-    transform::components::TransformTreeChanged,
+    transform::{TransformSystems, components::TransformTreeChanged},
     world_serialization::{
         DynamicEntity, DynamicWorld, DynamicWorldRoot, InstanceId, WorldAssetRoot,
         WorldInstanceSpawner,
@@ -99,6 +105,12 @@ impl Plugin for ScenePlugin {
             .add_systems(PreUpdate, mark_loaded)
             // After SpawnScene, so a loaded scene gets its meshes this frame.
             .add_systems(PostUpdate, (build_meshes, build_materials))
+            .add_systems(
+                PostUpdate,
+                adopt_loaded_children
+                    .before(TransformSystems::Propagate)
+                    .before(VisibilitySystems::VisibilityPropagate),
+            )
             .add_observer(drop_mesh)
             .add_observer(drop_material);
     }
@@ -106,7 +118,7 @@ impl Plugin for ScenePlugin {
 
 /// The scene instance until it has spawned.
 #[derive(Resource)]
-struct Loading(InstanceId);
+pub(crate) struct Loading(InstanceId);
 
 fn load(
     mut commands: Commands,
@@ -137,10 +149,45 @@ fn mark_loaded(
         return;
     }
     for entity in spawner.iter_instance_entities(loading.0) {
-        commands.entity(entity).insert(SceneEntity);
+        // A parent the file names but does not hold leaves a dead id here.
+        commands.entity(entity).try_insert(SceneEntity);
     }
     commands.remove_resource::<Loading>();
     info!("Loaded {SCENE_PATH}");
+}
+
+/// Puts children loaded from a scene or prefab file into their parents'
+/// `Children`. Bevy writes files into the world without the hooks that keep
+/// the two sides of a relationship together, and the files hold only
+/// `ChildOf`; without this, transforms and visibility never reach the
+/// children, and despawning a parent leaves them behind. A child whose
+/// parent is not there goes to the top, and a parent that does not take
+/// part in visibility, like a group made empty, gets a `Visibility`.
+#[allow(
+    clippy::type_complexity,
+    reason = "a system's query: children loaded this frame"
+)]
+fn adopt_loaded_children(
+    mut commands: Commands,
+    children: Query<(Entity, &ChildOf, Has<InheritedVisibility>, Option<&Name>), Added<ChildOf>>,
+    parents: Query<(Option<&Children>, Has<InheritedVisibility>), Allow<Disabled>>,
+) {
+    for (child, child_of, visible, name) in &children {
+        let parent = child_of.parent();
+        let Ok((held, parent_visible)) = parents.get(parent) else {
+            let name = name.map_or_else(|| child.to_string(), ToString::to_string);
+            warn!("{name}'s parent {parent} is not there; it goes to the top.");
+            commands.entity(child).try_remove::<ChildOf>();
+            continue;
+        };
+        if !held.is_some_and(|held| held.contains(&child)) {
+            // Inserted again, with the hooks this time.
+            commands.entity(child).try_insert(ChildOf(parent));
+        }
+        if visible && !parent_visible {
+            commands.entity(parent).try_insert(Visibility::default());
+        }
+    }
 }
 
 /// Gives each new or changed shape a new mesh. Replacing `Mesh3d` drops the
@@ -291,15 +338,26 @@ fn write(
     }
     let registry = world.resource::<AppTypeRegistry>().read();
     let mut scene = dynamic_world(world, entities, &registry);
-    for root in scene
-        .entities
-        .iter_mut()
-        .filter(|entity| roots.contains(&entity.entity))
-    {
-        root.components
-            .retain(|component| !is::<ChildOf>(component.as_ref()));
-        for component in &mut root.components {
-            if at_origin && is::<Transform>(component.as_ref()) {
+    let written: HashSet<Entity> = entities.iter().copied().collect();
+    for saved in &mut scene.entities {
+        let root = roots.contains(&saved.entity);
+        // A parent the file does not hold would load as a dead entity.
+        let orphan = world
+            .get::<ChildOf>(saved.entity)
+            .is_some_and(|child_of| !written.contains(&child_of.parent()));
+        if orphan && !root {
+            warn!(
+                "Saving {} at the top: its parent is not saved.",
+                saved.entity
+            );
+        }
+        if root || orphan {
+            saved
+                .components
+                .retain(|component| !is::<ChildOf>(component.as_ref()));
+        }
+        for component in &mut saved.components {
+            if root && at_origin && is::<Transform>(component.as_ref()) {
                 *component = Box::new(Transform::default());
             }
         }
@@ -573,6 +631,83 @@ mod tests {
         fn load_from_path_erased(&mut self, _: TypeId, path: AssetPath<'static>) -> UntypedHandle {
             unreachable!("the test scene references {path}")
         }
+    }
+
+    #[test]
+    fn puts_loaded_children_under_their_parents_wherever_the_file_lists_them() {
+        let mut app = test_app();
+        app.add_plugins(TransformPlugin)
+            .register_type::<Visibility>()
+            .add_systems(PostUpdate, adopt_loaded_children);
+        // The child before its parent, as saved files list them, and one
+        // whose parent the file does not hold.
+        let ron = r#"(
+  resources: {},
+  entities: {
+    5: (components: {
+      "bevy_ecs::hierarchy::ChildOf": (6),
+      "bevy_ecs::name::Name": "Oak",
+      "bevy_transform::components::transform::Transform": (translation: (1.0, 0.0, 2.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0)),
+      "bevy_camera::visibility::Visibility": Inherited,
+    }),
+    6: (components: {
+      "bevy_ecs::name::Name": "Forest",
+      "bevy_transform::components::transform::Transform": (translation: (-50.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0, 1.0), scale: (1.0, 1.0, 1.0)),
+    }),
+    7: (components: {
+      "bevy_ecs::hierarchy::ChildOf": (99),
+      "bevy_ecs::name::Name": "Lost",
+    }),
+  },
+)"#;
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        let scene = WorldDeserializer {
+            type_registry: &registry.read(),
+            load_from_path: &mut NoAssets,
+        }
+        .deserialize(&mut ron::de::Deserializer::from_str(ron).unwrap())
+        .unwrap();
+        let mut map = EntityHashMap::default();
+        scene.write_to_world(app.world_mut(), &mut map).unwrap();
+        app.update();
+        app.update();
+
+        let named = |app: &mut App, name: &str| {
+            let mut query = app.world_mut().query::<(Entity, &Name)>();
+            query
+                .iter(app.world())
+                .find(|(_, found)| found.as_str() == name)
+                .map(|(entity, _)| entity)
+                .unwrap()
+        };
+        let (oak, forest, lost) = (
+            named(&mut app, "Oak"),
+            named(&mut app, "Forest"),
+            named(&mut app, "Lost"),
+        );
+        let world = app.world();
+        assert!(
+            world
+                .get::<Children>(forest)
+                .is_some_and(|c| c.contains(&oak))
+        );
+        assert_eq!(
+            world.get::<GlobalTransform>(oak).unwrap().translation(),
+            Vec3::new(-49.0, 0.0, 2.0),
+            "drawn where it stands under its parent"
+        );
+        assert!(
+            world.get::<Visibility>(forest).is_some(),
+            "the group takes part in visibility"
+        );
+        assert!(
+            world.get::<ChildOf>(lost).is_none(),
+            "no parent: at the top"
+        );
+
+        // Despawning the parent takes the loaded child with it.
+        app.world_mut().despawn(forest);
+        assert!(app.world().get_entity(oak).is_err());
     }
 
     #[test]
