@@ -558,6 +558,61 @@ pub(crate) fn stroke(
     Ok(number)
 }
 
+/// Brings all of terrain `entity` to `height`, meters in the world, and
+/// covers it with `layer`, or does one of the two, as one stroke; returns
+/// its number.
+pub(crate) fn fill(
+    world: &mut World,
+    entity: Entity,
+    height: Option<f32>,
+    layer: Option<usize>,
+) -> Result<u64, String> {
+    let id = entity.to_bits();
+    let (layers, file) = world
+        .get_entity(entity)
+        .ok()
+        .and_then(|entity| {
+            Some((
+                entity.get::<Terrain>()?.layers.len().min(4),
+                entity.get::<TerrainHandle>()?.handle.id(),
+            ))
+        })
+        .ok_or_else(|| format!("{id} is not a terrain"))?;
+    if height.is_none() && layer.is_none() {
+        return Err("fill needs a height, a layer or both".into());
+    }
+    if layer.is_some_and(|layer| layer >= layers) {
+        return Err(format!("the layer is below {layers}"));
+    }
+    let transform = in_world(world, entity);
+    let mut files = world.resource_mut::<Assets<TerrainData>>();
+    let before = files
+        .get(file)
+        .ok_or_else(|| format!("the file of terrain {id} has not loaded"))?
+        .clone();
+    let mut data = files.get_mut(file).unwrap();
+    if let Some(height) = height {
+        let local = (height - transform.translation.y) / transform.scale.y;
+        data.heights.fill(local);
+    }
+    if let Some(layer) = layer {
+        let mut weights = [0; 4];
+        weights[layer] = 255;
+        data.weights.fill(weights);
+    }
+    let last = UVec2::splat(data.resolution - 1);
+    let changed = (
+        Region::take(&before, UVec2::ZERO, last),
+        Region::take(&data, UVec2::ZERO, last),
+    );
+    drop(data);
+    let number = world
+        .resource_mut::<Strokes>()
+        .keep(entity, file, Some(changed));
+    world.entity_mut(entity).insert(Unsaved);
+    Ok(number)
+}
+
 /// `point`, in the world, in the space of a terrain placed by `transform`,
 /// X and Z.
 fn local(transform: &Transform, point: Vec3) -> Vec2 {

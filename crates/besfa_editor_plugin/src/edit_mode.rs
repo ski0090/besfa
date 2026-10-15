@@ -246,6 +246,9 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             }
             Ok(())
         }
+        Command::TerrainFill { id, height, layer } => entity(id)
+            .and_then(|entity| terrain::fill(world, entity, height, layer))
+            .map(|stroke| send_report(&Report::TerrainPainted { id, stroke })),
         Command::TerrainRestore { stroke, before } => terrain::restore(world, stroke, before),
         Command::TerrainForget { stroke } => {
             terrain::forget(world, stroke);

@@ -102,6 +102,7 @@ fn tools() -> Value {
                 "{\"command\":\"thumbnail\",\"path\":\"models/x.glb\",\"file\":\"thumb.png\"} renders one model on its own\n",
                 "Terrain: {\"command\":\"spawn\",\"kind\":\"terrain\",\"name\":\"Ground\"} makes flat ground 256 m a side centered on it, covered by its first layer; resize it by setting its besfa_editor_plugin::terrain::Terrain component to {\"size\":200}, which also takes \"layers\", up to four colors (by default grass, dirt, stone, sand); its heights go to a .terrain file of their own when the scene is saved\n",
                 "{\"command\":\"terrain_stroke\",\"id\":ID,\"tool\":\"raise|lower|smooth|flatten|paint\",\"points\":[[x,z],[x,z]],\"radius\":8,\"strength\":2,\"layer\":1} paints one stroke along the points, world X and Z, joined by straight lines; each place takes the brush where it reached most, so a line raises an even ridge; raise and lower take strength in meters at the brush middle, smooth, flatten (to the first point's height) and paint (layer needed) take 0 to 1; answers terrain_painted with the stroke number, and {\"command\":\"terrain_restore\",\"stroke\":N,\"before\":true} undoes it (false redoes it)\n",
+                "{\"command\":\"terrain_fill\",\"id\":ID,\"height\":0,\"layer\":0} brings the whole terrain to a height in the world and covers it with a layer, or does one of the two; one stroke, undone with terrain_restore\n",
                 "{\"command\":\"heights\",\"points\":[[x,z],...]} answers heights: the ground's height at each point, or null where no terrain is\n",
                 "{\"command\":\"drop_to_surface\",\"ids\":[ID,...]} brings each down, or up out of the ground, onto the surface right below it, keeping its turn; a group (no mesh of its own) drops each thing in it; answers moved with each Transform before and after; \"No surface below NAME.\" fails one with nothing below\n",
                 "{\"command\":\"scatter\",\"models\":[{\"path\":\"models/grass-clump.glb\",\"weight\":3},{\"path\":\"models/wildflowers.glb\",\"weight\":1}],\"center\":[0,0],\"radius\":25,\"count\":80,\"spacing\":1.5,\"scale\":[0.8,1.3],\"rotate\":true,\"align\":true,\"seed\":1} places up to count on the ground (terrain, else what is below, else height 0), at least spacing apart and from earlier scattered things, under the scene's Scatter group, with random turn and slope tilt when asked; the same seed on the same ground places the same; answers scattered with the added ids (fewer than count when the circle is full)\n",
@@ -262,6 +263,7 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 fn since(command: &Command) -> u32 {
     match command {
         Command::DropToSurface { .. } | Command::Scatter { .. } | Command::ScatterErase { .. } => 7,
+        Command::TerrainFill { .. } => 9,
         Command::ScatterBrush { .. } => 8,
         Command::TerrainBrush { .. } => 6,
         Command::Spawn {

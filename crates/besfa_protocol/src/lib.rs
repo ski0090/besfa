@@ -37,7 +37,8 @@ use serde_json::Value;
 ///    [`Report::Moved`], and [`Command::Scatter`] and
 ///    [`Command::ScatterErase`] answered by [`Report::Scattered`].
 /// 8. The scene view's scatter brush, [`Command::ScatterBrush`].
-pub const VERSION: u32 = 8;
+/// 9. [`Command::TerrainFill`].
+pub const VERSION: u32 = 9;
 
 /// Starts every report line.
 pub const REPORT_PREFIX: &str = "@besfa ";
@@ -241,6 +242,14 @@ pub enum Command {
     /// the ground. Without a brush the left button selects again.
     TerrainBrush {
         brush: Option<TerrainBrush>,
+    },
+    /// Brings the whole terrain `id` to `height`, meters in the world, and
+    /// covers it with surface `layer`, or does one of the two; reported as
+    /// a stroke, `terrain_painted`, so it undoes the same way.
+    TerrainFill {
+        id: u64,
+        height: Option<f32>,
+        layer: Option<usize>,
     },
     /// Puts the ground a stroke changed back as it was `before` it, or as
     /// the stroke left it.
