@@ -386,7 +386,8 @@ mod tests {
         )
         .unwrap();
         process.stop();
-        let exit = process.output.recv_timeout(Duration::from_secs(5));
+        // taskkill alone takes seconds, longer while other tests run.
+        let exit = process.output.recv_timeout(Duration::from_secs(15));
         assert!(matches!(exit, Ok(Output::Exit(code)) if code != 0));
     }
 }
