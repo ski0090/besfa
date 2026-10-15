@@ -860,33 +860,34 @@ impl Stroke {
         }
     }
 
-    /// Moves the brush to `point`, in the terrain's space, dabbing along
-    /// the way, and writes what changed into `data`.
+    /// Moves the brush to `point`, in the terrain's space, painting the
+    /// line there, and writes what changed into `data`.
     pub(crate) fn to(&mut self, data: &mut TerrainData, point: Vec2) {
         let from = self.last.replace(point).unwrap_or(point);
-        let spacing = (self.brush.radius / 4.0).max(self.before.step(self.size) / 2.0);
-        let dabs = (from.distance(point) / spacing).ceil().max(1.0) as u32;
-        for dab in 0..=dabs {
-            self.dab(data, from.lerp(point, dab as f32 / dabs as f32));
-        }
+        self.sweep(data, from, point);
     }
 
-    fn dab(&mut self, data: &mut TerrainData, center: Vec2) {
+    /// Each sample near the line from `from` to `to` takes the brush as it
+    /// reaches it from the nearest point on the line, so a line is even
+    /// along its length rather than rippled by separate dabs.
+    fn sweep(&mut self, data: &mut TerrainData, from: Vec2, to: Vec2) {
         let (size, radius) = (self.size, self.brush.radius);
         let step = self.before.step(size);
         let last = self.before.resolution - 1;
         let sample = |at: f32| ((at + size / 2.0) / step).clamp(0.0, last as f32);
-        let from = UVec2::new(
-            sample(center.x - radius).floor() as u32,
-            sample(center.y - radius).floor() as u32,
-        );
-        let to = UVec2::new(
-            sample(center.x + radius).ceil() as u32,
-            sample(center.y + radius).ceil() as u32,
-        );
-        for z in from.y..=to.y {
-            for x in from.x..=to.x {
-                let distance = self.before.position(size, x, z).distance(center);
+        let (low, high) = (from.min(to) - radius, from.max(to) + radius);
+        let first = UVec2::new(sample(low.x).floor() as u32, sample(low.y).floor() as u32);
+        let end = UVec2::new(sample(high.x).ceil() as u32, sample(high.y).ceil() as u32);
+        let line = to - from;
+        for z in first.y..=end.y {
+            for x in first.x..=end.x {
+                let at = self.before.position(size, x, z);
+                let along = if line.length_squared() > 0.0 {
+                    ((at - from).dot(line) / line.length_squared()).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let distance = at.distance(from + line * along);
                 if distance >= radius {
                     continue;
                 }
@@ -1041,6 +1042,17 @@ mod tests {
             after.height(10.0, Vec2::new(0.0, 2.0)),
             Some(0.0),
             "nothing at the brush's edge"
+        );
+        // Off the samples too, the ridge is even along its length.
+        let (askew, _) = painted(
+            &flat,
+            brush(TerrainTool::Raise, 2.0, 3.0),
+            &[Vec2::new(-3.1, 0.3), Vec2::new(3.1, 0.3)],
+        );
+        let row: Vec<f32> = (2..=8).map(|x| askew.heights[flat.index(x, 5)]).collect();
+        assert!(
+            row.iter().all(|&height| (height - row[0]).abs() < 1e-5),
+            "{row:?}"
         );
         let (from, to) = changed.unwrap();
         assert!(from.heights.iter().all(|&height| height == 0.0));
