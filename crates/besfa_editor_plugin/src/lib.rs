@@ -27,6 +27,7 @@ mod reimport;
 mod scene;
 mod scene_view;
 mod shot;
+mod terrain;
 mod thumbnail;
 mod viewport;
 
@@ -34,6 +35,7 @@ pub use part_changes::{PartChange, PartChanges};
 pub use reimport::Reimported;
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
 pub use scene_view::EditorOnly;
+pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight};
 
 /// `DefaultPlugins` plus the scene file, adjusted to start in edit mode and
 /// render into the editor viewport when the editor launched the game, or
@@ -43,7 +45,8 @@ pub fn default_plugins() -> PluginGroupBuilder {
     let mut plugins = DefaultPlugins
         .build()
         .add(scene::ScenePlugin)
-        .add(part_changes::PartChangesPlugin);
+        .add(part_changes::PartChangesPlugin)
+        .add(terrain::TerrainPlugin);
     if edit_mode::requested() {
         plugins = plugins
             .add(edit_mode::EditModePlugin)

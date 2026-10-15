@@ -26,7 +26,7 @@ use crate::{
     },
     scene_view::{self, SceneView},
     shot::{self, Shot},
-    thumbnail, viewport,
+    terrain, thumbnail, viewport,
 };
 
 pub(crate) fn requested() -> bool {
@@ -114,7 +114,7 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::Save => {
-            let result = save(world, &scene_file());
+            let result = terrain::save(world).and_then(|()| save(world, &scene_file()));
             match &result {
                 Ok(()) => info!("Saved {SCENE_PATH}"),
                 Err(error) => error!("Could not save {SCENE_PATH}: {error}"),
@@ -143,10 +143,11 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
         }),
         Command::Spawn { kind, place } => {
             let parent = place.parent.map(|id| edit::parent(world, id)).transpose();
-            parent.map(|parent| {
-                let entity = edit::spawn(world, kind);
+            parent.and_then(|parent| {
+                let entity = edit::spawn(world, kind)?;
                 edit::place(world, entity, &place, parent);
                 spawned(world, entity);
+                Ok(())
             })
         }
         Command::Duplicate { id } => entity(id)
@@ -160,6 +161,28 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
                 spawned(world, entity);
                 Ok(())
             })
+        }
+        Command::TerrainStroke {
+            id,
+            tool,
+            points,
+            radius,
+            strength,
+            layer,
+        } => entity(id)
+            .and_then(|entity| {
+                terrain::stroke(world, entity, tool, &points, radius, strength, layer)
+            })
+            .map(|stroke| send_report(&Report::TerrainPainted { id, stroke })),
+        Command::TerrainRestore { stroke, before } => terrain::restore(world, stroke, before),
+        Command::TerrainForget { stroke } => {
+            terrain::forget(world, stroke);
+            Ok(())
+        }
+        Command::Heights { points } => {
+            let heights = terrain::heights(world, &points);
+            send_report(&Report::Heights { heights });
+            Ok(())
         }
         Command::Parent { id, parent } => entity(id).and_then(|entity| {
             let parent = parent.map(|id| edit::parent(world, id)).transpose()?;

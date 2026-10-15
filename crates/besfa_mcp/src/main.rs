@@ -14,7 +14,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
-use besfa_protocol::{Command, EntityInfo, Placement, Report, Request};
+use besfa_protocol::{Command, EntityInfo, Placement, Report, Request, SpawnKind};
 use serde_json::{Value, json};
 
 /// How much of the game's log a failure shows.
@@ -97,6 +97,9 @@ fn tools() -> Value {
                 "{\"command\":\"save\"} writes the scene file; {\"command\":\"save_prefab\",\"id\":ID,\"path\":\"prefabs/x.scn.ron\"}\n",
                 "{\"command\":\"screenshot\",\"file\":\"shots/map.png\",\"target\":[0,0,0],\"eye\":[40,30,40]} or with \"top\":200 instead of eye, a view straight down over a square that many meters wide, north (-Z) up; renders the scene without editor overlays to a PNG relative to the project, once its models have loaded; read the file to see it\n",
                 "{\"command\":\"thumbnail\",\"path\":\"models/x.glb\",\"file\":\"thumb.png\"} renders one model on its own\n",
+                "Terrain: {\"command\":\"spawn\",\"kind\":\"terrain\",\"name\":\"Ground\"} makes flat ground 256 m a side centered on it, covered by its first layer; resize it by setting its besfa_editor_plugin::terrain::Terrain component to {\"size\":200}, which also takes \"layers\", up to four colors (by default grass, dirt, stone, sand); its heights go to a .terrain file of their own when the scene is saved\n",
+                "{\"command\":\"terrain_stroke\",\"id\":ID,\"tool\":\"raise|lower|smooth|flatten|paint\",\"points\":[[x,z],[x,z]],\"radius\":8,\"strength\":2,\"layer\":1} paints one stroke along the points, world X and Z, joined by straight lines; each place takes the brush where it reached most, so a line raises an even ridge; raise and lower take strength in meters at the brush middle, smooth, flatten (to the first point's height) and paint (layer needed) take 0 to 1; answers terrain_painted with the stroke number, and {\"command\":\"terrain_restore\",\"stroke\":N,\"before\":true} undoes it (false redoes it)\n",
+                "{\"command\":\"heights\",\"points\":[[x,z],...]} answers heights: the ground's height at each point, or null where no terrain is\n",
                 "{\"command\":\"play\"} unpauses the game\n",
                 "Screenshot, thumbnail and reimport are waited for until their answer comes. An unknown command is refused with the list of valid ones.",
             ),
@@ -245,6 +248,14 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 /// The protocol version a game must speak to run `command`.
 fn since(command: &Command) -> u32 {
     match command {
+        Command::Spawn {
+            kind: SpawnKind::Terrain,
+            ..
+        }
+        | Command::TerrainStroke { .. }
+        | Command::TerrainRestore { .. }
+        | Command::TerrainForget { .. }
+        | Command::Heights { .. } => 5,
         Command::Screenshot { .. } | Command::Parent { .. } => 4,
         Command::Spawn { place, .. } | Command::Instantiate { place, .. }
             if *place != Placement::default() =>

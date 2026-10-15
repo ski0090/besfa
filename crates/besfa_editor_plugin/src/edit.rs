@@ -22,6 +22,7 @@ use serde_json::Value;
 use crate::{
     scene::{MeshColor, MeshShape, SceneEntity},
     scene_view::keep_parked,
+    terrain::{self, Terrain},
 };
 
 /// An entity the editor deleted: disabled, so the game, rendering and
@@ -106,8 +107,13 @@ pub(crate) fn remove(world: &mut World, entity: Entity, component: &str) -> Resu
     Ok(())
 }
 
-/// Spawns a scene entity at the origin, so saving keeps it.
-pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Entity {
+/// Spawns a scene entity at the origin, so saving keeps it. A terrain
+/// gets a new file of its own.
+pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Result<Entity, String> {
+    let file = match kind {
+        SpawnKind::Terrain => Some(terrain::new_file(world)?),
+        _ => None,
+    };
     let mut entity = world.spawn((SceneEntity, Transform::default()));
     match kind {
         SpawnKind::Empty => entity.insert(Name::new("Entity")),
@@ -141,8 +147,11 @@ pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Entity {
             Camera3d::default(),
             Transform::from_xyz(0.0, 2.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
         )),
+        SpawnKind::Terrain => {
+            entity.insert((Name::new("Terrain"), Terrain::default(), file.unwrap()))
+        }
     };
-    entity.id()
+    Ok(entity.id())
 }
 
 /// Spawns a copy of `entity` with every component that can be cloned. The
@@ -293,7 +302,7 @@ fn ancestry(world: &World, entity: Entity) -> Vec<Entity> {
 /// Where `entity` is in the world, from its transform and its parents'.
 /// Composed part by part rather than as matrices, so a group that only
 /// moves its children leaves their rotation and size exactly as they were.
-fn in_world(world: &World, entity: Entity) -> Transform {
+pub(crate) fn in_world(world: &World, entity: Entity) -> Transform {
     ancestry(world, entity)
         .iter()
         .rev()
@@ -423,9 +432,9 @@ mod tests {
     #[test]
     fn places_and_reparents_keeping_entities_where_they_are_in_the_world() {
         let mut world = world();
-        let forest = spawn(&mut world, SpawnKind::Empty);
+        let forest = spawn(&mut world, SpawnKind::Empty).unwrap();
         world.get_mut::<Transform>(forest).unwrap().translation = Vec3::new(-55.0, 0.0, 0.0);
-        let tree = spawn(&mut world, SpawnKind::Cube);
+        let tree = spawn(&mut world, SpawnKind::Cube).unwrap();
         let place_tree = Placement {
             translation: Some([-60.0, 0.0, 5.0]),
             yaw: Some(90.0),
@@ -487,7 +496,7 @@ mod tests {
     fn spawns_duplicates_deletes_and_restores_scene_entities() {
         let mut world = world();
 
-        let cube = spawn(&mut world, SpawnKind::Cube);
+        let cube = spawn(&mut world, SpawnKind::Cube).unwrap();
         assert!(world.get::<SceneEntity>(cube).is_some());
         assert_eq!(world.get::<Name>(cube).unwrap().as_str(), "Cube");
         world.get_mut::<Transform>(cube).unwrap().translation.x = 5.0;

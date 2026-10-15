@@ -28,7 +28,11 @@ use serde_json::Value;
 /// 4. Pictures of the scene, [`Command::Screenshot`], answered by
 ///    [`Report::Screenshot`]; [`Placement`] for [`Command::Spawn`] and
 ///    [`Command::Instantiate`], and [`Command::Parent`].
-pub const VERSION: u32 = 4;
+/// 5. Terrain: [`SpawnKind::Terrain`], [`Command::TerrainStroke`] answered
+///    by [`Report::TerrainPainted`], [`Command::TerrainRestore`],
+///    [`Command::TerrainForget`], and [`Command::Heights`] answered by
+///    [`Report::Heights`].
+pub const VERSION: u32 = 5;
 
 /// Starts every report line.
 pub const REPORT_PREFIX: &str = "@besfa ";
@@ -208,6 +212,39 @@ pub enum Command {
         path: String,
         file: String,
     },
+    /// Paints one stroke on the terrain `id`: brush dabs `radius` meters wide
+    /// along `points`, world X and Z, joined by straight lines. Within a
+    /// stroke the brush counts where it reached most, not how often, so a
+    /// line raises a ridge of an even height, and painting over a place
+    /// again takes another stroke. `strength` is meters at the brush's
+    /// middle to raise or lower, and for the other tools how far, 0 to 1,
+    /// the ground goes toward smooth, the stroke's first point's height, or
+    /// the surface `layer`. Reports `terrain_painted` with the stroke's
+    /// number, which undoes and redoes it.
+    TerrainStroke {
+        id: u64,
+        tool: TerrainTool,
+        points: Vec<[f32; 2]>,
+        radius: f32,
+        strength: f32,
+        /// The surface layer `paint` covers the ground with.
+        layer: Option<usize>,
+    },
+    /// Puts the ground a stroke changed back as it was `before` it, or as
+    /// the stroke left it.
+    TerrainRestore {
+        stroke: u64,
+        before: bool,
+    },
+    /// Drops what the game keeps to undo a stroke, once nothing will.
+    TerrainForget {
+        stroke: u64,
+    },
+    /// Reports `heights`: at each of `points`, world X and Z, the height of
+    /// the highest terrain there, or none where no terrain is.
+    Heights {
+        points: Vec<[f32; 2]>,
+    },
     /// Renders the scene as the scene view shows it, without its grid and
     /// handles, off screen, and writes the picture to `file`, a PNG file
     /// relative to the project; reports it as `screenshot`. Looks from `eye`
@@ -287,6 +324,23 @@ pub enum SpawnKind {
     Plane,
     Light,
     Camera,
+    /// Flat ground 256 meters a side covered by its first surface layer,
+    /// whose heights and layers go to a file of their own.
+    Terrain,
+}
+
+/// What a terrain stroke does to the ground under the brush.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainTool {
+    Raise,
+    Lower,
+    /// Rounds off bumps and dents.
+    Smooth,
+    /// Brings the ground to the height where the stroke began.
+    Flatten,
+    /// Covers the ground with a surface layer.
+    Paint,
 }
 
 /// What dragging a handle does to the selected entity.
@@ -421,6 +475,11 @@ pub enum Report {
     Screenshot { path: String, error: Option<String> },
     /// The outcome of `thumbnail`.
     Thumbnail { path: String, error: Option<String> },
+    /// A terrain stroke is done, from a command or the scene view's brush:
+    /// `stroke` names it for `terrain_restore` and `terrain_forget`.
+    TerrainPainted { id: u64, stroke: u64 },
+    /// The answer to `heights`, a height or none for each point.
+    Heights { heights: Vec<Option<f32>> },
     /// The outcome of `reimport`.
     Reimported { path: String, error: Option<String> },
     /// A report from a newer plugin than this protocol knows.
@@ -680,6 +739,27 @@ mod tests {
         assert_eq!(
             line, r#"{"command":"spawn","kind":"empty"}"#,
             "nothing to place"
+        );
+        assert_eq!(
+            request(
+                r#"{"command":"terrain_stroke","id":2,"tool":"raise","points":[[1,2],[3,4]],"radius":5,"strength":2}"#
+            )
+            .command,
+            Command::TerrainStroke {
+                id: 2,
+                tool: TerrainTool::Raise,
+                points: vec![[1.0, 2.0], [3.0, 4.0]],
+                radius: 5.0,
+                strength: 2.0,
+                layer: None,
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"spawn","kind":"terrain"}"#).command,
+            Command::Spawn {
+                kind: SpawnKind::Terrain,
+                place: Placement::default(),
+            }
         );
         assert_eq!(
             request(r#"{"command":"parent","id":3}"#).command,
