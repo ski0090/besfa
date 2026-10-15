@@ -41,13 +41,13 @@ const SIZE: u32 = 256;
 /// renderer must have compiled nothing: a mesh shows only once its
 /// pipeline has compiled. A capture with nothing on it is taken again, up
 /// to `TRIES` times.
-const RENDER_FRAMES: u32 = 10;
-const IDLE_FRAMES: u32 = 3;
+pub(crate) const RENDER_FRAMES: u32 = 10;
+pub(crate) const IDLE_FRAMES: u32 = 3;
 const TRIES: u32 = 15;
 
 /// Frames a model may take to load and get bounds before it is captured
 /// as it is.
-const LOAD_FRAMES: u32 = 600;
+pub(crate) const LOAD_FRAMES: u32 = 600;
 
 pub(crate) struct ThumbnailPlugin;
 
@@ -68,7 +68,7 @@ impl Plugin for ThumbnailPlugin {
 
 /// The pipelines the renderer was compiling at the end of its last frame.
 #[derive(Resource, Clone, Default)]
-struct Compiling(Arc<AtomicUsize>);
+pub(crate) struct Compiling(pub(crate) Arc<AtomicUsize>);
 
 fn count_compiling(cache: Res<PipelineCache>, compiling: Res<Compiling>) {
     let waiting = cache.waiting_pipelines().count();
@@ -288,7 +288,7 @@ fn captured(capture: On<ScreenshotCaptured>, mut commands: Commands) {
     });
 }
 
-fn save(image: &Image, file: &Path) -> Result<(), String> {
+pub(crate) fn save(image: &Image, file: &Path) -> Result<(), String> {
     if let Some(folder) = file.parent() {
         std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
     }

@@ -26,6 +26,7 @@ mod preview;
 mod reimport;
 mod scene;
 mod scene_view;
+mod shot;
 mod thumbnail;
 mod viewport;
 
@@ -50,7 +51,8 @@ pub fn default_plugins() -> PluginGroupBuilder {
             .add(scene_view::SceneViewPlugin)
             .add(preview::PreviewPlugin)
             .add(reimport::ReimportPlugin)
-            .add(thumbnail::ThumbnailPlugin);
+            .add(thumbnail::ThumbnailPlugin)
+            .add(shot::ShotPlugin);
     }
     let viewport = viewport::ViewportConfig::from_env();
     // Set by besfa_mcp, so a game it drives opens no window to take focus.

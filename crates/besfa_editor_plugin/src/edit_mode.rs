@@ -25,6 +25,7 @@ use crate::{
         scene_file,
     },
     scene_view::{self, SceneView},
+    shot::{self, Shot},
     thumbnail, viewport,
 };
 
@@ -301,6 +302,21 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
                 Err(format!(
                     "{path} is not a glTF path inside the asset directory"
                 ))
+            }
+        }
+        Command::Screenshot {
+            file,
+            target,
+            eye,
+            top,
+            width,
+            height,
+        } => {
+            if !(inside(&file) && file.ends_with(".png")) {
+                Err(format!("{file} is not a .png path inside the project"))
+            } else {
+                Shot::new(target.into(), eye.map(Vec3::from), top, width, height)
+                    .map(|view| shot::request(world, file.clone(), project_file(&file), view))
             }
         }
         Command::PreviewScreenshot { path } => {

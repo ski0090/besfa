@@ -13,7 +13,7 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 
 use besfa_protocol::{Button, PointerEvent, Report, Tool};
 use bevy::{
-    camera::{RenderTarget, primitives::Aabb},
+    camera::{RenderTarget, primitives::Aabb, visibility::RenderLayers},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
     prelude::*,
     reflect::{TypePath, serde::TypedReflectSerializer},
@@ -130,6 +130,18 @@ const ACTIVE_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct HandleGizmos;
 
+/// The ground grid.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct GridGizmos;
+
+/// The grid's and handles' render layer, which only the editor camera
+/// draws, so pictures of the scene leave them out.
+const OVERLAY_LAYER: usize = 29;
+
+fn overlay() -> RenderLayers {
+    RenderLayers::layer(OVERLAY_LAYER)
+}
+
 pub(crate) struct SceneViewPlugin;
 
 impl Plugin for SceneViewPlugin {
@@ -139,6 +151,14 @@ impl Plugin for SceneViewPlugin {
                 HandleGizmos,
                 GizmoConfig {
                     depth_bias: -1.0,
+                    render_layers: overlay(),
+                    ..default()
+                },
+            )
+            .insert_gizmo_config(
+                GridGizmos,
+                GizmoConfig {
+                    render_layers: overlay(),
                     ..default()
                 },
             )
@@ -314,6 +334,8 @@ fn spawn_editor_camera(mut commands: Commands) {
             order: EDITOR_CAMERA_ORDER,
             ..default()
         },
+        // The scene and the grid and handles over it.
+        RenderLayers::default().with(OVERLAY_LAYER),
     ));
 }
 
@@ -595,7 +617,7 @@ fn draw(
     selected: Res<Selected>,
     targets: Query<(&GlobalTransform, Option<&Aabb>), Without<EditorCamera>>,
     camera: Query<&GlobalTransform, With<EditorCamera>>,
-    mut gizmos: Gizmos,
+    mut gizmos: Gizmos<GridGizmos>,
     mut handles: Gizmos<HandleGizmos>,
 ) {
     gizmos.grid(

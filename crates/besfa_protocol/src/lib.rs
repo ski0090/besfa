@@ -25,7 +25,9 @@ use serde_json::Value;
 ///    [`Command::PreviewSelect`] for a part's components,
 ///    [`Command::Reimport`], answered by [`Report::Reimported`], and
 ///    [`Command::Thumbnail`], answered by [`Report::Thumbnail`].
-pub const VERSION: u32 = 3;
+/// 4. Pictures of the scene, [`Command::Screenshot`], answered by
+///    [`Report::Screenshot`].
+pub const VERSION: u32 = 4;
 
 /// Starts every report line.
 pub const REPORT_PREFIX: &str = "@besfa ";
@@ -194,6 +196,22 @@ pub enum Command {
     Thumbnail {
         path: String,
         file: String,
+    },
+    /// Renders the scene as the scene view shows it, without its grid and
+    /// handles, off screen, and writes the picture to `file`, a PNG file
+    /// relative to the project; reports it as `screenshot`. Looks from `eye`
+    /// at `target`, or with `top`, straight down on `target` over a square
+    /// `top` meters wide, north (-Z) up. One picture at a time, in the order
+    /// asked, once the scene's models have loaded.
+    Screenshot {
+        file: String,
+        target: [f32; 3],
+        eye: Option<[f32; 3]>,
+        top: Option<f32>,
+        /// Pixels; 1024 wide by default, and 768 high, or as high as wide
+        /// with `top`.
+        width: Option<u32>,
+        height: Option<u32>,
     },
 }
 
@@ -364,7 +382,7 @@ pub enum Report {
         #[serde(flatten)]
         model: PreviewModel,
     },
-    /// The outcome of `preview_screenshot`.
+    /// The outcome of `preview_screenshot` and `screenshot`.
     Screenshot { path: String, error: Option<String> },
     /// The outcome of `thumbnail`.
     Thumbnail { path: String, error: Option<String> },
@@ -589,6 +607,18 @@ mod tests {
                 markers: false,
                 bounds: true
             })
+        );
+        assert_eq!(
+            request(r#"{"command":"screenshot","file":"top.png","target":[0,0,0],"top":200}"#)
+                .command,
+            Command::Screenshot {
+                file: "top.png".into(),
+                target: [0.0; 3],
+                eye: None,
+                top: Some(200.0),
+                width: None,
+                height: None,
+            }
         );
     }
 
