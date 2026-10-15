@@ -141,17 +141,30 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             part_changes::edited(world, entity, &component);
             Ok(())
         }),
-        Command::Spawn { kind } => {
-            let entity = edit::spawn(world, kind);
-            spawned(world, entity);
-            Ok(())
+        Command::Spawn { kind, place } => {
+            let parent = place.parent.map(|id| edit::parent(world, id)).transpose();
+            parent.map(|parent| {
+                let entity = edit::spawn(world, kind);
+                edit::place(world, entity, &place, parent);
+                spawned(world, entity);
+            })
         }
         Command::Duplicate { id } => entity(id)
             .and_then(|entity| edit::duplicate(world, entity))
             .map(|copy| spawned(world, copy)),
-        Command::Instantiate { path } => {
-            edit::instantiate(world, &path).map(|entity| spawned(world, entity))
+        Command::Instantiate { path, place } => {
+            let parent = place.parent.map(|id| edit::parent(world, id)).transpose();
+            parent.and_then(|parent| {
+                let entity = edit::instantiate(world, &path)?;
+                edit::place(world, entity, &place, parent);
+                spawned(world, entity);
+                Ok(())
+            })
         }
+        Command::Parent { id, parent } => entity(id).and_then(|entity| {
+            let parent = parent.map(|id| edit::parent(world, id)).transpose()?;
+            edit::set_parent(world, entity, parent)
+        }),
         Command::Delete { id } => entity(id)
             .and_then(|entity| edit::delete(world, entity))
             .map(|deleted| {

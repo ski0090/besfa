@@ -8,7 +8,7 @@
 //! scene file and the `entity` report use. Values are JSON in the shape
 //! the `entity` report sends them.
 
-use besfa_protocol::SpawnKind;
+use besfa_protocol::{Placement, SpawnKind};
 use bevy::{
     asset::HandleDeserializeProcessor,
     ecs::{entity_disabling::Disabled, reflect::ReflectFromWorld},
@@ -208,6 +208,113 @@ pub(crate) fn instantiate(world: &mut World, path: &str) -> Result<Entity, Strin
     Ok(entity.id())
 }
 
+/// Puts a new `entity` where `place` says. `parent` is the one `place`
+/// names, already checked with [`parent`].
+pub(crate) fn place(world: &mut World, entity: Entity, place: &Placement, parent: Option<Entity>) {
+    let mut entity = world.entity_mut(entity);
+    if let Some(name) = &place.name {
+        entity.insert(Name::new(name.clone()));
+    }
+    if let Some(mut transform) = entity.get_mut::<Transform>() {
+        if let Some(translation) = place.translation {
+            transform.translation = translation.into();
+        }
+        if let Some(yaw) = place.yaw {
+            transform.rotation = Quat::from_rotation_y(yaw.to_radians());
+        }
+        if let Some(scale) = place.scale {
+            transform.scale = Vec3::splat(scale);
+        }
+    }
+    let entity = entity.id();
+    if let Some(parent) = parent {
+        reparent(world, entity, Some(parent));
+    }
+}
+
+/// The scene entity `id` names, for an entity to go under: not deleted,
+/// and not a part of a placed model, which saving would leave out.
+pub(crate) fn parent(world: &World, id: u64) -> Result<Entity, String> {
+    Entity::try_from_bits(id)
+        .filter(|&entity| {
+            world.get_entity(entity).is_ok_and(|entity| {
+                entity.contains::<SceneEntity>() && !entity.contains::<Deleted>()
+            })
+        })
+        .ok_or_else(|| format!("{id} is not a scene entity that can be a parent"))
+}
+
+/// Moves a scene entity under `parent`, or to the top without one, where it
+/// stays in the world.
+pub(crate) fn set_parent(
+    world: &mut World,
+    entity: Entity,
+    parent: Option<Entity>,
+) -> Result<(), String> {
+    if !entity_mut(world, entity)?.contains::<SceneEntity>() {
+        return Err(format!("{} is not a scene entity", entity.to_bits()));
+    }
+    if let Some(parent) = parent
+        && ancestry(world, parent).contains(&entity)
+    {
+        return Err(format!("{} cannot go under itself", entity.to_bits()));
+    }
+    reparent(world, entity, parent);
+    Ok(())
+}
+
+fn reparent(world: &mut World, entity: Entity, parent: Option<Entity>) {
+    // Composed from the transforms, since the global ones of what was made
+    // or moved this frame are not up to date yet.
+    let global = in_world(world, entity);
+    let local = match parent {
+        Some(parent) => relative(global, in_world(world, parent)),
+        None => global,
+    };
+    let mut entity = world.entity_mut(entity);
+    match parent {
+        Some(parent) => entity.insert(ChildOf(parent)),
+        None => entity.remove::<ChildOf>(),
+    };
+    if let Some(mut transform) = entity.get_mut::<Transform>() {
+        *transform = local;
+    }
+}
+
+/// `entity` and the entities above it, the entity first.
+fn ancestry(world: &World, entity: Entity) -> Vec<Entity> {
+    let mut entities = vec![entity];
+    while let Some(parent) = world.get::<ChildOf>(*entities.last().unwrap()) {
+        entities.push(parent.parent());
+    }
+    entities
+}
+
+/// Where `entity` is in the world, from its transform and its parents'.
+/// Composed part by part rather than as matrices, so a group that only
+/// moves its children leaves their rotation and size exactly as they were.
+fn in_world(world: &World, entity: Entity) -> Transform {
+    ancestry(world, entity)
+        .iter()
+        .rev()
+        .fold(Transform::IDENTITY, |global, &entity| {
+            global.mul_transform(world.get::<Transform>(entity).copied().unwrap_or_default())
+        })
+}
+
+/// `child`, in the world, as seen from `parent`, in the world.
+// ponytail: exact for parents scaled the same along each axis; a parent
+// both turned and stretched unevenly would shear, which a Transform cannot
+// hold, so its children come out close but not exact.
+fn relative(child: Transform, parent: Transform) -> Transform {
+    let turn = parent.rotation.inverse();
+    Transform {
+        translation: turn * (child.translation - parent.translation) / parent.scale,
+        rotation: turn * child.rotation,
+        scale: child.scale / parent.scale,
+    }
+}
+
 /// `entity` and everything under it, the entity first.
 pub(crate) fn subtree(world: &World, entity: Entity) -> Vec<Entity> {
     let mut entities = vec![entity];
@@ -311,6 +418,69 @@ mod tests {
 
         remove(&mut world, entity, SHAPE).unwrap();
         assert!(world.get::<MeshShape>(entity).is_none());
+    }
+
+    #[test]
+    fn places_and_reparents_keeping_entities_where_they_are_in_the_world() {
+        let mut world = world();
+        let forest = spawn(&mut world, SpawnKind::Empty);
+        world.get_mut::<Transform>(forest).unwrap().translation = Vec3::new(-55.0, 0.0, 0.0);
+        let tree = spawn(&mut world, SpawnKind::Cube);
+        let place_tree = Placement {
+            translation: Some([-60.0, 0.0, 5.0]),
+            yaw: Some(90.0),
+            scale: Some(2.0),
+            name: Some("Oak".into()),
+            parent: Some(forest.to_bits()),
+        };
+        let parent_of_tree = parent(&world, forest.to_bits()).unwrap();
+        place(&mut world, tree, &place_tree, Some(parent_of_tree));
+
+        assert_eq!(world.get::<Name>(tree).unwrap().as_str(), "Oak");
+        assert_eq!(
+            world.get::<ChildOf>(tree).map(ChildOf::parent),
+            Some(forest)
+        );
+        let local = world.get::<Transform>(tree).unwrap();
+        assert!(
+            local
+                .translation
+                .abs_diff_eq(Vec3::new(-5.0, 0.0, 5.0), 1e-4)
+        );
+        assert_eq!(
+            local.scale,
+            Vec3::splat(2.0),
+            "exact under a group that only moves"
+        );
+        assert!(
+            in_world(&world, tree)
+                .forward()
+                .abs_diff_eq(Vec3::NEG_X, 1e-4)
+        );
+
+        // Out again, back where it was in the world.
+        set_parent(&mut world, tree, None).unwrap();
+        assert!(world.get::<ChildOf>(tree).is_none());
+        let local = world.get::<Transform>(tree).unwrap();
+        assert!(
+            local
+                .translation
+                .abs_diff_eq(Vec3::new(-60.0, 0.0, 5.0), 1e-4)
+        );
+
+        set_parent(&mut world, tree, Some(forest)).unwrap();
+        assert!(
+            set_parent(&mut world, forest, Some(tree)).is_err(),
+            "under itself"
+        );
+        let part = world.spawn((Transform::default(), ChildOf(tree))).id();
+        assert!(
+            parent(&world, part.to_bits()).is_err(),
+            "not a scene entity"
+        );
+        assert!(set_parent(&mut world, part, None).is_err());
+        delete(&mut world, forest).unwrap();
+        assert!(parent(&world, forest.to_bits()).is_err(), "deleted");
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use besfa_protocol::{Command, Report, Request, Tool, VERSION};
+use besfa_protocol::{Command, Placement, Report, Request, Tool, VERSION};
 use eframe::{
     egui::{
         self, Button, Color32, Key, KeyboardShortcut, Modifiers, RichText, Ui, ViewportCommand,
@@ -731,7 +731,13 @@ impl Editor {
                 self.send(Command::Select { id });
             }
             // The game reports what it spawns, which records the undo.
-            HierarchyAction::Spawn(kind) => self.edit(Command::Spawn { kind }, vec![]),
+            HierarchyAction::Spawn(kind) => self.edit(
+                Command::Spawn {
+                    kind,
+                    place: Placement::default(),
+                },
+                vec![],
+            ),
             HierarchyAction::Duplicate => self.duplicate(),
             HierarchyAction::Delete => self.delete(),
             HierarchyAction::SavePrefab => {
@@ -760,7 +766,13 @@ impl Editor {
 
     /// Puts the asset at `path` in the scene; the game reports it as spawned.
     fn instantiate(&mut self, path: String) {
-        self.edit(Command::Instantiate { path }, vec![]);
+        self.edit(
+            Command::Instantiate {
+                path,
+                place: Placement::default(),
+            },
+            vec![],
+        );
     }
 
     /// Asks the game in edit mode to picture the models without an up to

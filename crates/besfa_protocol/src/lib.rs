@@ -26,7 +26,8 @@ use serde_json::Value;
 ///    [`Command::Reimport`], answered by [`Report::Reimported`], and
 ///    [`Command::Thumbnail`], answered by [`Report::Thumbnail`].
 /// 4. Pictures of the scene, [`Command::Screenshot`], answered by
-///    [`Report::Screenshot`].
+///    [`Report::Screenshot`]; [`Placement`] for [`Command::Spawn`] and
+///    [`Command::Instantiate`], and [`Command::Parent`].
 pub const VERSION: u32 = 4;
 
 /// Starts every report line.
@@ -72,9 +73,11 @@ pub enum Command {
         id: u64,
         component: String,
     },
-    /// Spawns a scene entity, reports it and selects it.
+    /// Spawns a scene entity where `place` says, reports it and selects it.
     Spawn {
         kind: SpawnKind,
+        #[serde(flatten)]
+        place: Placement,
     },
     /// Copies an entity, reports the copy and selects it.
     Duplicate {
@@ -92,9 +95,11 @@ pub enum Command {
         id: u64,
     },
     /// Spawns an entity showing the asset at `path`, relative to the asset
-    /// directory, then reports and selects it.
+    /// directory, where `place` says, then reports and selects it.
     Instantiate {
         path: String,
+        #[serde(flatten)]
+        place: Placement,
     },
     /// Writes an entity and its scene children to `path`, relative to the
     /// asset directory, as a prefab.
@@ -106,6 +111,12 @@ pub enum Command {
     /// back to its file; every instance of it then shows the new file.
     ApplyPrefab {
         id: u64,
+    },
+    /// Moves an entity under `parent`, or to the top of the scene without
+    /// one, keeping where it is in the world.
+    Parent {
+        id: u64,
+        parent: Option<u64>,
     },
     /// The viewport's pointer: the scene view's in edit mode, the game's
     /// mouse once it plays.
@@ -213,6 +224,30 @@ pub enum Command {
         width: Option<u32>,
         height: Option<u32>,
     },
+}
+
+/// Where a new entity goes and what it is called. What is left out stays as
+/// the entity is made: at the origin, unturned, its own size and name, at
+/// the top of the scene.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct Placement {
+    /// Where in the world, in meters, also under a parent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub translation: Option<[f32; 3]>,
+    /// Turned about the up axis, in degrees, counterclockwise seen from
+    /// above: 90 turns its front, -Z, to -X.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yaw: Option<f32>,
+    /// Size, the same along each axis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The scene entity it goes under, keeping `translation` and `yaw` in
+    /// the world.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u64>,
 }
 
 /// What the model preview can draw over the model, over everything else.
@@ -607,6 +642,51 @@ mod tests {
                 markers: false,
                 bounds: true
             })
+        );
+        // An entity made where it is asked for; editors before version 4
+        // send no placement.
+        assert_eq!(
+            request(r#"{"command":"instantiate","path":"a.glb"}"#).command,
+            Command::Instantiate {
+                path: "a.glb".into(),
+                place: Placement::default(),
+            }
+        );
+        let placed = Command::Instantiate {
+            path: "a.glb".into(),
+            place: Placement {
+                translation: Some([1.0, 0.0, -2.0]),
+                yaw: Some(90.0),
+                scale: Some(1.5),
+                name: Some("Oak".into()),
+                parent: Some(7),
+            },
+        };
+        assert_eq!(
+            request(
+                r#"{"command":"instantiate","path":"a.glb","translation":[1,0,-2],"yaw":90,"scale":1.5,"name":"Oak","parent":7}"#
+            )
+            .command,
+            placed
+        );
+        let line = serde_json::to_string(&Request {
+            seq: None,
+            command: Command::Spawn {
+                kind: SpawnKind::Empty,
+                place: Placement::default(),
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            line, r#"{"command":"spawn","kind":"empty"}"#,
+            "nothing to place"
+        );
+        assert_eq!(
+            request(r#"{"command":"parent","id":3}"#).command,
+            Command::Parent {
+                id: 3,
+                parent: None
+            }
         );
         assert_eq!(
             request(r#"{"command":"screenshot","file":"top.png","target":[0,0,0],"top":200}"#)
