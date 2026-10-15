@@ -36,7 +36,8 @@ use serde_json::Value;
 /// 7. Putting things on the ground: [`Command::DropToSurface`] answered by
 ///    [`Report::Moved`], and [`Command::Scatter`] and
 ///    [`Command::ScatterErase`] answered by [`Report::Scattered`].
-pub const VERSION: u32 = 7;
+/// 8. The scene view's scatter brush, [`Command::ScatterBrush`].
+pub const VERSION: u32 = 8;
 
 /// Starts every report line.
 pub const REPORT_PREFIX: &str = "@besfa ";
@@ -290,6 +291,13 @@ pub enum Command {
         #[serde(default)]
         seed: u64,
     },
+    /// Scatters with `brush` in the scene view: the left button places, or
+    /// erases, where it presses and drags instead of selecting, each press
+    /// to release reported as one `scattered`. Without a brush the left
+    /// button selects again.
+    ScatterBrush {
+        brush: Option<ScatterBrush>,
+    },
     /// Deletes the scattered things within `radius` meters of `center`,
     /// world X and Z; things placed by hand stay. Reports `scattered`.
     ScatterErase {
@@ -395,6 +403,23 @@ fn one() -> f32 {
 
 fn unit_scale() -> [f32; 2] {
     [1.0, 1.0]
+}
+
+/// The scene view's scatter brush; its fields mean what they do in
+/// [`Command::Scatter`].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ScatterBrush {
+    pub models: Vec<ScatterModel>,
+    pub radius: f32,
+    /// Things per 100 square meters under the brush; where some are
+    /// already, it adds only what is missing.
+    pub density: f32,
+    pub spacing: f32,
+    pub scale: [f32; 2],
+    pub rotate: bool,
+    pub align: bool,
+    /// Deletes what was scattered under the brush instead.
+    pub erase: bool,
 }
 
 /// An entity's Transform before and after a change the game made, in the

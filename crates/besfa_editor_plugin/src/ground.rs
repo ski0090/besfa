@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use besfa_protocol::{Move, ScatterModel};
+use besfa_protocol::{Button, Move, PointerEvent, Report, ScatterBrush, ScatterModel};
 use bevy::{
     ecs::system::SystemState,
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
@@ -16,9 +16,10 @@ use serde_json::Value;
 
 use crate::{
     edit::{self, Deleted, in_world, relative, subtree},
+    inspect::send_report,
     preview::bounds,
     scene::SceneEntity,
-    scene_view::EditorOnly,
+    scene_view::{EditorCamera, EditorOnly, SceneView},
     terrain::{self, Terrain},
 };
 
@@ -337,6 +338,154 @@ fn scatter_group(world: &mut World) -> Entity {
             ))
             .id()
     })
+}
+
+/// The scene view's scatter stroke while the left button is down: where
+/// the last dab was, and what the stroke added and removed so far.
+#[derive(Default)]
+pub(crate) struct Scattering {
+    stroke: Option<(Vec2, Vec<u64>, Vec<u64>)>,
+    /// Numbers each dab, for its seed.
+    dabs: u64,
+}
+
+/// Scatters with the scene view's brush: the left button's presses and
+/// drags place, or erase, under the brush instead of selecting, a dab at a
+/// time; the other buttons still turn and move the view. Each stroke is
+/// reported once, when it ends.
+pub(crate) fn scatter_paint(
+    world: &mut World,
+    mut painting: Local<Scattering>,
+    mut rays: Local<Option<SystemState<MeshRayCast<'static, 'static>>>>,
+) {
+    let brush = world
+        .get_resource::<SceneView>()
+        .and_then(|view| view.scatter.clone());
+    let Some(brush) = brush else {
+        // Cut short: the brush was put away mid-stroke.
+        finish(&mut painting);
+        return;
+    };
+    let mut view = world.resource_mut::<SceneView>();
+    let events = std::mem::take(&mut view.events);
+    if events.is_empty() {
+        return;
+    }
+    let camera = world
+        .query_filtered::<(&Camera, &GlobalTransform), With<EditorCamera>>()
+        .single(world)
+        .ok()
+        .map(|(camera, eye)| (camera.clone(), *eye));
+    let Some((camera, eye)) = camera else {
+        world.resource_mut::<SceneView>().events = events;
+        return;
+    };
+    // The ground, not what is being scattered on it.
+    let mut skip = HashSet::new();
+    let roots: Vec<Entity> = world
+        .query_filtered::<Entity, Or<(With<Scattered>, With<EditorOnly>)>>()
+        .iter(world)
+        .collect();
+    for root in roots {
+        skip.extend(subtree(world, root));
+    }
+    let rays = rays.get_or_insert_with(|| SystemState::new(world));
+    let mut hit = |world: &mut World, pointer: Vec2| {
+        let ray = camera.viewport_to_world(&eye, pointer).ok()?;
+        let keep = |entity: Entity| !skip.contains(&entity);
+        let settings = MeshRayCastSettings::default().with_filter(&keep);
+        let mut ray_cast = rays.get_mut(world).ok()?;
+        ray_cast
+            .cast_ray(ray, &settings)
+            .first()
+            .map(|(_, hit)| hit.point)
+    };
+    let mut kept = Vec::new();
+    let mut at = None;
+    for event in events {
+        match event {
+            PointerEvent::Down {
+                x,
+                y,
+                button: Button::Left,
+            } => {
+                at = hit(world, Vec2::new(x, y));
+                if let Some(point) = at {
+                    painting.stroke = Some((point.xz(), Vec::new(), Vec::new()));
+                    dab(world, &brush, point.xz(), &mut painting);
+                }
+            }
+            PointerEvent::Move { x, y } => {
+                at = hit(world, Vec2::new(x, y));
+                let last = painting.stroke.as_ref().map(|(last, ..)| *last);
+                if let (Some(point), Some(last)) = (at, last)
+                    && point.xz().distance(last) >= brush.radius / 2.0
+                {
+                    dab(world, &brush, point.xz(), &mut painting);
+                }
+                // Turning the view still follows the pointer.
+                kept.push(event);
+            }
+            PointerEvent::Up {
+                button: Button::Left,
+                ..
+            } => finish(&mut painting),
+            event => kept.push(event),
+        }
+    }
+    let mut view = world.resource_mut::<SceneView>();
+    view.events = kept;
+    if at.is_some() {
+        view.brush_at = at;
+    }
+}
+
+/// One dab of the brush at `center`, world X and Z: erases there, or adds
+/// as many as the density misses under the brush, so dabs that overlap
+/// fill in rather than pile up.
+fn dab(world: &mut World, brush: &ScatterBrush, center: Vec2, painting: &mut Scattering) {
+    let Some((last, added, removed)) = painting.stroke.as_mut() else {
+        return;
+    };
+    *last = center;
+    if brush.erase {
+        removed.extend(erase(world, center, brush.radius));
+        return;
+    }
+    let area = std::f32::consts::PI * brush.radius * brush.radius;
+    let wanted = (brush.density.max(0.0) * area / 100.0).ceil() as u32;
+    let present = scattered(world)
+        .iter()
+        .filter(|(_, at)| at.distance(center) <= brush.radius)
+        .count() as u32;
+    let count = wanted.saturating_sub(present);
+    if count == 0 {
+        return;
+    }
+    painting.dabs += 1;
+    let spread = Spread {
+        center,
+        radius: brush.radius,
+        count,
+        spacing: brush.spacing,
+        scale: brush.scale,
+        rotate: brush.rotate,
+        align: brush.align,
+        seed: painting.dabs,
+    };
+    match scatter(world, &brush.models, spread) {
+        Ok(placed) => added.extend(placed),
+        Err(error) => warn!("Could not scatter: {error}"),
+    }
+}
+
+/// Ends the stroke, reporting what it added and removed, once.
+fn finish(painting: &mut Scattering) {
+    if let Some((_, added, removed)) = painting.stroke.take()
+        && !(added.is_empty() && removed.is_empty())
+    {
+        send_report(&Report::Scattered { added, removed });
+    }
 }
 
 /// Where scatter puts one thing, decided from the seed alone.

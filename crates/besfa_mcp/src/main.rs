@@ -252,6 +252,7 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 fn since(command: &Command) -> u32 {
     match command {
         Command::DropToSurface { .. } | Command::Scatter { .. } | Command::ScatterErase { .. } => 7,
+        Command::ScatterBrush { .. } => 8,
         Command::TerrainBrush { .. } => 6,
         Command::Spawn {
             kind: SpawnKind::Terrain,

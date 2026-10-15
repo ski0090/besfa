@@ -219,6 +219,13 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             });
             Ok(())
         }
+        Command::ScatterBrush { brush } => {
+            if let Some(mut view) = world.get_resource_mut::<SceneView>() {
+                view.brush_at = None;
+                view.scatter = brush;
+            }
+            Ok(())
+        }
         Command::TerrainBrush { brush } => {
             if let Some(mut view) = world.get_resource_mut::<SceneView>() {
                 view.brush = brush;

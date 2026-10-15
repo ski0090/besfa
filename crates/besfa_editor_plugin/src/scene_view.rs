@@ -11,7 +11,7 @@
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
-use besfa_protocol::{Button, PointerEvent, Report, TerrainBrush, Tool};
+use besfa_protocol::{Button, PointerEvent, Report, ScatterBrush, TerrainBrush, Tool};
 use bevy::{
     camera::{RenderTarget, primitives::Aabb, visibility::RenderLayers},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
@@ -58,8 +58,10 @@ pub(crate) struct SceneView {
     /// Paints the selected terrain with the left button instead of
     /// selecting, while set.
     pub(crate) brush: Option<TerrainBrush>,
-    /// Where on the terrain the brush is, under the pointer.
+    /// Where on the ground a brush is, under the pointer.
     pub(crate) brush_at: Option<Vec3>,
+    /// Scatters with the left button instead of selecting, while set.
+    pub(crate) scatter: Option<ScatterBrush>,
 }
 
 impl Default for SceneView {
@@ -78,6 +80,7 @@ impl Default for SceneView {
             drag: None,
             brush: None,
             brush_at: None,
+            scatter: None,
         }
     }
 }
@@ -180,6 +183,7 @@ impl Plugin for SceneViewPlugin {
                 (
                     adopt_game_camera,
                     fly,
+                    crate::ground::scatter_paint,
                     crate::terrain::paint,
                     handle_pointer,
                 )
@@ -654,10 +658,20 @@ fn draw(
         Vec2::ONE,
         Color::srgba(0.6, 0.6, 0.6, 0.35),
     );
-    let (Some((global, aabb)), Ok(camera), None) = (
+    if let (Some(scatter), Some(at)) = (&view.scatter, view.brush_at) {
+        let flat = Quat::from_rotation_arc(Vec3::Z, Vec3::Y);
+        let color = if scatter.erase {
+            Color::srgb(1.0, 0.4, 0.3)
+        } else {
+            ACTIVE_COLOR
+        };
+        handles.circle(Isometry3d::new(at, flat), scatter.radius, color);
+    }
+    let (Some((global, aabb)), Ok(camera), None, None) = (
         selected.0.and_then(|entity| targets.get(entity).ok()),
         camera.single(),
         view.brush,
+        &view.scatter,
     ) else {
         return;
     };
