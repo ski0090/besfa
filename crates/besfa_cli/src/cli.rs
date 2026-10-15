@@ -28,6 +28,9 @@ pub(crate) enum Commands {
     },
     /// Build Bevy into the shared target directory, so games start fast.
     Prebuild,
+    /// Serve the editor's commands to an agent, an MCP server on stdin and
+    /// stdout that runs the game in the current folder.
+    Mcp,
     /// Validate a Besfa project directory.
     Validate {
         /// Project directory to validate.
@@ -57,6 +60,13 @@ mod tests {
             }
             _ => panic!("expected the new command"),
         }
+    }
+
+    #[test]
+    fn parses_mcp() {
+        let cli = Cli::try_parse_from(["besfa", "mcp"]).expect("mcp should parse");
+
+        assert!(matches!(cli.command, Commands::Mcp));
     }
 
     #[test]

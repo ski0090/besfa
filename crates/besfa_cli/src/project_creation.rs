@@ -214,6 +214,18 @@ const TEMPLATE_SCENE: &str = include_str!("../template/main.scn.ron");
 /// Where the game and the editor read and write the scene.
 const SCENE_FILE: &str = "assets/scenes/main.scn.ron";
 
+/// Lets an agent like Claude Code in the game's folder run the game through
+/// `besfa mcp`.
+const MCP_CONFIG: &str = r#"{
+  "mcpServers": {
+    "besfa": {
+      "command": "besfa",
+      "args": ["mcp"]
+    }
+  }
+}
+"#;
+
 /// Appended to the `[dependencies]` table that ends Cargo's generated manifest.
 const TEMPLATE_DEPENDENCIES: &str = r#"bevy = "0.20.0"
 besfa_editor_plugin = { git = "https://github.com/ski0090/besfa" }
@@ -251,6 +263,8 @@ fn write_bevy_template(project: &Path, shared: Option<&Path>) -> Result<(), Crea
     .map_err(|error| filesystem_error("Failed to write Cargo.toml.", error))?;
     fs::write(project.join("src").join("main.rs"), TEMPLATE_MAIN)
         .map_err(|error| filesystem_error("Failed to write src/main.rs.", error))?;
+    fs::write(project.join(".mcp.json"), MCP_CONFIG)
+        .map_err(|error| filesystem_error("Failed to write .mcp.json.", error))?;
 
     // The scene names the game's own components by crate: `my_game::Spin`.
     let crate_name = project
@@ -361,6 +375,7 @@ mod tests {
         let has_cargo_config = destination.join(".cargo").exists();
         let main = fs::read_to_string(destination.join("src").join("main.rs"));
         let scene = fs::read_to_string(destination.join(SCENE_FILE));
+        let mcp = fs::read_to_string(destination.join(".mcp.json"));
         fs::remove_dir_all(&parent).expect("test directory should be removed");
 
         assert_eq!(
@@ -375,6 +390,9 @@ mod tests {
         let scene = scene.expect("the scene file should be created");
         assert!(scene.contains("\"demo_game::Spin\": ()"), "{scene}");
         assert!(!scene.contains("{{crate}}"));
+        let mcp: serde_json::Value =
+            serde_json::from_str(&mcp.expect(".mcp.json should be created")).unwrap();
+        assert_eq!(mcp["mcpServers"]["besfa"]["args"][0], "mcp");
         assert!(!has_cargo_config, "no shared directory means no config");
     }
 

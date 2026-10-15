@@ -33,6 +33,11 @@ fn main() -> ExitCode {
                 ExitCode::from(error.exit_code)
             }
         },
+        // Stdout carries only the server's messages.
+        Commands::Mcp => {
+            besfa_mcp::serve();
+            ExitCode::SUCCESS
+        }
         Commands::Validate { directory } => {
             eprintln!(
                 "Validating '{}' is not implemented yet.",
