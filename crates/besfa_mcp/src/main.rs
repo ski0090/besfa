@@ -75,7 +75,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "start",
-            "description": "Builds and runs the Besfa game project at `project` in edit mode, paused, as the editor's Run does (`cargo run --features bevy/dynamic_linking`). Returns once cargo starts; the other tools wait for the game. The game opens its own window. One game at a time; do not run one on a project the editor has open, since both would write its scene file.",
+            "description": "Builds and runs the Besfa game project at `project` in edit mode, paused, as the editor's Run does (`cargo run --features bevy/dynamic_linking`). Returns once cargo starts; the other tools wait for the game. The game runs without a window, so nothing on screen shows it; `thumbnail` still renders. One game at a time; do not run one on a project the editor has open, since both would write its scene file.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"project": {"type": "string", "description": "Absolute path of the game project, the folder with its Cargo.toml."}},
@@ -101,7 +101,7 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "command": {"type": "object", "description": "The command, tagged by its `command` field."},
-                    "wait_for": {"type": "string", "description": "Also wait for a report of this type, for commands answered later, like `thumbnail`, `screenshot` or `reimported`."},
+                    "wait_for": {"type": "string", "description": "Also wait for a report of this type, for commands answered later, like `thumbnail` or `reimported`."},
                     "timeout_secs": timeout,
                 },
                 "required": ["command"],
@@ -135,10 +135,7 @@ fn call(game: &mut Option<Game>, name: &str, args: &Value) -> Result<String, Str
             let started = Game::start(Path::new(project))
                 .map_err(|error| format!("Could not start cargo in {project}: {error}"))?;
             *game = Some(started);
-            Ok(
-                "Started `cargo run` in edit mode; the game opens a window once it is built."
-                    .into(),
-            )
+            Ok("Started `cargo run` in edit mode, without a window.".into())
         }
         "send" => {
             // Checked here, since the game ignores a line it cannot read and
@@ -241,14 +238,16 @@ struct Game {
 }
 
 impl Game {
-    /// Starts the game the way the editor does, minus its viewport, so the
-    /// shared Bevy build is reused.
+    /// Starts the game the way the editor does, minus its viewport and any
+    /// window, so the shared Bevy build is reused.
     fn start(project: &Path) -> io::Result<Game> {
         let mut cargo = quiet("cargo")
             .args(["run", "--features", "bevy/dynamic_linking"])
             .current_dir(project)
             // Read by besfa_editor_plugin: start paused and take commands.
             .env("BESFA_EDIT_MODE", "1")
+            // Also read by it: open no window, which would take focus.
+            .env("BESFA_HEADLESS", "1")
             .env("NO_COLOR", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

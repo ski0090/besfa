@@ -39,7 +39,7 @@ egui(eframe, wgpu DX12) 기반 Windows 데스크톱 에디터다. 프로젝트 �
 
 ### `crates/besfa_mcp`
 
-에이전트(Claude Code 등)가 에디터 UI 없이 게임의 씬을 읽고 고치게 하는 stdio MCP 서버다. 에디터의 Run처럼 게임을 edit mode로 띄우고(뷰포트 없이, 게임이 자기 창을 연다) `besfa_protocol` 명령을 그대로 전달한다. 도구는 `start`, `send`, `entities`, `stop`이고, 저장소 루트의 `.mcp.json`이 `cargo run -q -p besfa_mcp`로 등록한다. 에디터가 열어 둔 프로젝트에 같이 쓰면 두 쪽이 씬 파일을 덮어쓴다.
+에이전트(Claude Code 등)가 에디터 UI 없이 게임의 씬을 읽고 고치게 하는 stdio MCP 서버다. 에디터의 Run처럼 게임을 edit mode로 띄우고(뷰포트도 창도 없이, `BESFA_HEADLESS`로 사용자 포커스를 빼앗지 않는다. 모델 썸네일은 오프스크린으로 그대로 그려진다) `besfa_protocol` 명령을 그대로 전달한다. 도구는 `start`, `send`, `entities`, `stop`이고, 저장소 루트의 `.mcp.json`이 `cargo run -q -p besfa_mcp`로 등록한다. 에디터가 열어 둔 프로젝트에 같이 쓰면 두 쪽이 씬 파일을 덮어쓴다.
 
 ### `crates/besfa_cli`
 

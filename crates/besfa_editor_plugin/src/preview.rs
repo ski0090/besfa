@@ -341,6 +341,12 @@ pub(crate) fn screenshot(world: &mut World, path: String, file: PathBuf) -> Resu
         .find(|(camera, _)| camera.is_active)
         .map(|(_, target)| target.clone())
         .ok_or("no model is previewed")?;
+    // Headless, Bevy would skip the capture every frame and never report.
+    if matches!(target, RenderTarget::Window(_))
+        && world.query::<&Window>().iter(world).next().is_none()
+    {
+        return Err("the game has no window or viewport to picture the preview in".into());
+    }
     world
         .spawn(Screenshot(target))
         .observe(move |captured: On<ScreenshotCaptured>| {

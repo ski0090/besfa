@@ -5,7 +5,8 @@
 //! `assets/scenes/main.scn.ron`. Launched by the editor, it renders into the
 //! editor's viewport instead of opening a window, starts paused in edit mode
 //! until the editor says play, reports its entities, components and systems
-//! to the editor, and saves the scene back when asked.
+//! to the editor, and saves the scene back when asked. Launched by
+//! `besfa_mcp`, it runs the same way with no window at all.
 
 use std::time::Duration;
 
@@ -34,7 +35,8 @@ pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
 pub use scene_view::EditorOnly;
 
 /// `DefaultPlugins` plus the scene file, adjusted to start in edit mode and
-/// render into the editor viewport when the editor launched the game.
+/// render into the editor viewport when the editor launched the game, or
+/// into no window under `BESFA_HEADLESS`.
 pub fn default_plugins() -> PluginGroupBuilder {
     // Saved changes to placed models' parts apply in play as well.
     let mut plugins = DefaultPlugins
@@ -50,11 +52,13 @@ pub fn default_plugins() -> PluginGroupBuilder {
             .add(reimport::ReimportPlugin)
             .add(thumbnail::ThumbnailPlugin);
     }
-    let Some(config) = viewport::ViewportConfig::from_env() else {
+    let viewport = viewport::ViewportConfig::from_env();
+    // Set by besfa_mcp, so a game it drives opens no window to take focus.
+    if viewport.is_none() && std::env::var_os("BESFA_HEADLESS").is_none() {
         return plugins;
-    };
+    }
 
-    plugins
+    plugins = plugins
         .set(WindowPlugin {
             primary_window: None,
             exit_condition: ExitCondition::DontExit,
@@ -64,6 +68,9 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .disable::<WinitPlugin>()
         .add(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
             1.0 / 60.0,
-        )))
-        .add(viewport::ViewportPlugin(config))
+        )));
+    match viewport {
+        Some(config) => plugins.add(viewport::ViewportPlugin(config)),
+        None => plugins,
+    }
 }
