@@ -6,7 +6,7 @@
 //! entity's components, and `stop` it. The game is stopped when the client
 //! closes stdin.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command as Process, Stdio};
@@ -14,7 +14,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
-use besfa_protocol::{Command, EntityInfo, Report, Request};
+use besfa_protocol::{Command, EntityInfo, Placement, Report, Request};
 use serde_json::{Value, json};
 
 /// How much of the game's log a failure shows.
@@ -85,34 +85,43 @@ fn tools() -> Value {
         {
             "name": "send",
             "description": concat!(
-                "Sends one editor command to the running game and returns the reports it wrote until it ran the command, one JSON object per line. ",
+                "Sends editor commands to the running game, in order, and returns the reports it wrote until it ran them, one JSON object per line. ",
+                "`spawned` reports come in the order of the commands that make entities; a failed command shows as {\"type\":\"done\",\"command\":INDEX,\"error\":...}. ",
                 "Entities are the ids `entities` lists; components are named by type path, as `entities` with an id shows them. Commands:\n",
-                "{\"command\":\"spawn\",\"kind\":\"empty|cube|sphere|plane|light|camera\"} reports `spawned` with the new id\n",
-                "{\"command\":\"instantiate\",\"path\":\"models/tree.glb\"} places an asset, relative to assets/\n",
+                "{\"command\":\"instantiate\",\"path\":\"models/oak-tree.glb\",\"translation\":[-55,0,10],\"yaw\":45,\"scale\":1.2,\"name\":\"Oak\",\"parent\":ID} places a model or prefab, relative to assets/; all but path optional; translation and yaw are in the world, yaw in degrees counterclockwise from above\n",
+                "{\"command\":\"spawn\",\"kind\":\"empty|cube|sphere|plane|light|camera\"} takes the same placement; a named empty makes a group\n",
+                "{\"command\":\"parent\",\"id\":ID,\"parent\":ID} moves it under another scene entity, or to the top without parent, staying where it is in the world\n",
                 "{\"command\":\"set\",\"id\":ID,\"component\":PATH,\"value\":{...}} replaces the whole value; left-out fields take defaults\n",
                 "{\"command\":\"insert\",\"id\":ID,\"component\":PATH} / {\"command\":\"remove\",...}\n",
                 "{\"command\":\"duplicate\",\"id\":ID} / {\"command\":\"delete\",\"id\":ID} hides it until {\"command\":\"restore\",\"id\":ID}\n",
                 "{\"command\":\"save\"} writes the scene file; {\"command\":\"save_prefab\",\"id\":ID,\"path\":\"prefabs/x.scn.ron\"}\n",
+                "{\"command\":\"screenshot\",\"file\":\"shots/map.png\",\"target\":[0,0,0],\"eye\":[40,30,40]} or with \"top\":200 instead of eye, a view straight down over a square that many meters wide, north (-Z) up; renders the scene without editor overlays to a PNG relative to the project, once its models have loaded; read the file to see it\n",
+                "{\"command\":\"thumbnail\",\"path\":\"models/x.glb\",\"file\":\"thumb.png\"} renders one model on its own\n",
                 "{\"command\":\"play\"} unpauses the game\n",
-                "{\"command\":\"thumbnail\",\"path\":\"models/x.glb\",\"file\":\"thumb.png\"} renders that model on its own to a PNG relative to the project, not the scene; pass wait_for \"thumbnail\"\n",
-                "An unknown command is refused with the list of valid ones.",
+                "Screenshot, thumbnail and reimport are waited for until their answer comes. An unknown command is refused with the list of valid ones.",
             ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "object", "description": "The command, tagged by its `command` field."},
-                    "wait_for": {"type": "string", "description": "Also wait for a report of this type, for commands answered later, like `thumbnail` or `reimported`."},
+                    "command": {"type": "object", "description": "One command, tagged by its `command` field."},
+                    "commands": {"type": "array", "items": {"type": "object"}, "description": "Several commands, sent together and run in order, instead of `command`."},
                     "timeout_secs": timeout,
                 },
-                "required": ["command"],
             },
         },
         {
             "name": "entities",
-            "description": "Without `id`, the scene's entities: id, name, parent, whether the scene file keeps it, and the asset it shows. With `id`, selects that entity in the game and returns its components with their values. Right after start the first list can come before the scene file has loaded, so `scene` reads false; ask again.",
+            "description": "Without `id`, the scene's entities, as JSON: id, name, parent, whether the scene file keeps it, and the asset it shows. The parts a placed model or prefab spawns under it are left out unless `parts` is true. `name` and `asset` keep those whose name or asset path contains the text, ignoring case, and `parent` those right under that entity. With `id`, selects that entity in the game and returns its components with their values. Right after start the first list can come before the scene file has loaded, so `scene` reads false; ask again.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"id": {"type": "integer"}, "timeout_secs": timeout},
+                "properties": {
+                    "id": {"type": "integer"},
+                    "name": {"type": "string"},
+                    "asset": {"type": "string"},
+                    "parent": {"type": "integer"},
+                    "parts": {"type": "boolean"},
+                    "timeout_secs": timeout,
+                },
             },
         },
         {
@@ -138,11 +147,22 @@ fn call(game: &mut Option<Game>, name: &str, args: &Value) -> Result<String, Str
             Ok("Started `cargo run` in edit mode, without a window.".into())
         }
         "send" => {
+            let commands = match (&args["command"], &args["commands"]) {
+                (Value::Null, Value::Array(commands)) => commands.clone(),
+                (command @ Value::Object(_), Value::Null) => vec![command.clone()],
+                _ => return Err("Give `command`, one object, or `commands`, a list.".into()),
+            };
             // Checked here, since the game ignores a line it cannot read and
             // never answers it.
-            let command = serde_json::from_value::<Command>(args["command"].clone())
-                .map_err(|error| format!("Not a command: {error}"))?;
-            let reports = running(game)?.send(command, args["wait_for"].as_str(), timeout)?;
+            let commands = commands
+                .into_iter()
+                .enumerate()
+                .map(|(index, command)| {
+                    serde_json::from_value::<Command>(command)
+                        .map_err(|error| format!("Command {index} is not a command: {error}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let reports = running(game)?.send(commands, timeout)?;
             let failed = reports.iter().any(|report| !report["error"].is_null());
             let text = lines(&reports);
             if failed { Err(text) } else { Ok(text) }
@@ -152,10 +172,11 @@ fn call(game: &mut Option<Game>, name: &str, args: &Value) -> Result<String, Str
             match args["id"].as_u64() {
                 None => {
                     let inbox = game.wait(timeout, |inbox| inbox.entities.is_some())?;
-                    Ok(serde_json::to_string(&inbox.entities).unwrap())
+                    let entities = inbox.entities.as_deref().unwrap_or_default();
+                    Ok(serde_json::to_string(&filter(entities, args)).unwrap())
                 }
                 Some(id) => {
-                    game.send(Command::Select { id: Some(id) }, None, timeout)?;
+                    game.send(vec![Command::Select { id: Some(id) }], timeout)?;
                     // Reported after the command ran, or earlier if it was
                     // selected already, since the game repeats no report.
                     let inbox = game.wait(timeout, |inbox| {
@@ -176,9 +197,89 @@ fn call(game: &mut Option<Game>, name: &str, args: &Value) -> Result<String, Str
     }
 }
 
+/// The entities `args` asks for: by name, asset and parent, and without
+/// the parts placed models spawn unless `parts` is set.
+fn filter<'a>(entities: &'a [EntityInfo], args: &Value) -> Vec<&'a EntityInfo> {
+    let by_id: HashMap<u64, &EntityInfo> =
+        entities.iter().map(|entity| (entity.id, entity)).collect();
+    // Spawned by a model or prefab above it, so not saved with the scene.
+    let part = |entity: &EntityInfo| {
+        let mut parent = entity.parent;
+        while let Some(above) = parent.and_then(|id| by_id.get(&id)) {
+            if above.asset.is_some() {
+                return !entity.scene;
+            }
+            parent = above.parent;
+        }
+        false
+    };
+    let contains = |text: Option<&str>, wanted: &Value| {
+        wanted.as_str().is_none_or(|wanted| {
+            text.is_some_and(|text| text.to_lowercase().contains(&wanted.to_lowercase()))
+        })
+    };
+    entities
+        .iter()
+        .filter(|entity| {
+            (args["parts"] == true || !part(entity))
+                && contains(entity.name.as_deref(), &args["name"])
+                && contains(entity.asset.as_deref(), &args["asset"])
+                && args["parent"]
+                    .as_u64()
+                    .is_none_or(|parent| entity.parent == Some(parent))
+        })
+        .collect()
+}
+
+/// The report a command is answered with after it ran, and the path it
+/// names, for `send` to wait for.
+fn answer(command: &Command) -> Option<(&'static str, &str)> {
+    match command {
+        Command::Screenshot { file, .. } => Some(("screenshot", file)),
+        Command::Thumbnail { path, .. } => Some(("thumbnail", path)),
+        Command::Reimport { path } => Some(("reimported", path)),
+        _ => None,
+    }
+}
+
+/// The protocol version a game must speak to run `command`.
+fn since(command: &Command) -> u32 {
+    match command {
+        Command::Screenshot { .. } | Command::Parent { .. } => 4,
+        Command::Spawn { place, .. } | Command::Instantiate { place, .. }
+            if *place != Placement::default() =>
+        {
+            4
+        }
+        _ => 0,
+    }
+}
+
 fn running(game: &mut Option<Game>) -> Result<&mut Game, String> {
     game.as_mut()
         .ok_or_else(|| "No game is running; start one first.".into())
+}
+
+/// A command `send` wrote: its seq, and the report that answers it later
+/// with the path that report names, if any.
+type Asked = (u64, Option<(&'static str, String)>);
+
+/// `reports` without the `done`s of commands that ran, and with a failed
+/// one naming the index of its command among `asked` instead of its seq.
+fn tidy(reports: Vec<Value>, asked: &[Asked]) -> Vec<Value> {
+    reports
+        .into_iter()
+        .filter_map(|report| {
+            if report["type"] != "done" {
+                return Some(report);
+            }
+            if report["error"].is_null() {
+                return None;
+            }
+            let index = asked.iter().position(|(seq, _)| report["seq"] == *seq);
+            Some(json!({"type": "done", "command": index, "error": report["error"]}))
+        })
+        .collect()
 }
 
 fn lines(values: &[Value]) -> String {
@@ -189,12 +290,15 @@ fn lines(values: &[Value]) -> String {
 /// What the game wrote so far.
 #[derive(Default)]
 struct Inbox {
-    hello: bool,
-    /// Reports `send` has not returned yet. The entity list is left out,
-    /// since `entities` has it, and so is the hello.
+    /// The protocol version the game speaks, once it said.
+    hello: Option<u32>,
+    /// Reports `send` has not returned yet. The entity list and the
+    /// selection's components are left out, since `entities` has them, and
+    /// so is the hello.
     reports: Vec<Value>,
     entities: Option<Vec<EntityInfo>>,
-    /// The latest report of the selection's components.
+    /// The latest report of the selection's components, which each entity
+    /// a command makes becomes.
     entity: Option<Value>,
     logs: VecDeque<String>,
     /// The game's outputs still open; none once it exited.
@@ -204,17 +308,16 @@ struct Inbox {
 impl Inbox {
     fn receive(&mut self, report: Report) {
         match report {
-            Report::Hello { .. } => self.hello = true,
+            Report::Hello { version } => self.hello = Some(version),
             Report::Entities { entities } => self.entities = Some(entities),
             // Long lists the editor shows in its panels, written once.
             Report::Systems { .. } | Report::Components { .. } => {}
-            report => {
-                let value = serde_json::to_value(&report).unwrap();
-                if let Report::Entity { .. } = report {
-                    self.entity = Some(value.clone());
-                }
-                self.reports.push(value);
+            // Each entity a command makes is selected, which `spawned` says.
+            Report::Selected { .. } => {}
+            report @ Report::Entity { .. } => {
+                self.entity = Some(serde_json::to_value(&report).unwrap());
             }
+            report => self.reports.push(serde_json::to_value(&report).unwrap()),
         }
     }
 
@@ -271,42 +374,68 @@ impl Game {
         })
     }
 
-    /// Writes `command` once the game is up and returns the reports written
-    /// until it ran, and until one of type `wait_for` came.
-    fn send(
-        &mut self,
-        command: Command,
-        wait_for: Option<&str>,
-        timeout: Duration,
-    ) -> Result<Vec<Value>, String> {
+    /// Writes `commands` once the game is up and returns the reports written
+    /// until it ran them, and for those answered later, until the answer
+    /// came; tidied up by [`tidy`].
+    fn send(&mut self, commands: Vec<Command>, timeout: Duration) -> Result<Vec<Value>, String> {
         // Before the hello the game may still be building, or have failed to.
-        let first = self.wait(timeout, |inbox| inbox.hello)?.reports.len();
-        self.seq += 1;
-        let seq = self.seq;
-        let line = serde_json::to_string(&Request {
-            seq: Some(seq),
-            command,
-        })
-        .unwrap();
-        writeln!(self.stdin, "{line}")
+        let (first, version) = {
+            let inbox = self.wait(timeout, |inbox| inbox.hello.is_some())?;
+            (inbox.reports.len(), inbox.hello.unwrap())
+        };
+        if let Some(index) = commands.iter().position(|command| since(command) > version) {
+            return Err(format!(
+                "Command {index} needs protocol {} and this game's besfa_editor_plugin speaks {version}; update it with `cargo update -p besfa_editor_plugin` in the game.",
+                since(&commands[index])
+            ));
+        }
+        let mut written = String::new();
+        let mut asked = Vec::new();
+        for command in commands {
+            self.seq += 1;
+            asked.push((
+                self.seq,
+                answer(&command).map(|(kind, path)| (kind, path.to_string())),
+            ));
+            let request = Request {
+                seq: Some(self.seq),
+                command,
+            };
+            written += &serde_json::to_string(&request).unwrap();
+            written.push('\n');
+        }
+        self.stdin
+            .write_all(written.as_bytes())
             .and_then(|()| self.stdin.flush())
             .map_err(|error| format!("Could not write to the game: {error}"))?;
-        let has = |reports: &[Value], kind: &str| {
-            reports
+        // Ran, and answered if it is answered later, unless it failed.
+        let finished = |reports: &[Value], (seq, answer): &Asked| {
+            let done = reports
                 .iter()
-                .any(|report| report["type"] == kind && (kind != "done" || report["seq"] == seq))
+                .find(|report| report["type"] == "done" && report["seq"] == *seq);
+            done.is_some_and(|done| {
+                !done["error"].is_null()
+                    || answer.as_ref().is_none_or(|(kind, path)| {
+                        reports.iter().any(|report| {
+                            report["type"] == *kind && report["path"] == path.as_str()
+                        })
+                    })
+            })
         };
         let result = self.wait(timeout, |inbox| {
             let new = &inbox.reports[first.min(inbox.reports.len())..];
-            has(new, "done") && wait_for.is_none_or(|kind| has(new, kind))
+            asked.iter().all(|asked| finished(new, asked))
         });
         match result {
-            Ok(mut inbox) => Ok(std::mem::take(&mut inbox.reports)),
+            Ok(mut inbox) => Ok(tidy(std::mem::take(&mut inbox.reports), &asked)),
             // `wait` let go of the inbox, so it can be locked again.
             Err(error) => {
                 let (lock, _) = &*self.inbox;
                 let reports = std::mem::take(&mut lock.lock().unwrap().reports);
-                Err(format!("{error}\nReports so far:\n{}", lines(&reports)))
+                Err(format!(
+                    "{error}\nReports so far:\n{}",
+                    lines(&tidy(reports, &asked))
+                ))
             }
         }
     }
@@ -328,7 +457,7 @@ impl Game {
         }
         let why = if inbox.open == 0 {
             "The game exited; stop it, fix what the log shows, and start it again."
-        } else if !inbox.hello {
+        } else if inbox.hello.is_none() {
             "The game is not up yet; cargo may still be building. Try again."
         } else {
             "The game did not answer in time."
@@ -393,6 +522,54 @@ mod tests {
 
     fn request(method: &str, params: Value) -> Value {
         json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+    }
+
+    #[test]
+    fn filters_entities_and_leaves_out_the_parts_of_placed_models() {
+        let info = |id, name: &str, parent, scene, asset: Option<&str>| EntityInfo {
+            id,
+            name: Some(name.into()),
+            parent,
+            scene,
+            asset: asset.map(Into::into),
+        };
+        let entities = [
+            info(1, "Forest", None, true, None),
+            info(2, "Oak", Some(1), true, Some("models/oak-tree.glb")),
+            info(3, "Trunk", Some(2), false, None),
+            info(4, "Leaves", Some(3), false, None),
+            info(5, "Birch", Some(1), true, Some("models/birch-tree.glb")),
+            // Put under a placed model in the editor, so the scene keeps it.
+            info(6, "Sign", Some(2), true, None),
+        ];
+        let ids = |args: Value| -> Vec<u64> {
+            filter(&entities, &args)
+                .iter()
+                .map(|entity| entity.id)
+                .collect()
+        };
+        assert_eq!(ids(json!({})), [1, 2, 5, 6]);
+        assert_eq!(ids(json!({"parts": true})).len(), 6);
+        assert_eq!(ids(json!({"name": "OAK"})), [2]);
+        assert_eq!(ids(json!({"asset": "tree"})), [2, 5]);
+        assert_eq!(ids(json!({"parent": 1})), [2, 5]);
+    }
+
+    #[test]
+    fn names_a_failed_command_by_its_index() {
+        let asked: Vec<Asked> = vec![(7, None), (8, None)];
+        let reports = vec![
+            json!({"type": "spawned", "id": 3}),
+            json!({"type": "done", "seq": 7, "error": null}),
+            json!({"type": "done", "seq": 8, "error": "nope"}),
+        ];
+        assert_eq!(
+            tidy(reports, &asked),
+            [
+                json!({"type": "spawned", "id": 3}),
+                json!({"type": "done", "command": 1, "error": "nope"}),
+            ]
+        );
     }
 
     #[test]
