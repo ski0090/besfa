@@ -1,3 +1,11 @@
 [workspace]
 members = ["crates/besfa_cli", "crates/besfa_editor", "crates/besfa_editor_plugin", "crates/besfa_mcp", "crates/besfa_protocol"]
 resolver = "3"
+
+# egui, wgpu and Bevy are slow unoptimized: optimize dependencies, keep the
+# workspace quick to rebuild.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
