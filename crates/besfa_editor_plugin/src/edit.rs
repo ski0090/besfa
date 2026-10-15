@@ -111,7 +111,7 @@ pub(crate) fn remove(world: &mut World, entity: Entity, component: &str) -> Resu
 /// gets a new file of its own.
 pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Result<Entity, String> {
     let file = match kind {
-        SpawnKind::Terrain => Some(terrain::new_file(world)?),
+        SpawnKind::Terrain => Some(terrain::new_file(world)),
         _ => None,
     };
     let mut entity = world.spawn((SceneEntity, Transform::default()));
@@ -149,7 +149,13 @@ pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Result<Entity, String
             Transform::from_xyz(0.0, 2.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
         )),
         SpawnKind::Terrain => {
-            entity.insert((Name::new("Terrain"), Terrain::default(), file.unwrap()))
+            // Its file is written when the scene is saved.
+            entity.insert((
+                Name::new("Terrain"),
+                Terrain::default(),
+                file.unwrap(),
+                terrain::Unsaved,
+            ))
         }
     };
     Ok(entity.id())

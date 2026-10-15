@@ -5,13 +5,16 @@
 //!
 //! Games ask the ground's height with [`TerrainHeight`].
 
-use std::{collections::HashMap, io};
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+};
 
 use besfa_protocol::{Button, PointerEvent, Report, TerrainBrush, TerrainTool};
 use bevy::{
     asset::{AssetLoader, LoadContext, RenderAssetUsages, io::Reader},
     camera::visibility::VisibilitySystems,
-    ecs::system::SystemParam,
+    ecs::{entity_disabling::Disabled, query::Allow, system::SystemParam},
     mesh::{Indices, PrimitiveTopology},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
     prelude::*,
@@ -446,17 +449,23 @@ pub(crate) fn heights(world: &mut World, points: &[[f32; 2]]) -> Vec<Option<f32>
         .collect()
 }
 
-/// Writes a flat terrain file to a free name under `terrain/`, and holds
-/// what it wrote, ready to paint at once.
-pub(crate) fn new_file(world: &mut World) -> Result<(TerrainFile, TerrainHandle), String> {
+/// Flat ground for a new terrain under a free name in `terrain/`, held in
+/// memory, ready to paint at once; saving the scene writes the file, so an
+/// unsaved terrain leaves none behind.
+pub(crate) fn new_file(world: &mut World) -> (TerrainFile, TerrainHandle) {
+    let taken: HashSet<String> = world
+        .query_filtered::<&TerrainFile, Allow<Disabled>>()
+        .iter(world)
+        .map(|file| file.0.clone())
+        .collect();
     let path = (1..)
         .map(|n| format!("terrain/terrain-{n}.terrain"))
-        .find(|path| !asset_file(path).exists())
+        .find(|path| !taken.contains(path) && !asset_file(path).exists())
         .unwrap();
-    let data = TerrainData::flat(RESOLUTION);
-    write(&path, &data)?;
-    let handle = world.resource_mut::<Assets<TerrainData>>().add(data);
-    Ok((TerrainFile(path.clone()), TerrainHandle { path, handle }))
+    let handle = world
+        .resource_mut::<Assets<TerrainData>>()
+        .add(TerrainData::flat(RESOLUTION));
+    (TerrainFile(path.clone()), TerrainHandle { path, handle })
 }
 
 fn write(path: &str, data: &TerrainData) -> Result<(), String> {
