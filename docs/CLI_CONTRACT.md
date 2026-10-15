@@ -22,6 +22,7 @@ cargo new --bin <프로젝트 이름>
 
 - `Cargo.toml`의 `[dependencies]`에 `bevy = "0.20.0"`과 `besfa_editor_plugin`(이 저장소의 git 의존성)을 추가하고, Bevy 권장 `dev` 프로필 최적화 설정을 붙인다.
 - `src/main.rs`를 씬 파일을 읽고 큐브를 돌리는 게임으로 바꾼다. 원본은 `crates/besfa_cli/template/main.rs`다.
+- 프로젝트 루트에 `.mcp.json`을 써서, 그 폴더의 Claude Code 같은 에이전트가 `besfa mcp`로 게임을 띄우고 고치게 한다.
 - `assets/scenes/main.scn.ron`에 카메라, 조명, 회전하는 큐브가 있는 씬을 쓴다. 원본은 `crates/besfa_cli/template/main.scn.ron`이고, `{{crate}}`를 프로젝트의 크레이트 이름(디렉터리 이름의 `-`를 `_`로)으로 바꾼다. 형식은 [DATA_FORMAT.md](./DATA_FORMAT.md)의 '씬 파일'을 따른다.
 
 `%LOCALAPPDATA%`가 있으면 모든 게임이 Bevy 빌드를 공유하도록 두 가지를 더 한다.
@@ -34,6 +35,12 @@ besfa prebuild
 ```
 
 `%LOCALAPPDATA%/Besfa/prebuild`를 `besfa new`와 같은 템플릿의 게임 프로젝트로 만들고(`Cargo.toml`, `src/main.rs`, `.cargo/config.toml`이 템플릿과 다를 때만 다시 써서, 바뀐 것이 없으면 다시 컴파일하지 않는다), 그 안에서 `cargo update -p besfa_editor_plugin`으로 플러그인을 최신 git 커밋으로 올린 뒤(에디터의 Run이 package cache 잠금을 기다리지 않도록 재시도 없이 요청당 10초만 기다리고, 실패하면 경고만 남기고 고정된 버전으로 계속한다) `cargo build --features bevy/dynamic_linking`을 실행한다. 공유 target 디렉터리, 의존성, feature, 프로필이 에디터의 Run과 같으므로, 이후 게임의 첫 Run은 게임 코드만 컴파일한다. 빌드가 만든 `Cargo.lock`은 `besfa new`가 새 프로젝트로 복사한다. Cargo 출력은 그대로 표준 출력·오류로 나간다. `LOCALAPPDATA`가 없으면 종료 코드 `20`, Cargo 실행이나 빌드가 실패하면 `30`을 반환한다.
+
+```text
+besfa mcp
+```
+
+표준 입출력으로 MCP 서버를 연다. 지금 폴더의 게임을 에디터의 Run처럼 창 없는 편집 상태로 띄우고(`start`에 `project`를 주면 그 폴더) `besfa_protocol` 명령을 전달한다. 도구와 명령은 [PROJECT_OVERVIEW.md](./PROJECT_OVERVIEW.md)의 `crates/besfa_mcp`와 [ARCHITECTURE.md](./ARCHITECTURE.md)를 따른다. 표준 출력에는 JSON-RPC 메시지만 쓰고, 클라이언트가 표준 입력을 닫으면 띄운 게임을 끄고 끝난다. 설치된 `besfa`가 아는 프로토콜보다 새 명령은 거절하므로, 플러그인을 올리면 CLI도 다시 설치한다.
 
 생성 시점에는 네트워크를 쓰지 않는다. 의존성은 게임을 처음 빌드할 때 받는다. 모든 단계가 성공한 경우에만 결과물을 최종 루트 디렉터리로 이동한다. `besfa/` 또는 `.besfa/` 데이터 경로와 초기 데이터 파일 생성은 데이터 포맷 계약을 확정한 뒤 추가한다.
 
@@ -94,4 +101,4 @@ Cargo가 프로젝트 이름 때문에 생성에 실패하면, `besfa`는 Cargo�
 
 ## 구현 상태
 
-`besfa new`는 이 문서의 Cargo 실행, Bevy 시작 코드 적용, JSON 출력, 종료 코드, 대상 디렉터리 정책을 구현하고, `besfa prebuild`는 공유 Bevy 빌드를 구현한다. `besfa validate`는 아직 구현되지 않았다.
+`besfa new`는 이 문서의 Cargo 실행, Bevy 시작 코드 적용, JSON 출력, 종료 코드, 대상 디렉터리 정책을 구현하고, `besfa prebuild`는 공유 Bevy 빌드를, `besfa mcp`는 MCP 서버를 구현한다. `besfa validate`는 아직 구현되지 않았다.
