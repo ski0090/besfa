@@ -174,6 +174,12 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
                 terrain::stroke(world, entity, tool, &points, radius, strength, layer)
             })
             .map(|stroke| send_report(&Report::TerrainPainted { id, stroke })),
+        Command::TerrainBrush { brush } => {
+            if let Some(mut view) = world.get_resource_mut::<SceneView>() {
+                view.brush = brush;
+            }
+            Ok(())
+        }
         Command::TerrainRestore { stroke, before } => terrain::restore(world, stroke, before),
         Command::TerrainForget { stroke } => {
             terrain::forget(world, stroke);

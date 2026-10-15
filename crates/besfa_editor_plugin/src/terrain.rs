@@ -7,15 +7,22 @@
 
 use std::{collections::HashMap, io};
 
-use besfa_protocol::TerrainTool;
+use besfa_protocol::{Button, PointerEvent, Report, TerrainBrush, TerrainTool};
 use bevy::{
     asset::{AssetLoader, LoadContext, RenderAssetUsages, io::Reader},
+    camera::visibility::VisibilitySystems,
     ecs::system::SystemParam,
     mesh::{Indices, PrimitiveTopology},
+    picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
     prelude::*,
 };
 
-use crate::{edit::in_world, scene::asset_file};
+use crate::{
+    edit::in_world,
+    inspect::{Selected, send_report},
+    scene::asset_file,
+    scene_view::{EditorCamera, HandleGizmos, SceneView},
+};
 
 /// Samples along each side of a new terrain: one a meter at its first size.
 const RESOLUTION: u32 = 257;
@@ -36,7 +43,14 @@ impl Plugin for TerrainPlugin {
             .init_asset::<TerrainData>()
             .register_asset_loader(TerrainLoader)
             .init_resource::<Strokes>()
-            .add_systems(PostUpdate, (load, build).chain())
+            // Before bounds are worked out, so a painted terrain's mesh is
+            // hit where it now is by the next frame's brush.
+            .add_systems(
+                PostUpdate,
+                (load, build)
+                    .chain()
+                    .before(VisibilitySystems::CalculateBounds),
+            )
             .add_observer(drop_mesh);
     }
 }
@@ -503,38 +517,21 @@ pub(crate) fn stroke(
     if points.is_empty() {
         return Err("a stroke needs a point".into());
     }
-    if !(radius > 0.0 && radius.is_finite() && strength.is_finite()) {
-        return Err(format!(
-            "a brush {radius} m wide with strength {strength} paints nothing"
-        ));
-    }
-    let layer = match (tool, layer) {
-        (TerrainTool::Paint, Some(layer)) if layer < terrain.layers.len().min(4) => layer,
-        (TerrainTool::Paint, _) => {
-            return Err(format!(
-                "paint needs a layer below {}",
-                terrain.layers.len().min(4)
-            ));
-        }
-        _ => 0,
-    };
-    // Into the terrain's own space.
     let transform = in_world(world, entity);
-    let local = |&[x, z]: &[f32; 2]| {
-        (transform.rotation.inverse() * (Vec3::new(x, 0.0, z) - transform.translation)
-            / transform.scale)
-            .xz()
-    };
-    let points: Vec<Vec2> = points.iter().map(local).collect();
-    let brush = Brush {
-        tool,
-        radius: radius / transform.scale.x,
-        strength: match tool {
-            TerrainTool::Raise | TerrainTool::Lower => strength / transform.scale.y,
-            _ => strength,
+    let brush = Brush::new(
+        TerrainBrush {
+            tool,
+            radius,
+            strength,
+            layer,
         },
-        layer,
-    };
+        &terrain,
+        &transform,
+    )?;
+    let points: Vec<Vec2> = points
+        .iter()
+        .map(|&[x, z]| local(&transform, Vec3::new(x, 0.0, z)))
+        .collect();
     let mut files = world.resource_mut::<Assets<TerrainData>>();
     let before = files
         .get(file)
@@ -547,21 +544,136 @@ pub(crate) fn stroke(
     }
     let changed = painting.finish(&data);
     drop(data);
-    let mut strokes = world.resource_mut::<Strokes>();
-    strokes.next += 1;
-    let number = strokes.next;
-    if let Some(changed) = changed {
-        strokes.kept.insert(
-            number,
-            Painted {
-                entity,
-                file,
-                changed,
-            },
-        );
-        world.entity_mut(entity).insert(Unsaved);
-    }
+    let number = world.resource_mut::<Strokes>().keep(entity, file, changed);
+    world.entity_mut(entity).insert(Unsaved);
     Ok(number)
+}
+
+/// `point`, in the world, in the space of a terrain placed by `transform`,
+/// X and Z.
+fn local(transform: &Transform, point: Vec3) -> Vec2 {
+    (transform.rotation.inverse() * (point - transform.translation) / transform.scale).xz()
+}
+
+/// The stroke the scene view's brush is painting while the left button is
+/// down: on which terrain and file.
+#[derive(Default)]
+pub(crate) struct Painting(Option<(Entity, AssetId<TerrainData>, Stroke)>);
+
+/// Paints the selected terrain with the scene view's brush. The left
+/// button's presses become strokes instead of selections; the other
+/// buttons still turn and move the view. A ring shows the brush on the
+/// ground under the pointer.
+#[allow(clippy::too_many_arguments, reason = "a system's parameters")]
+pub(crate) fn paint(
+    mut view: ResMut<SceneView>,
+    selected: Res<Selected>,
+    camera: Query<(&Camera, &GlobalTransform), With<EditorCamera>>,
+    terrains: Query<(&Terrain, &TerrainHandle, &GlobalTransform)>,
+    mut files: ResMut<Assets<TerrainData>>,
+    mut strokes: ResMut<Strokes>,
+    mut ray_cast: MeshRayCast,
+    mut ring: Gizmos<HandleGizmos>,
+    mut commands: Commands,
+    mut painting: Local<Painting>,
+) {
+    let target = selected.0.filter(|&entity| terrains.contains(entity));
+    let (Some(entity), Some(asked), Ok((camera, eye))) = (target, view.brush, camera.single())
+    else {
+        view.brush_at = None;
+        // Cut short: the brush was put away or the terrain deselected.
+        if let Some((entity, file, stroke)) = painting.0.take() {
+            let changed = files.get(file).and_then(|data| stroke.finish(data));
+            report_painted(&mut commands, entity, strokes.keep(entity, file, changed));
+        }
+        return;
+    };
+    let (terrain, held, global) = terrains.get(entity).unwrap();
+    let transform = global.compute_transform();
+    let file = held.handle.id();
+    let Ok(brush) = Brush::new(asked, terrain, &transform) else {
+        return;
+    };
+    let mut hit = |pointer: Vec2| {
+        let ray = camera.viewport_to_world(eye, pointer).ok()?;
+        let only = |hit: Entity| hit == entity;
+        let settings = MeshRayCastSettings::default().with_filter(&only);
+        ray_cast
+            .cast_ray(ray, &settings)
+            .first()
+            .map(|(_, hit)| hit.point)
+    };
+    let mut kept = Vec::new();
+    for event in std::mem::take(&mut view.events) {
+        match event {
+            PointerEvent::Down {
+                x,
+                y,
+                button: Button::Left,
+            } => {
+                view.brush_at = hit(Vec2::new(x, y));
+                if let (Some(point), Some(before)) = (view.brush_at, files.get(file).cloned()) {
+                    let point = local(&transform, point);
+                    let mut stroke = Stroke::begin(before, terrain.size, brush, point);
+                    stroke.to(&mut files.get_mut(file).unwrap(), point);
+                    painting.0 = Some((entity, file, stroke));
+                }
+            }
+            PointerEvent::Move { x, y } => {
+                view.brush_at = hit(Vec2::new(x, y));
+                if let (Some(point), Some((_, file, stroke))) = (view.brush_at, &mut painting.0)
+                    && let Some(mut data) = files.get_mut(*file)
+                {
+                    stroke.to(&mut data, local(&transform, point));
+                }
+                // Turning the view still follows the pointer.
+                kept.push(event);
+            }
+            PointerEvent::Up {
+                button: Button::Left,
+                ..
+            } => {
+                if let Some((entity, file, stroke)) = painting.0.take() {
+                    let changed = files.get(file).and_then(|data| stroke.finish(data));
+                    report_painted(&mut commands, entity, strokes.keep(entity, file, changed));
+                }
+            }
+            event => kept.push(event),
+        }
+    }
+    view.events = kept;
+    if let (Some(at), Some(data)) = (view.brush_at, files.get(file)) {
+        draw_ring(&mut ring, data, terrain, &transform, at, asked.radius);
+    }
+}
+
+/// Marks a painted terrain unsaved and tells the editor the stroke's
+/// number, for undo.
+fn report_painted(commands: &mut Commands, entity: Entity, stroke: u64) {
+    commands.entity(entity).insert(Unsaved);
+    send_report(&Report::TerrainPainted {
+        id: entity.to_bits(),
+        stroke,
+    });
+}
+
+/// The brush's edge around world point `at`, `radius` wide, following the
+/// ground a little above it.
+fn draw_ring(
+    ring: &mut Gizmos<HandleGizmos>,
+    data: &TerrainData,
+    terrain: &Terrain,
+    transform: &Transform,
+    at: Vec3,
+    radius: f32,
+) {
+    let points = (0..=48).map(|step| {
+        let angle = step as f32 / 48.0 * std::f32::consts::TAU;
+        let point = at + Vec3::new(angle.cos(), 0.0, angle.sin()) * radius;
+        let height = surface(terrain, data, transform, point.x, point.z).unwrap_or(at.y);
+        Vec3::new(point.x, height + 0.05, point.z)
+    });
+    ring.linestrip(points, Color::srgb(1.0, 0.85, 0.2));
 }
 
 /// Puts the ground stroke `number` changed back as it was before it, or as
@@ -594,9 +706,32 @@ pub(crate) fn forget(world: &mut World, number: u64) {
 
 /// The strokes painted this edit session, by number, for undo and redo.
 #[derive(Resource, Default)]
-struct Strokes {
+pub(crate) struct Strokes {
     next: u64,
     kept: HashMap<u64, Painted>,
+}
+
+impl Strokes {
+    /// Numbers a finished stroke and keeps what it `changed` on `file`.
+    fn keep(
+        &mut self,
+        entity: Entity,
+        file: AssetId<TerrainData>,
+        changed: Option<(Region, Region)>,
+    ) -> u64 {
+        self.next += 1;
+        if let Some(changed) = changed {
+            self.kept.insert(
+                self.next,
+                Painted {
+                    entity,
+                    file,
+                    changed,
+                },
+            );
+        }
+        self.next
+    }
 }
 
 struct Painted {
@@ -652,6 +787,39 @@ pub(crate) struct Brush {
     pub(crate) radius: f32,
     pub(crate) strength: f32,
     pub(crate) layer: usize,
+}
+
+impl Brush {
+    /// `asked`, in meters in the world, on `terrain` placed by `transform`;
+    /// or why it cannot paint.
+    fn new(asked: TerrainBrush, terrain: &Terrain, transform: &Transform) -> Result<Self, String> {
+        let TerrainBrush {
+            tool,
+            radius,
+            strength,
+            layer,
+        } = asked;
+        if !(radius > 0.0 && radius.is_finite() && strength.is_finite()) {
+            return Err(format!(
+                "a brush {radius} m wide with strength {strength} paints nothing"
+            ));
+        }
+        let layers = terrain.layers.len().min(4);
+        let layer = match (tool, layer) {
+            (TerrainTool::Paint, Some(layer)) if layer < layers => layer,
+            (TerrainTool::Paint, _) => return Err(format!("paint needs a layer below {layers}")),
+            _ => 0,
+        };
+        Ok(Self {
+            tool,
+            radius: radius / transform.scale.x,
+            strength: match tool {
+                TerrainTool::Raise | TerrainTool::Lower => strength / transform.scale.y,
+                _ => strength,
+            },
+            layer,
+        })
+    }
 }
 
 /// A stroke being painted: the ground as it was when it began, and how

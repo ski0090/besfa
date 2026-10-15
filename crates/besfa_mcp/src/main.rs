@@ -248,6 +248,7 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 /// The protocol version a game must speak to run `command`.
 fn since(command: &Command) -> u32 {
     match command {
+        Command::TerrainBrush { .. } => 6,
         Command::Spawn {
             kind: SpawnKind::Terrain,
             ..

@@ -11,12 +11,13 @@
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
-use besfa_protocol::{Button, PointerEvent, Report, Tool};
+use besfa_protocol::{Button, PointerEvent, Report, TerrainBrush, Tool};
 use bevy::{
     camera::{RenderTarget, primitives::Aabb, visibility::RenderLayers},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
     prelude::*,
     reflect::{TypePath, serde::TypedReflectSerializer},
+    render::render_resource::TextureFormat,
     transform::TransformSystems,
 };
 use serde_json::Value;
@@ -54,6 +55,11 @@ pub(crate) struct SceneView {
     /// The handle under the pointer, for highlighting.
     hovered: Option<usize>,
     drag: Option<Drag>,
+    /// Paints the selected terrain with the left button instead of
+    /// selecting, while set.
+    pub(crate) brush: Option<TerrainBrush>,
+    /// Where on the terrain the brush is, under the pointer.
+    pub(crate) brush_at: Option<Vec3>,
 }
 
 impl Default for SceneView {
@@ -70,6 +76,8 @@ impl Default for SceneView {
             pressed: None,
             hovered: None,
             drag: None,
+            brush: None,
+            brush_at: None,
         }
     }
 }
@@ -128,11 +136,15 @@ const ACTIVE_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);
 
 /// Handles drawn over everything, so the selection never hides them.
 #[derive(Default, Reflect, GizmoConfigGroup)]
-struct HandleGizmos;
+pub(crate) struct HandleGizmos;
 
 /// The ground grid.
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct GridGizmos;
+
+/// The editor camera's picture in pixels when the game has no window or
+/// viewport, which `pointer` commands point into.
+const HEADLESS_VIEW: UVec2 = UVec2::new(1280, 720);
 
 /// The grid's and handles' render layer, which only the editor camera
 /// draws, so pictures of the scene leave them out.
@@ -165,7 +177,12 @@ impl Plugin for SceneViewPlugin {
             .add_systems(Startup, spawn_editor_camera)
             .add_systems(
                 Update,
-                (adopt_game_camera, fly, handle_pointer)
+                (
+                    adopt_game_camera,
+                    fly,
+                    crate::terrain::paint,
+                    handle_pointer,
+                )
                     .chain()
                     .run_if(shown),
             )
@@ -320,11 +337,11 @@ impl EditorCamera {
     }
 }
 
-fn spawn_editor_camera(mut commands: Commands) {
+fn spawn_editor_camera(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     // The template camera's pose until a game camera shows up.
     let pose = Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y);
     let camera = EditorCamera::looking(&pose);
-    commands.spawn((
+    let mut editor = commands.spawn((
         Name::new("Editor camera"),
         EditorOnly,
         camera,
@@ -337,6 +354,17 @@ fn spawn_editor_camera(mut commands: Commands) {
         // The scene and the grid and handles over it.
         RenderLayers::default().with(OVERLAY_LAYER),
     ));
+    // Without a window or viewport, a picture of its own gives `pointer`
+    // commands a view to point into.
+    if std::env::var_os("BESFA_HEADLESS").is_some() {
+        let image = Image::new_target_texture(
+            HEADLESS_VIEW.x,
+            HEADLESS_VIEW.y,
+            TextureFormat::Rgba8UnormSrgb,
+            None,
+        );
+        editor.insert(RenderTarget::Image(images.add(image).into()));
+    }
 }
 
 /// Starts the view where the game's camera looks once the scene has one.
@@ -626,9 +654,10 @@ fn draw(
         Vec2::ONE,
         Color::srgba(0.6, 0.6, 0.6, 0.35),
     );
-    let (Some((global, aabb)), Ok(camera)) = (
+    let (Some((global, aabb)), Ok(camera), None) = (
         selected.0.and_then(|entity| targets.get(entity).ok()),
         camera.single(),
+        view.brush,
     ) else {
         return;
     };

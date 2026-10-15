@@ -32,7 +32,8 @@ use serde_json::Value;
 ///    by [`Report::TerrainPainted`], [`Command::TerrainRestore`],
 ///    [`Command::TerrainForget`], and [`Command::Heights`] answered by
 ///    [`Report::Heights`].
-pub const VERSION: u32 = 5;
+/// 6. The scene view's terrain brush, [`Command::TerrainBrush`].
+pub const VERSION: u32 = 6;
 
 /// Starts every report line.
 pub const REPORT_PREFIX: &str = "@besfa ";
@@ -230,6 +231,13 @@ pub enum Command {
         /// The surface layer `paint` covers the ground with.
         layer: Option<usize>,
     },
+    /// Paints the selected terrain with `brush` in the scene view: the left
+    /// button paints instead of selecting, each press to release one
+    /// stroke reported as `terrain_painted`, and a ring shows the brush on
+    /// the ground. Without a brush the left button selects again.
+    TerrainBrush {
+        brush: Option<TerrainBrush>,
+    },
     /// Puts the ground a stroke changed back as it was `before` it, or as
     /// the stroke left it.
     TerrainRestore {
@@ -327,6 +335,16 @@ pub enum SpawnKind {
     /// Flat ground 256 meters a side covered by its first surface layer,
     /// whose heights and layers go to a file of their own.
     Terrain,
+}
+
+/// The scene view's terrain brush; its fields mean what they do in
+/// [`Command::TerrainStroke`].
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct TerrainBrush {
+    pub tool: TerrainTool,
+    pub radius: f32,
+    pub strength: f32,
+    pub layer: Option<usize>,
 }
 
 /// What a terrain stroke does to the ground under the brush.
@@ -753,6 +771,10 @@ mod tests {
                 strength: 2.0,
                 layer: None,
             }
+        );
+        assert_eq!(
+            request(r#"{"command":"terrain_brush","brush":null}"#).command,
+            Command::TerrainBrush { brush: None }
         );
         assert_eq!(
             request(r#"{"command":"spawn","kind":"terrain"}"#).command,
