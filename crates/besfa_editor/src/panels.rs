@@ -9,7 +9,10 @@ use std::{
 };
 
 use besfa_protocol::SpawnKind;
-use eframe::egui::{self, Color32, Id, Label, PointerButton, RichText, ScrollArea, Ui};
+use eframe::egui::{
+    self, Color32, Id, Label, PointerButton, RichText, ScrollArea, Ui, WidgetInfo, WidgetType,
+    collapsing_header::{CollapsingState, paint_default_icon},
+};
 
 use crate::{
     process::{Prebuild, PrebuildPhase},
@@ -35,6 +38,45 @@ pub fn panel_header(ui: &mut Ui, title: &str, actions: impl FnOnce(&mut Ui)) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), actions);
     });
     ui.separator();
+}
+
+/// `rows`, given in tree order, each indented by its `depth` after a toggle
+/// that folds away the rows under it, when it has any. Folds are named by
+/// `fold` and open until toggled; `show` draws the rest of a row.
+fn tree<T>(
+    ui: &mut Ui,
+    rows: &[T],
+    depth: impl Fn(&T) -> usize,
+    fold: impl Fn(&T) -> Id,
+    mut show: impl FnMut(&mut Ui, &T),
+) {
+    let toggle = egui::vec2(ui.spacing().indent, ui.spacing().icon_width);
+    // The depth of the folded row whose rows are being skipped.
+    let mut folded = None;
+    for (at, row) in rows.iter().enumerate() {
+        let row_depth = depth(row);
+        if folded.is_some_and(|folded| row_depth > folded) {
+            continue;
+        }
+        folded = None;
+        ui.horizontal(|ui| {
+            ui.add_space(row_depth as f32 * 16.0);
+            if rows.get(at + 1).is_some_and(|next| depth(next) > row_depth) {
+                let mut state = CollapsingState::load_with_default_open(ui.ctx(), fold(row), true);
+                let response = state.show_toggle_button(ui, paint_default_icon);
+                let open = state.is_open();
+                let label = if open { "Fold" } else { "Unfold" };
+                response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
+                state.store(ui.ctx());
+                if !open {
+                    folded = Some(row_depth);
+                }
+            } else {
+                ui.allocate_space(toggle);
+            }
+            show(ui, row);
+        });
+    }
 }
 
 pub fn section(ui: &mut Ui, title: &str) {
@@ -131,24 +173,51 @@ pub fn hierarchy(
         .response
         .on_hover_text("Add entity");
     });
+    let rows = tree_rows(&scene.entities);
+    let fold = |id: u64| Id::new(("hierarchy fold", id));
+    // A new selection, picked in the scene view too, opens the folds above
+    // it once it is listed.
+    let at = rows
+        .iter()
+        .position(|(entity, _)| Some(entity.id) == scene.selected);
+    let listed = at.map(|at| rows[at].0.id);
+    let shown = Id::new("hierarchy selection");
+    if ui.data(|data| data.get_temp(shown)) != Some(listed) {
+        ui.data_mut(|data| data.insert_temp(shown, listed));
+        if let Some(at) = at {
+            let mut depth = rows[at].1;
+            for (entity, above) in rows[..at].iter().rev() {
+                if *above < depth {
+                    depth = *above;
+                    let mut state =
+                        CollapsingState::load_with_default_open(ui.ctx(), fold(entity.id), true);
+                    state.set_open(true);
+                    state.store(ui.ctx());
+                }
+            }
+        }
+    }
     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-        for (entity, depth) in tree_rows(&scene.entities) {
-            let selected = Some(entity.id) == scene.selected;
-            // Entities the game spawns while running are not saved.
-            let mut text = RichText::new(entity.label());
-            text = if entity.scene { text } else { text.italics() };
-            text = text.color(if entity.name.is_none() || !entity.scene {
-                MUTED
-            } else {
-                TEXT
-            });
-            ui.horizontal(|ui| {
-                ui.add_space(depth as f32 * 16.0);
+        tree(
+            ui,
+            &rows,
+            |(_, depth)| *depth,
+            |(entity, _)| fold(entity.id),
+            |ui, (entity, _)| {
+                let selected = Some(entity.id) == scene.selected;
+                // Entities the game spawns while running are not saved.
+                let mut text = RichText::new(entity.label());
+                text = if entity.scene { text } else { text.italics() };
+                text = text.color(if entity.name.is_none() || !entity.scene {
+                    MUTED
+                } else {
+                    TEXT
+                });
                 if ui.selectable_label(selected, text).clicked() {
                     action = Some(HierarchyAction::Select((!selected).then_some(entity.id)));
                 }
-            });
-        }
+            },
+        );
     });
     action
 }
@@ -390,36 +459,40 @@ impl AssetBrowser {
             return None;
         };
         let mut action = None;
+        let fold = |row: &AssetRow| Id::new(("asset fold", &row.path));
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for row in rows {
-                let placeable = can_add && !row.folder && can_place(&row.path);
-                let icon = if row.folder {
-                    "🗀"
-                } else if placeable {
-                    "⛶"
-                } else {
-                    "🗋"
-                };
-                let thumbnail = thumbnails.get(&row.path).and_then(|&made| {
-                    let file = project.join(thumbnail_file(&row.path));
-                    texture(ui.ctx(), textures, &row.path, &file, made)
-                });
-                let label = RichText::new(&row.name).color(TEXT);
-                let picture = |ui: &mut Ui, side: f32| {
-                    if let Some(texture) = &thumbnail {
-                        ui.image((texture.id(), egui::vec2(side, side)));
-                    }
-                };
-                // The thumbnail, or the icon, in a slot of the same size.
-                let slot = |ui: &mut Ui| {
-                    let side = egui::vec2(THUMBNAIL_ROW, THUMBNAIL_ROW);
-                    match &thumbnail {
-                        Some(texture) => ui.image((texture.id(), side)),
-                        None => ui.add_sized(side, Label::new(RichText::new(icon).color(TEXT))),
+            tree(
+                ui,
+                rows,
+                |row| row.depth,
+                fold,
+                |ui, row| {
+                    let placeable = can_add && !row.folder && can_place(&row.path);
+                    let icon = if row.folder {
+                        "🗀"
+                    } else if placeable {
+                        "⛶"
+                    } else {
+                        "🗋"
                     };
-                };
-                ui.horizontal(|ui| {
-                    ui.add_space(row.depth as f32 * 16.0);
+                    let thumbnail = thumbnails.get(&row.path).and_then(|&made| {
+                        let file = project.join(thumbnail_file(&row.path));
+                        texture(ui.ctx(), textures, &row.path, &file, made)
+                    });
+                    let label = RichText::new(&row.name).color(TEXT);
+                    let picture = |ui: &mut Ui, side: f32| {
+                        if let Some(texture) = &thumbnail {
+                            ui.image((texture.id(), egui::vec2(side, side)));
+                        }
+                    };
+                    // The thumbnail, or the icon, in a slot of the same size.
+                    let slot = |ui: &mut Ui| {
+                        let side = egui::vec2(THUMBNAIL_ROW, THUMBNAIL_ROW);
+                        match &thumbnail {
+                            Some(texture) => ui.image((texture.id(), side)),
+                            None => ui.add_sized(side, Label::new(RichText::new(icon).color(TEXT))),
+                        };
+                    };
                     if placeable {
                         let id = Id::new(("asset", &row.path));
                         let name = ui.dnd_drag_source(id, row.path.clone(), |ui| {
@@ -458,8 +531,8 @@ impl AssetBrowser {
                     if let Some(reimport) = reimports.get(&row.path) {
                         reimport.ui(ui);
                     }
-                });
-            }
+                },
+            );
         });
         action
     }
@@ -679,5 +752,63 @@ mod tests {
             Some("models/ship.glb")
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn folds_a_folder_away_and_back() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let dir = std::env::temp_dir().join(format!("besfa_fold_{}", std::process::id()));
+        fs::create_dir_all(dir.join("models/boats")).unwrap();
+        for file in ["models/ship.glb", "models/boats/raft.glb", "notes.txt"] {
+            fs::write(dir.join(file), "").unwrap();
+        }
+        let mut harness = Harness::new_ui_state(
+            |ui, assets: &mut AssetBrowser| {
+                assets.ui(ui, true);
+            },
+            AssetBrowser::new(dir.clone()),
+        );
+        harness.run();
+        let shows = |harness: &Harness<AssetBrowser>, name| harness.query_by_label(name).is_some();
+        assert!(shows(&harness, "raft.glb"));
+
+        // The first fold is models', the second boats'.
+        harness.get_all_by_label("Fold").next().unwrap().click();
+        harness.run();
+        assert!(!shows(&harness, "ship.glb") && !shows(&harness, "boats"));
+        assert!(!shows(&harness, "raft.glb"), "folded with its folder");
+        assert!(shows(&harness, "notes.txt"), "not in the folder");
+
+        harness.get_by_label("Unfold").click();
+        harness.run();
+        assert!(shows(&harness, "ship.glb") && shows(&harness, "raft.glb"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn opens_the_folds_above_a_new_selection() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut scene = Scene::default();
+        scene.handle(
+            r#"@besfa {"type":"entities","entities":[{"id":1,"name":"Ship"},{"id":2,"name":"Hull","parent":1},{"id":3,"name":"Mast","parent":2}]}"#,
+        );
+        let mut harness = Harness::new_ui_state(
+            |ui, scene: &mut Scene| {
+                hierarchy(ui, scene, false, false);
+            },
+            scene,
+        );
+        harness.run();
+        // Ship's fold.
+        harness.get_all_by_label("Fold").next().unwrap().click();
+        harness.run();
+        assert!(harness.query_by_label("Mast").is_none(), "folded");
+
+        // As a pick in the scene view selects it.
+        harness.state_mut().select(Some(3));
+        harness.run();
+        assert!(harness.query_by_label("Mast").is_some());
     }
 }
