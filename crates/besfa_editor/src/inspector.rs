@@ -9,7 +9,10 @@ use besfa_protocol::{ComponentData, ComponentType, EntityInfo, SystemInfo, crate
 use eframe::egui::{self, Id, Label, RichText, ScrollArea, TextEdit, Ui};
 use serde_json::{Value, json};
 
-use crate::panels::{MUTED, TEXT, panel_header, section, tag};
+use crate::{
+    panels::{MUTED, TEXT, panel_header, section, tag},
+    terrain::{TERRAIN, TerrainTools},
+};
 
 pub const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
 const NAME: &str = "bevy_ecs::name::Name";
@@ -48,6 +51,10 @@ pub struct Inspector {
     details: bool,
     /// The Add component search, while it is open.
     adding: Option<String>,
+    /// The brush for a selected terrain.
+    pub terrain: TerrainTools,
+    /// The game's plugin takes the terrain brush, in edit mode.
+    pub can_sculpt: bool,
 }
 
 impl Inspector {
@@ -82,7 +89,15 @@ impl Inspector {
         can_apply_prefab: bool,
     ) -> Option<Action> {
         let name = self.name(ui, scene);
-        self.components(ui, scene, can_apply_prefab).or(name)
+        let terrain = scene
+            .components
+            .iter()
+            .find(|component| component.path == TERRAIN && scene.selected.is_some())
+            .and_then(|terrain| self.terrain.ui(ui, terrain, self.can_sculpt))
+            .map(|value| Action::Set(TERRAIN.into(), value));
+        self.components(ui, scene, can_apply_prefab)
+            .or(terrain)
+            .or(name)
     }
 
     /// Simply, the name's field; otherwise the entity's label.

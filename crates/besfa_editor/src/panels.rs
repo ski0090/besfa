@@ -65,13 +65,14 @@ pub fn prebuild_status(ui: &mut Ui, prebuild: &Prebuild) {
 }
 
 /// What the add menu spawns, with its label.
-pub const SPAWN_KINDS: [(SpawnKind, &str); 6] = [
+pub const SPAWN_KINDS: [(SpawnKind, &str); 7] = [
     (SpawnKind::Empty, "Empty"),
     (SpawnKind::Cube, "Cube"),
     (SpawnKind::Sphere, "Sphere"),
     (SpawnKind::Plane, "Plane"),
     (SpawnKind::Light, "Light"),
     (SpawnKind::Camera, "Camera"),
+    (SpawnKind::Terrain, "Terrain"),
 ];
 
 pub enum HierarchyAction {
@@ -85,7 +86,13 @@ pub enum HierarchyAction {
 /// The game's entities as a tree; clicking one selects it, clicking the
 /// selected one clears the selection. The header adds, duplicates and
 /// deletes entities, and saves one as a prefab when `can_save_prefab`.
-pub fn hierarchy(ui: &mut Ui, scene: &Scene, can_save_prefab: bool) -> Option<HierarchyAction> {
+/// `terrain`: the game's plugin makes terrain.
+pub fn hierarchy(
+    ui: &mut Ui,
+    scene: &Scene,
+    can_save_prefab: bool,
+    terrain: bool,
+) -> Option<HierarchyAction> {
     let mut action = None;
     let selection = scene.selected_entity().is_some();
     panel_header(ui, "Hierarchy", |ui| {
@@ -113,6 +120,9 @@ pub fn hierarchy(ui: &mut Ui, scene: &Scene, can_save_prefab: bool) -> Option<Hi
         }
         ui.menu_button("➕", |ui| {
             for (kind, label) in SPAWN_KINDS {
+                if kind == SpawnKind::Terrain && !terrain {
+                    continue;
+                }
                 if ui.button(label).clicked() {
                     action = Some(HierarchyAction::Spawn(kind));
                 }

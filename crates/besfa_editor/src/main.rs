@@ -13,6 +13,7 @@ mod process;
 mod project;
 mod review;
 mod scene;
+mod terrain;
 mod viewport;
 
 use std::sync::Arc;

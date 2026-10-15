@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use besfa_protocol::{Command, Placement, Report, Request, Tool, VERSION};
+use besfa_protocol::{Command, Placement, Report, Request, TerrainBrush, Tool, VERSION};
 use eframe::{
     egui::{
         self, Button, Color32, Key, KeyboardShortcut, Modifiers, RichText, Ui, ViewportCommand,
@@ -31,8 +31,12 @@ use crate::{
     process::{CliProcess, Output, Prebuild},
     project::{self, Project},
     scene::{Edit, EditHistory, Scene},
+    terrain::TERRAIN,
     viewport::{ViewportInput, ViewportTexture, adapter_name},
 };
+
+/// The protocol whose plugins make and sculpt terrain from the editor.
+const TERRAIN_PROTOCOL: u32 = 6;
 
 /// The log keeps the latest lines.
 const MAX_LOG_LINES: usize = 2000;
@@ -91,6 +95,8 @@ pub struct Editor {
     /// The protocol version the game's plugin speaks: 0 for one from before
     /// versions, None until the game says.
     protocol: Option<u32>,
+    /// The terrain brush the game paints with, as last sent.
+    brush: Option<TerrainBrush>,
     /// The viewport panel's size in physical pixels, which the texture
     /// follows once it settles.
     wanted_viewport: Option<[u32; 2]>,
@@ -150,6 +156,7 @@ impl Editor {
             viewport_request: None,
             seq: 0,
             protocol: None,
+            brush: None,
             wanted_viewport: None,
             resize_at: None,
             input: ViewportInput::default(),
@@ -246,7 +253,8 @@ impl Editor {
         egui::Panel::left("hierarchy")
             .default_size(220.0)
             .show(ui, |ui| {
-                if let Some(action) = panels::hierarchy(ui, &self.scene, !self.playing) {
+                let terrain = self.protocol >= Some(TERRAIN_PROTOCOL);
+                if let Some(action) = panels::hierarchy(ui, &self.scene, !self.playing, terrain) {
                     self.on_hierarchy(action);
                 }
             });
@@ -263,6 +271,8 @@ impl Editor {
                         }
                     }
                     None => {
+                        self.inspector.can_sculpt =
+                            self.protocol >= Some(TERRAIN_PROTOCOL) && !self.playing;
                         let scene = self.scene.inspected();
                         if let Some(action) = self.inspector.ui(ui, &scene, !self.playing) {
                             self.on_inspector(action);
@@ -272,6 +282,7 @@ impl Editor {
             });
         egui::CentralPanel::default().show(ui, |ui| self.viewport_ui(ui, &ctx));
         self.dialogs(&ctx);
+        self.send_brush(&ctx);
 
         if std::mem::take(&mut self.save_after_ui) {
             self.save();
@@ -349,6 +360,7 @@ impl Editor {
         self.viewport_request = None;
         self.seq = 0;
         self.protocol = None;
+        self.brush = None;
         self.ensure_viewport();
         // The old game cannot answer them; the new one reads the files fresh.
         self.assets
@@ -470,8 +482,15 @@ impl Editor {
     fn record(&mut self, edit: Edit) {
         for forgotten in self.history.add(edit) {
             for command in forgotten.undo {
-                if let Command::Delete { id } = command {
-                    self.send(Command::Despawn { id });
+                match command {
+                    Command::Delete { id } => {
+                        self.send(Command::Despawn { id });
+                    }
+                    // What the game keeps to undo the stroke can go.
+                    Command::TerrainRestore { stroke, .. } => {
+                        self.send(Command::TerrainForget { stroke });
+                    }
+                    _ => {}
                 }
             }
         }
@@ -508,6 +527,16 @@ impl Editor {
             Report::Entities { .. } if self.protocol.is_none() => {
                 self.protocol = Some(0);
                 self.log(protocol_warning(0).unwrap_or_default());
+            }
+            // A stroke the scene view's brush painted.
+            Report::TerrainPainted { stroke, .. } => {
+                let restore = |before| Command::TerrainRestore { stroke, before };
+                self.record(Edit {
+                    undo: vec![restore(true)],
+                    redo: vec![restore(false)],
+                    seq: None,
+                });
+                self.scene.mark_dirty();
             }
             Report::Spawned { id } => self.record(Edit {
                 undo: vec![Command::Delete { id }],
@@ -866,6 +895,23 @@ impl Editor {
         }
     }
 
+    /// Tells the game which terrain brush to paint the selection with,
+    /// when that changed: a brush is picked, the selection is a terrain,
+    /// and the scene shows in edit mode. Shift turns Raise into Lower.
+    fn send_brush(&mut self, ctx: &egui::Context) {
+        let terrain = self.scene.components.iter().any(|c| c.path == TERRAIN);
+        let shift = ctx.input(|i| i.modifiers.shift);
+        let brush = self
+            .inspector
+            .terrain
+            .brush(shift)
+            .filter(|_| terrain && self.inspector.can_sculpt && !self.previewing);
+        if brush != self.brush && self.game.is_some() {
+            self.brush = brush;
+            self.send(Command::TerrainBrush { brush });
+        }
+    }
+
     fn set_tool(&mut self, tool: Tool) {
         self.tool = tool;
         self.send(Command::Tool { tool });
@@ -901,7 +947,9 @@ impl Editor {
             }
             return;
         }
-        if pressed(Modifiers::COMMAND, Key::D) {
+        if pressed(Modifiers::NONE, Key::Escape) {
+            self.inspector.terrain.tool = None;
+        } else if pressed(Modifiers::COMMAND, Key::D) {
             self.duplicate();
         } else if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
             || pressed(Modifiers::COMMAND, Key::Y)
@@ -1062,6 +1110,8 @@ impl Editor {
         if !self.playing {
             let hint = if self.previewing {
                 "Drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  F fit"
+            } else if self.brush.is_some() {
+                "Paint to sculpt; hold Shift to invert.  ·  Right-drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  Esc stop"
             } else {
                 "Click select  ·  Right-drag orbit  ·  Right-hold + WASD/QE fly  ·  Middle-drag pan  ·  Scroll zoom  ·  F focus"
             };
