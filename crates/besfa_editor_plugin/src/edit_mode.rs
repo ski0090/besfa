@@ -9,7 +9,10 @@
 //! `done` report once it has run. The editor ends a play session by killing
 //! the process, which resets the scene.
 
-use std::sync::{Mutex, PoisonError, mpsc};
+use std::{
+    collections::VecDeque,
+    sync::{Mutex, PoisonError, mpsc},
+};
 
 use besfa_protocol::{Command, Report, Request, VERSION};
 use bevy::{input::InputSystems, prelude::*};
@@ -69,15 +72,26 @@ fn pause(mut time: ResMut<Time<Virtual>>) {
 }
 
 /// Exclusive, because commands change and save the whole world.
-fn run_commands(world: &mut World) {
-    let lines: Vec<String> = {
+///
+/// A command after pointer input waits for the next frame, once the scene
+/// view has taken the input in this frame's `Update`: a stroke the pointer
+/// paints is then on the ground before anything that asks about it, and
+/// done before its report.
+fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
+    {
         let commands = world.resource::<EditorCommands>();
         let receiver = commands.0.lock().unwrap_or_else(PoisonError::into_inner);
-        receiver.try_iter().collect()
-    };
-    for line in lines {
+        waiting.extend(receiver.try_iter());
+    }
+    let mut pointed = false;
+    while let Some(line) = waiting.pop_front() {
         match serde_json::from_str::<Request>(&line) {
             Ok(Request { seq, command }) => {
+                if pointed && !command.is_input() {
+                    waiting.push_front(line);
+                    return;
+                }
+                pointed |= matches!(command, Command::Pointer(_));
                 let result = run(world, command);
                 if let Some(seq) = seq {
                     send_report(&Report::Done {
