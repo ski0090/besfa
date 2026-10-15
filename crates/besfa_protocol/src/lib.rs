@@ -33,7 +33,10 @@ use serde_json::Value;
 ///    [`Command::TerrainForget`], and [`Command::Heights`] answered by
 ///    [`Report::Heights`].
 /// 6. The scene view's terrain brush, [`Command::TerrainBrush`].
-pub const VERSION: u32 = 6;
+/// 7. Putting things on the ground: [`Command::DropToSurface`] answered by
+///    [`Report::Moved`], and [`Command::Scatter`] and
+///    [`Command::ScatterErase`] answered by [`Report::Scattered`].
+pub const VERSION: u32 = 7;
 
 /// Starts every report line.
 pub const REPORT_PREFIX: &str = "@besfa ";
@@ -253,6 +256,46 @@ pub enum Command {
     Heights {
         points: Vec<[f32; 2]>,
     },
+    /// Brings each of `ids` down, or up out of the ground, onto the surface
+    /// right below where it stands, keeping which way it faces. A group,
+    /// an entity with no mesh or asset of its own over scene entities,
+    /// drops each thing in it instead. Reports `moved`; one with no surface
+    /// below stays and fails the command.
+    DropToSurface {
+        ids: Vec<u64>,
+    },
+    /// Places up to `count` of `models` within `radius` meters of `center`,
+    /// world X and Z, on the ground: on terrain where there is one, else
+    /// on what is below, else at height 0. Each is at least `spacing`
+    /// meters from the others and from what was scattered before, goes
+    /// under the scene's Scatter group, and is marked scattered. The same
+    /// `seed` on the same ground among the same scattered things places
+    /// the same. Reports `scattered`.
+    Scatter {
+        models: Vec<ScatterModel>,
+        center: [f32; 2],
+        radius: f32,
+        count: u32,
+        #[serde(default)]
+        spacing: f32,
+        /// The smallest and largest size, the same along each axis.
+        #[serde(default = "unit_scale")]
+        scale: [f32; 2],
+        /// Turned a random way about the up axis.
+        #[serde(default)]
+        rotate: bool,
+        /// Tilted to the ground's slope.
+        #[serde(default)]
+        align: bool,
+        #[serde(default)]
+        seed: u64,
+    },
+    /// Deletes the scattered things within `radius` meters of `center`,
+    /// world X and Z; things placed by hand stay. Reports `scattered`.
+    ScatterErase {
+        center: [f32; 2],
+        radius: f32,
+    },
     /// Renders the scene as the scene view shows it, without its grid and
     /// handles, off screen, and writes the picture to `file`, a PNG file
     /// relative to the project; reports it as `screenshot`. Looks from `eye`
@@ -335,6 +378,32 @@ pub enum SpawnKind {
     /// Flat ground 256 meters a side covered by its first surface layer,
     /// whose heights and layers go to a file of their own.
     Terrain,
+}
+
+/// A model or prefab to scatter, relative to the asset directory, and how
+/// often it comes up against the others.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ScatterModel {
+    pub path: String,
+    #[serde(default = "one")]
+    pub weight: f32,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+fn unit_scale() -> [f32; 2] {
+    [1.0, 1.0]
+}
+
+/// An entity's Transform before and after a change the game made, in the
+/// shape `set` takes.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Move {
+    pub id: u64,
+    pub before: Value,
+    pub after: Value,
 }
 
 /// The scene view's terrain brush; its fields mean what they do in
@@ -496,6 +565,10 @@ pub enum Report {
     /// A terrain stroke is done, from a command or the scene view's brush:
     /// `stroke` names it for `terrain_restore` and `terrain_forget`.
     TerrainPainted { id: u64, stroke: u64 },
+    /// What `drop_to_surface` moved.
+    Moved { moves: Vec<Move> },
+    /// What `scatter` and `scatter_erase` placed and deleted.
+    Scattered { added: Vec<u64>, removed: Vec<u64> },
     /// The answer to `heights`, a height or none for each point.
     Heights { heights: Vec<Option<f32>> },
     /// The outcome of `reimport`.
@@ -770,6 +843,26 @@ mod tests {
                 radius: 5.0,
                 strength: 2.0,
                 layer: None,
+            }
+        );
+        assert_eq!(
+            request(
+                r#"{"command":"scatter","models":[{"path":"a.glb"}],"center":[1,2],"radius":5,"count":3}"#
+            )
+            .command,
+            Command::Scatter {
+                models: vec![ScatterModel {
+                    path: "a.glb".into(),
+                    weight: 1.0,
+                }],
+                center: [1.0, 2.0],
+                radius: 5.0,
+                count: 3,
+                spacing: 0.0,
+                scale: [1.0, 1.0],
+                rotate: false,
+                align: false,
+                seed: 0,
             }
         );
         assert_eq!(

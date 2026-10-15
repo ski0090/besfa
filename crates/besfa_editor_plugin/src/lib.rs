@@ -19,6 +19,7 @@ use bevy::{
 
 mod edit;
 mod edit_mode;
+mod ground;
 mod input;
 mod inspect;
 mod part_changes;
@@ -31,6 +32,7 @@ mod terrain;
 mod thumbnail;
 mod viewport;
 
+pub use ground::{ScatterGroup, Scattered};
 pub use part_changes::{PartChange, PartChanges};
 pub use reimport::Reimported;
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
@@ -46,7 +48,8 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .build()
         .add(scene::ScenePlugin)
         .add(part_changes::PartChangesPlugin)
-        .add(terrain::TerrainPlugin);
+        .add(terrain::TerrainPlugin)
+        .add(ground::GroundPlugin);
     if edit_mode::requested() {
         plugins = plugins
             .add(edit_mode::EditModePlugin)

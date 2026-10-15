@@ -1,0 +1,495 @@
+//! Putting things on the ground: dropping them onto the surface below
+//! them, and scattering many over an area, which can be erased again
+//! without touching what was placed by hand.
+
+use std::collections::HashSet;
+
+use besfa_protocol::{Move, ScatterModel};
+use bevy::{
+    ecs::system::SystemState,
+    picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
+    prelude::*,
+    reflect::serde::TypedReflectSerializer,
+    world_serialization::{DynamicWorldRoot, WorldAssetRoot},
+};
+use serde_json::Value;
+
+use crate::{
+    edit::{self, Deleted, in_world, relative, subtree},
+    preview::bounds,
+    scene::SceneEntity,
+    scene_view::EditorOnly,
+    terrain::{self, Terrain},
+};
+
+/// The most things one scatter places.
+const MAX_SCATTER: u32 = 10_000;
+
+/// Where a ray looking for the ground below a scattered thing starts.
+const SKY: f32 = 10_000.0;
+
+pub(crate) struct GroundPlugin;
+
+impl Plugin for GroundPlugin {
+    fn build(&self, app: &mut App) {
+        app.register_type::<Scattered>()
+            .register_type::<ScatterGroup>();
+    }
+}
+
+/// A thing scatter placed, which erasing may take away again; things
+/// placed by hand have none.
+#[derive(Component, Reflect, Clone, Copy, Debug, Default)]
+#[reflect(Component, Default)]
+pub struct Scattered;
+
+/// The group scattered things go under, named Scatter.
+#[derive(Component, Reflect, Clone, Copy, Debug, Default)]
+#[reflect(Component, Default)]
+pub struct ScatterGroup;
+
+/// Finds the surface under points: terrain from its data, anything else by
+/// a ray straight down at the meshes not left out.
+struct Ground {
+    rays: SystemState<MeshRayCast<'static, 'static>>,
+    /// Never a surface: the editor's own things, terrains, which are asked
+    /// by their data instead, and whatever else the caller leaves out.
+    skip: HashSet<Entity>,
+}
+
+impl Ground {
+    fn new(world: &mut World, mut skip: HashSet<Entity>) -> Self {
+        let editor: Vec<Entity> = world
+            .query_filtered::<Entity, Or<(With<EditorOnly>, With<Terrain>)>>()
+            .iter(world)
+            .collect();
+        for entity in editor {
+            skip.extend(subtree(world, entity));
+        }
+        Self {
+            rays: SystemState::new(world),
+            skip,
+        }
+    }
+
+    /// The top of the highest mesh at world `x`, `z` below `top`, and its
+    /// normal there.
+    fn mesh(&mut self, world: &mut World, x: f32, z: f32, top: f32) -> Option<(f32, Vec3)> {
+        let mut ray_cast = self.rays.get_mut(world).ok()?;
+        let skip = &self.skip;
+        let keep = |entity: Entity| !skip.contains(&entity);
+        // Visible rather than in view: the ground may be far off screen.
+        let settings = MeshRayCastSettings::default()
+            .with_visibility(RayCastVisibility::Visible)
+            .with_filter(&keep);
+        let ray = Ray3d::new(Vec3::new(x, top, z), Dir3::NEG_Y);
+        ray_cast
+            .cast_ray(ray, &settings)
+            .first()
+            .map(|(_, hit)| (hit.point.y, hit.normal.normalize_or(Vec3::Y)))
+    }
+}
+
+/// The highest terrain's height at world `x`, `z`, and its normal there.
+fn terrain_at(world: &mut World, x: f32, z: f32) -> Option<(f32, Vec3)> {
+    const STEP: f32 = 0.5;
+    let around = [
+        [x, z],
+        [x - STEP, z],
+        [x + STEP, z],
+        [x, z - STEP],
+        [x, z + STEP],
+    ];
+    let heights = terrain::heights(world, &around);
+    let height = heights[0]?;
+    let at = |index: usize| heights[index].unwrap_or(height);
+    let normal = Vec3::new(at(1) - at(2), 2.0 * STEP, at(3) - at(4)).normalize();
+    Some((height, normal))
+}
+
+/// Drops each of `ids` onto the surface below it, or each thing in it for
+/// a group; returns what moved and why the rest did not.
+pub(crate) fn drop_to_surface(world: &mut World, ids: &[u64]) -> (Vec<Move>, Vec<String>) {
+    let (mut moves, mut failures) = (Vec::new(), Vec::new());
+    let mut things = Vec::new();
+    for &id in ids {
+        match Entity::try_from_bits(id).filter(|&entity| is_scene_entity(world, entity)) {
+            Some(entity) => things.extend(things_in(world, entity)),
+            None => failures.push(format!("{id} is not a scene entity.")),
+        }
+    }
+    for entity in things {
+        match drop_one(world, entity) {
+            Some(Some(change)) => moves.push(change),
+            Some(None) => {}
+            None => {
+                let name = world
+                    .get::<Name>(entity)
+                    .map_or_else(|| entity.to_bits().to_string(), ToString::to_string);
+                failures.push(format!("No surface below {name}."));
+            }
+        }
+    }
+    (moves, failures)
+}
+
+fn is_scene_entity(world: &World, entity: Entity) -> bool {
+    world
+        .get_entity(entity)
+        .is_ok_and(|entity| entity.contains::<SceneEntity>() && !entity.contains::<Deleted>())
+}
+
+/// `entity`, or for a group, the things in it: a group has no mesh or
+/// asset of its own and holds scene entities.
+fn things_in(world: &World, entity: Entity) -> Vec<Entity> {
+    let shows = world.get::<Mesh3d>(entity).is_some()
+        || world.get::<WorldAssetRoot>(entity).is_some()
+        || world.get::<DynamicWorldRoot>(entity).is_some();
+    let held: Vec<Entity> = world
+        .get::<Children>(entity)
+        .map(|children| {
+            children
+                .iter()
+                .filter(|&child| is_scene_entity(world, child))
+                .collect()
+        })
+        .unwrap_or_default();
+    if shows || held.is_empty() {
+        vec![entity]
+    } else {
+        held.into_iter()
+            .flat_map(|child| things_in(world, child))
+            .collect()
+    }
+}
+
+/// Moves `entity` so its bottom rests on the surface below it; none when
+/// there is no surface, and no move when it already rests there.
+fn drop_one(world: &mut World, entity: Entity) -> Option<Option<Move>> {
+    let placed = in_world(world, entity);
+    // How far its origin is above its bottom, from its meshes' bounds.
+    let lift = world
+        .get::<GlobalTransform>(entity)
+        .zip(bounds(world, &subtree(world, entity)))
+        .map_or(0.0, |(global, (low, _))| global.translation().y - low.y);
+    let bottom = placed.translation.y - lift;
+    let (x, z) = (placed.translation.x, placed.translation.z);
+    let terrain = terrain_at(world, x, z).map(|(height, _)| height);
+    // From above its bottom, or above the ground that buried it.
+    let top = bottom.max(terrain.unwrap_or(f32::NEG_INFINITY)) + 0.05;
+    let mut ground = Ground::new(world, subtree(world, entity).into_iter().collect());
+    let mesh = ground.mesh(world, x, z, top).map(|(height, _)| height);
+    let surface = match (terrain, mesh) {
+        (Some(terrain), Some(mesh)) => terrain.max(mesh),
+        (one, other) => one.or(other)?,
+    };
+    let mut moved = placed;
+    moved.translation.y = surface + lift;
+    let local = match world.get::<ChildOf>(entity).map(ChildOf::parent) {
+        Some(parent) => relative(moved, in_world(world, parent)),
+        None => moved,
+    };
+    let before = *world.get::<Transform>(entity)?;
+    if before == local {
+        return Some(None);
+    }
+    *world.get_mut::<Transform>(entity)? = local;
+    Some(Some(Move {
+        id: entity.to_bits(),
+        before: transform_value(world, &before),
+        after: transform_value(world, &local),
+    }))
+}
+
+/// `transform` as `set` takes it.
+fn transform_value(world: &World, transform: &Transform) -> Value {
+    let registry = world.resource::<AppTypeRegistry>().read();
+    serde_json::to_value(TypedReflectSerializer::new(transform, &registry)).unwrap_or(Value::Null)
+}
+
+/// Where and how many things `scatter` spreads.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Spread {
+    pub(crate) center: Vec2,
+    pub(crate) radius: f32,
+    pub(crate) count: u32,
+    pub(crate) spacing: f32,
+    pub(crate) scale: [f32; 2],
+    pub(crate) rotate: bool,
+    pub(crate) align: bool,
+    pub(crate) seed: u64,
+}
+
+/// Places what [`plan`] decides from `spread`'s seed on the ground, each
+/// under the scene's Scatter group; returns them.
+pub(crate) fn scatter(
+    world: &mut World,
+    models: &[ScatterModel],
+    spread: Spread,
+) -> Result<Vec<u64>, String> {
+    if models.is_empty() {
+        return Err("scatter needs a model".into());
+    }
+    for model in models {
+        let path = &model.path;
+        if !(path.ends_with(".glb") || path.ends_with(".gltf") || path.ends_with(".scn.ron")) {
+            return Err(format!("{path} is not a glTF model or a scene file"));
+        }
+        if !(model.weight >= 0.0 && model.weight.is_finite()) {
+            return Err(format!("{path}'s weight {} is not 0 or more", model.weight));
+        }
+    }
+    let Spread {
+        radius,
+        count,
+        spacing,
+        scale: [small, big],
+        ..
+    } = spread;
+    if models.iter().all(|model| model.weight == 0.0) {
+        return Err("every model's weight is 0".into());
+    }
+    if !(radius > 0.0 && radius.is_finite() && spacing >= 0.0 && spacing.is_finite()) {
+        return Err(format!(
+            "a circle {radius} m wide with things {spacing} m apart holds nothing"
+        ));
+    }
+    if count > MAX_SCATTER {
+        return Err(format!("{count} things is more than {MAX_SCATTER}"));
+    }
+    if !(small > 0.0 && small <= big && big.is_finite()) {
+        return Err(format!("sizes from {small} to {big} are not sizes"));
+    }
+    let scattered = scattered(world);
+    let taken: Vec<Vec2> = scattered.iter().map(|&(_, at)| at).collect();
+    let weights: Vec<f32> = models.iter().map(|model| model.weight).collect();
+    let planned = plan(&weights, spread, &taken);
+    let group = scatter_group(world);
+    let skip = scattered
+        .iter()
+        .flat_map(|&(entity, _)| subtree(world, entity))
+        .collect();
+    let mut ground = Ground::new(world, skip);
+    let mut added = Vec::new();
+    for thing in planned {
+        let (x, z) = (thing.at.x, thing.at.y);
+        let (height, normal) = terrain_at(world, x, z)
+            .or_else(|| ground.mesh(world, x, z, SKY))
+            .unwrap_or((0.0, Vec3::Y));
+        let entity = edit::instantiate(world, &models[thing.model].path)?;
+        let turn = Quat::from_rotation_y(thing.yaw.to_radians());
+        let rotation = if spread.align {
+            Quat::from_rotation_arc(Vec3::Y, normal) * turn
+        } else {
+            turn
+        };
+        world.entity_mut(entity).insert((
+            Scattered,
+            Transform {
+                translation: Vec3::new(x, height, z),
+                rotation,
+                scale: Vec3::splat(thing.scale),
+            },
+        ));
+        edit::set_parent(world, entity, Some(group))?;
+        added.push(entity.to_bits());
+    }
+    Ok(added)
+}
+
+/// Deletes the scattered things within `radius` of `center`, world X and
+/// Z, the way the editor deletes, so undoing restores them; returns them.
+pub(crate) fn erase(world: &mut World, center: Vec2, radius: f32) -> Vec<u64> {
+    let mut removed = Vec::new();
+    for (entity, at) in scattered(world) {
+        if at.distance(center) <= radius && edit::delete(world, entity).is_ok() {
+            removed.push(entity.to_bits());
+        }
+    }
+    removed
+}
+
+/// The scattered things in the scene and where they stand, world X and Z.
+fn scattered(world: &mut World) -> Vec<(Entity, Vec2)> {
+    let things: Vec<Entity> = world
+        .query_filtered::<Entity, With<Scattered>>()
+        .iter(world)
+        .collect();
+    things
+        .into_iter()
+        .map(|entity| (entity, in_world(world, entity).translation.xz()))
+        .collect()
+}
+
+/// The scene's Scatter group, made at the origin the first time.
+fn scatter_group(world: &mut World) -> Entity {
+    let found = world
+        .query_filtered::<Entity, (With<ScatterGroup>, With<SceneEntity>)>()
+        .iter(world)
+        .next();
+    found.unwrap_or_else(|| {
+        world
+            .spawn((
+                SceneEntity,
+                ScatterGroup,
+                Name::new("Scatter"),
+                Transform::default(),
+            ))
+            .id()
+    })
+}
+
+/// Where scatter puts one thing, decided from the seed alone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Planned {
+    /// World X and Z.
+    pub(crate) at: Vec2,
+    pub(crate) model: usize,
+    pub(crate) scale: f32,
+    /// Degrees.
+    pub(crate) yaw: f32,
+}
+
+/// Up to `spread.count` places in its circle at least `spacing` from each
+/// other and from `taken`, each with a model picked by `weights`, a size
+/// and a turn. Every try draws the same five numbers in the same order,
+/// whether it is kept or not, so the result depends only on the seed, the
+/// circle and the places taken, not on the order they are listed in.
+pub(crate) fn plan(weights: &[f32], spread: Spread, taken: &[Vec2]) -> Vec<Planned> {
+    let Spread {
+        center,
+        radius,
+        count,
+        spacing,
+        scale: [small, big],
+        rotate,
+        ..
+    } = spread;
+    let total: f32 = weights.iter().sum();
+    let mut random = Random(spread.seed);
+    let mut planned: Vec<Planned> = Vec::new();
+    for _ in 0..count.saturating_mul(30) {
+        if planned.len() == count as usize {
+            break;
+        }
+        let [distance, angle, pick, size, turn] = std::array::from_fn(|_| random.unit());
+        // The square root spreads them evenly over the circle's area.
+        let at =
+            center + Vec2::from_angle(angle * std::f32::consts::TAU) * radius * distance.sqrt();
+        let near = |other: Vec2| other.distance(at) < spacing;
+        if taken.iter().copied().any(near) || planned.iter().any(|thing| near(thing.at)) {
+            continue;
+        }
+        planned.push(Planned {
+            at,
+            model: weighted(weights, pick * total),
+            scale: small + (big - small) * size,
+            yaw: if rotate { turn * 360.0 } else { 0.0 },
+        });
+    }
+    planned
+}
+
+/// The index `pick`, 0 to the weights' sum, falls on; a weight of 0 is
+/// never picked.
+fn weighted(weights: &[f32], mut pick: f32) -> usize {
+    for (index, &weight) in weights.iter().enumerate() {
+        if pick < weight {
+            return index;
+        }
+        pick -= weight;
+    }
+    // Rounding at the very top: the last that can be picked.
+    weights
+        .iter()
+        .rposition(|&weight| weight > 0.0)
+        .unwrap_or(0)
+}
+
+/// SplitMix64: numbers that depend on nothing but the seed.
+struct Random(u64);
+
+impl Random {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// 0 to 1, never 1.
+    fn unit(&mut self) -> f32 {
+        (self.next() >> 40) as f32 / (1u64 << 24) as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spread(count: u32, spacing: f32, seed: u64) -> Spread {
+        Spread {
+            center: Vec2::new(10.0, -5.0),
+            radius: 20.0,
+            count,
+            spacing,
+            scale: [0.5, 2.0],
+            rotate: true,
+            align: false,
+            seed,
+        }
+    }
+
+    #[test]
+    fn draws_the_same_numbers_from_the_same_seed() {
+        let mut a = Random(7);
+        let mut b = Random(7);
+        let first: Vec<u64> = (0..4).map(|_| a.next()).collect();
+        assert_eq!(first, (0..4).map(|_| b.next()).collect::<Vec<_>>());
+        assert_ne!(first[0], Random(8).next());
+        assert!((0..1000).all(|_| (0.0..1.0).contains(&a.unit())));
+    }
+
+    #[test]
+    fn plans_the_same_from_the_same_seed_within_the_circle_and_apart() {
+        let plan_with = |seed| plan(&[1.0, 3.0], spread(40, 2.0, seed), &[]);
+        let planned = plan_with(7);
+        assert_eq!(planned, plan_with(7));
+        assert_ne!(planned, plan_with(8));
+        assert_eq!(planned.len(), 40);
+        for (index, thing) in planned.iter().enumerate() {
+            assert!(thing.at.distance(Vec2::new(10.0, -5.0)) <= 20.0);
+            assert!((0.5..=2.0).contains(&thing.scale));
+            assert!((0.0..360.0).contains(&thing.yaw));
+            for other in &planned[index + 1..] {
+                assert!(thing.at.distance(other.at) >= 2.0);
+            }
+        }
+        let common = planned.iter().filter(|thing| thing.model == 1).count();
+        assert!(common > 20, "three times as likely: {common} of 40");
+    }
+
+    #[test]
+    fn keeps_away_from_what_is_taken_and_stops_when_full() {
+        let taken = [Vec2::new(10.0, -5.0)];
+        let planned = plan(&[1.0], spread(10, 3.0, 1), &taken);
+        assert!(
+            planned
+                .iter()
+                .all(|thing| thing.at.distance(taken[0]) >= 3.0)
+        );
+        // A circle 20 m wide fits far fewer than 1000 things 5 m apart.
+        let full = plan(&[1.0], spread(1000, 5.0, 1), &[]);
+        assert!(!full.is_empty() && full.len() < 1000);
+    }
+
+    #[test]
+    fn never_picks_a_weight_of_zero() {
+        assert_eq!(weighted(&[0.0, 2.0, 1.0], 0.0), 1);
+        assert_eq!(weighted(&[0.0, 2.0, 1.0], 2.5), 2);
+        assert_eq!(weighted(&[1.0, 0.0], 1.0), 0, "rounding at the top");
+        let planned = plan(&[0.0, 1.0], spread(30, 0.0, 3), &[]);
+        assert!(planned.iter().all(|thing| thing.model == 1));
+    }
+}

@@ -315,7 +315,7 @@ pub(crate) fn in_world(world: &World, entity: Entity) -> Transform {
 // ponytail: exact for parents scaled the same along each axis; a parent
 // both turned and stretched unevenly would shear, which a Transform cannot
 // hold, so its children come out close but not exact.
-fn relative(child: Transform, parent: Transform) -> Transform {
+pub(crate) fn relative(child: Transform, parent: Transform) -> Transform {
     let turn = parent.rotation.inverse();
     Transform {
         translation: turn * (child.translation - parent.translation) / parent.scale,

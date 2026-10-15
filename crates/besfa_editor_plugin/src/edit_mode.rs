@@ -15,7 +15,7 @@ use besfa_protocol::{Command, Report, Request, VERSION};
 use bevy::{input::InputSystems, prelude::*};
 
 use crate::{
-    edit, input,
+    edit, ground, input,
     inspect::{Changes, Selected, report_saved, select, send_report},
     part_changes,
     preview::{self, ModelPreview},
@@ -174,6 +174,51 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
                 terrain::stroke(world, entity, tool, &points, radius, strength, layer)
             })
             .map(|stroke| send_report(&Report::TerrainPainted { id, stroke })),
+        Command::DropToSurface { ids } => {
+            let (moves, failures) = ground::drop_to_surface(world, &ids);
+            send_report(&Report::Moved { moves });
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(failures.join(" "))
+            }
+        }
+        Command::Scatter {
+            models,
+            center,
+            radius,
+            count,
+            spacing,
+            scale,
+            rotate,
+            align,
+            seed,
+        } => {
+            let spread = ground::Spread {
+                center: center.into(),
+                radius,
+                count,
+                spacing,
+                scale,
+                rotate,
+                align,
+                seed,
+            };
+            ground::scatter(world, &models, spread).map(|added| {
+                send_report(&Report::Scattered {
+                    added,
+                    removed: Vec::new(),
+                });
+            })
+        }
+        Command::ScatterErase { center, radius } => {
+            let removed = ground::erase(world, center.into(), radius);
+            send_report(&Report::Scattered {
+                added: Vec::new(),
+                removed,
+            });
+            Ok(())
+        }
         Command::TerrainBrush { brush } => {
             if let Some(mut view) = world.get_resource_mut::<SceneView>() {
                 view.brush = brush;
