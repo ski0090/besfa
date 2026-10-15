@@ -12,6 +12,9 @@ use crate::inspector::Inspected;
 #[derive(Default)]
 pub struct Scene {
     pub entities: Vec<EntityInfo>,
+    /// `entities` in tree order, made when they are reported rather than
+    /// each frame: a scene of placed models reports thousands.
+    rows: Vec<(usize, usize)>,
     /// The entity whose components are shown; the game reports them.
     pub selected: Option<u64>,
     pub components: Vec<ComponentData>,
@@ -48,6 +51,11 @@ impl Scene {
         self.changes
     }
 
+    /// The entities as [`tree_rows`] lists them.
+    pub fn rows(&self) -> &[(usize, usize)] {
+        &self.rows
+    }
+
     pub fn selected_entity(&self) -> Option<&EntityInfo> {
         self.entities
             .iter()
@@ -77,7 +85,10 @@ impl Scene {
         // Game output is not trusted to be well formed.
         let report = Report::parse(line)?;
         match &report {
-            Report::Entities { entities } => self.entities = entities.clone(),
+            Report::Entities { entities } => {
+                self.entities = entities.clone();
+                self.rows = tree_rows(&self.entities);
+            }
             // A report for an earlier selection, or from before the latest
             // change, may still be in the pipe. Early plugins send no count.
             Report::Entity {
@@ -155,30 +166,31 @@ impl Scene {
     }
 }
 
-/// Entities in tree order with their depth. An entity whose parent is not
-/// reported is a root.
-pub fn tree_rows(entities: &[EntityInfo]) -> Vec<(&EntityInfo, usize)> {
+/// Entities in tree order, as their index in `entities` and their depth. An
+/// entity whose parent is not reported is a root.
+pub fn tree_rows(entities: &[EntityInfo]) -> Vec<(usize, usize)> {
     let ids: HashSet<u64> = entities.iter().map(|entity| entity.id).collect();
-    let mut children: HashMap<Option<u64>, Vec<&EntityInfo>> = HashMap::new();
-    for entity in entities {
+    let mut children: HashMap<Option<u64>, Vec<usize>> = HashMap::new();
+    for (at, entity) in entities.iter().enumerate() {
         let parent = entity.parent.filter(|parent| ids.contains(parent));
-        children.entry(parent).or_default().push(entity);
+        children.entry(parent).or_default().push(at);
     }
     let mut rows = Vec::new();
     // A parent cycle would be a game bug; this keeps it from hanging the editor.
     let mut seen = HashSet::new();
-    let mut stack: Vec<(&EntityInfo, usize)> = children
+    let mut stack: Vec<(usize, usize)> = children
         .get(&None)
         .into_iter()
         .flatten()
         .rev()
-        .map(|entity| (*entity, 0))
+        .map(|&at| (at, 0))
         .collect();
-    while let Some((entity, depth)) = stack.pop() {
-        if seen.insert(entity.id) {
-            rows.push((entity, depth));
-            let below = children.get(&Some(entity.id)).into_iter().flatten().rev();
-            stack.extend(below.map(|child| (*child, depth + 1)));
+    while let Some((at, depth)) = stack.pop() {
+        let id = entities[at].id;
+        if seen.insert(id) {
+            rows.push((at, depth));
+            let below = children.get(&Some(id)).into_iter().flatten().rev();
+            stack.extend(below.map(|&child| (child, depth + 1)));
         }
     }
     rows
@@ -399,9 +411,10 @@ mod tests {
         assert_eq!(scene.placement(deep).map(|e| e.id), Some(1));
         assert_eq!(scene.placement(&scene.entities[3]), None);
         assert_eq!(scene.placement(&scene.entities[4]), None, "a cycle ends");
-        let rows: Vec<_> = tree_rows(&scene.entities)
+        let rows: Vec<_> = scene
+            .rows()
             .iter()
-            .map(|(e, d)| (e.id, *d))
+            .map(|&(at, d)| (scene.entities[at].id, d))
             .collect();
         // The cycle has no root, so it is not listed.
         assert_eq!(rows, [(1, 0), (2, 1), (3, 2), (4, 0)]);

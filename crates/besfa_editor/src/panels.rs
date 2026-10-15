@@ -16,7 +16,7 @@ use eframe::egui::{
 
 use crate::{
     process::{Prebuild, PrebuildPhase},
-    scene::{Scene, tree_rows},
+    scene::Scene,
 };
 
 pub const TEXT: Color32 = Color32::from_rgb(0xB3, 0xBB, 0xC8);
@@ -42,15 +42,28 @@ pub fn panel_header(ui: &mut Ui, title: &str, actions: impl FnOnce(&mut Ui)) {
 
 /// `rows`, given in tree order, each indented by its `depth` after a toggle
 /// that folds away the rows under it, when it has any. Folds are named by
-/// `fold` and open until toggled; `show` draws the rest of a row.
+/// `fold`, which also says whether one starts open; `show` draws the rest of
+/// a row.
 fn tree<T>(
     ui: &mut Ui,
     rows: &[T],
     depth: impl Fn(&T) -> usize,
-    fold: impl Fn(&T) -> Id,
+    fold: impl Fn(&T) -> (Id, bool),
     mut show: impl FnMut(&mut Ui, &T),
 ) {
-    let toggle = egui::vec2(ui.spacing().indent, ui.spacing().icon_width);
+    for at in unfolded(ui.ctx(), rows, &depth, &fold) {
+        tree_row(ui, rows, at, &depth, &fold, &mut show);
+    }
+}
+
+/// The indices of the `rows` [`tree`] shows: those no folded row above hides.
+fn unfolded<T>(
+    ctx: &egui::Context,
+    rows: &[T],
+    depth: impl Fn(&T) -> usize,
+    fold: impl Fn(&T) -> (Id, bool),
+) -> Vec<usize> {
+    let mut shown = Vec::new();
     // The depth of the folded row whose rows are being skipped.
     let mut folded = None;
     for (at, row) in rows.iter().enumerate() {
@@ -58,25 +71,42 @@ fn tree<T>(
         if folded.is_some_and(|folded| row_depth > folded) {
             continue;
         }
-        folded = None;
-        ui.horizontal(|ui| {
-            ui.add_space(row_depth as f32 * 16.0);
-            if rows.get(at + 1).is_some_and(|next| depth(next) > row_depth) {
-                let mut state = CollapsingState::load_with_default_open(ui.ctx(), fold(row), true);
-                let response = state.show_toggle_button(ui, paint_default_icon);
-                let open = state.is_open();
-                let label = if open { "Fold" } else { "Unfold" };
-                response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
-                state.store(ui.ctx());
-                if !open {
-                    folded = Some(row_depth);
-                }
-            } else {
-                ui.allocate_space(toggle);
-            }
-            show(ui, row);
-        });
+        shown.push(at);
+        let closed = || {
+            let (id, open) = fold(row);
+            !CollapsingState::load_with_default_open(ctx, id, open).is_open()
+        };
+        let parent = rows.get(at + 1).is_some_and(|next| depth(next) > row_depth);
+        folded = (parent && closed()).then_some(row_depth);
     }
+    shown
+}
+
+/// Row `at` of [`tree`].
+fn tree_row<T>(
+    ui: &mut Ui,
+    rows: &[T],
+    at: usize,
+    depth: impl Fn(&T) -> usize,
+    fold: impl Fn(&T) -> (Id, bool),
+    show: impl FnOnce(&mut Ui, &T),
+) {
+    let row = &rows[at];
+    let row_depth = depth(row);
+    ui.horizontal(|ui| {
+        ui.add_space(row_depth as f32 * 16.0);
+        if rows.get(at + 1).is_some_and(|next| depth(next) > row_depth) {
+            let (id, open) = fold(row);
+            let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, open);
+            let response = state.show_toggle_button(ui, paint_default_icon);
+            let label = if state.is_open() { "Fold" } else { "Unfold" };
+            response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
+            state.store(ui.ctx());
+        } else {
+            ui.allocate_space(egui::vec2(ui.spacing().indent, ui.spacing().icon_width));
+        }
+        show(ui, row);
+    });
 }
 
 pub fn section(ui: &mut Ui, title: &str) {
@@ -173,52 +203,71 @@ pub fn hierarchy(
         .response
         .on_hover_text("Add entity");
     });
-    let rows = tree_rows(&scene.entities);
-    let fold = |id: u64| Id::new(("hierarchy fold", id));
+    let rows = scene.rows();
+    let entity = |&(at, _): &(usize, usize)| &scene.entities[at];
+    let depth = |&(_, depth): &(usize, usize)| depth;
+    // Placed models and prefabs start folded: their parts, thousands in a
+    // big scene, are not saved and are seldom what is picked here.
+    let fold = |row: &(usize, usize)| {
+        let entity = entity(row);
+        (
+            Id::new(("hierarchy fold", entity.id)),
+            entity.asset.is_none(),
+        )
+    };
     // A new selection, picked in the scene view too, opens the folds above
     // it once it is listed.
     let at = rows
         .iter()
-        .position(|(entity, _)| Some(entity.id) == scene.selected);
-    let listed = at.map(|at| rows[at].0.id);
+        .position(|row| Some(entity(row).id) == scene.selected);
+    let listed = at.map(|at| entity(&rows[at]).id);
     let shown = Id::new("hierarchy selection");
     if ui.data(|data| data.get_temp(shown)) != Some(listed) {
         ui.data_mut(|data| data.insert_temp(shown, listed));
         if let Some(at) = at {
-            let mut depth = rows[at].1;
-            for (entity, above) in rows[..at].iter().rev() {
-                if *above < depth {
-                    depth = *above;
-                    let mut state =
-                        CollapsingState::load_with_default_open(ui.ctx(), fold(entity.id), true);
+            let mut below = depth(&rows[at]);
+            for row in rows[..at].iter().rev() {
+                if depth(row) < below {
+                    below = depth(row);
+                    let (id, open) = fold(row);
+                    let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, open);
                     state.set_open(true);
                     state.store(ui.ctx());
                 }
             }
         }
     }
-    ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-        tree(
-            ui,
-            &rows,
-            |(_, depth)| *depth,
-            |(entity, _)| fold(entity.id),
-            |ui, (entity, _)| {
-                let selected = Some(entity.id) == scene.selected;
-                // Entities the game spawns while running are not saved.
-                let mut text = RichText::new(entity.label());
-                text = if entity.scene { text } else { text.italics() };
-                text = text.color(if entity.name.is_none() || !entity.scene {
-                    MUTED
-                } else {
-                    TEXT
+    // Rows are buttons, all of one height, so only those in view are laid out.
+    let spacing = ui.spacing();
+    let row_height = spacing
+        .interact_size
+        .y
+        .max(ui.text_style_height(&egui::TextStyle::Body) + 2.0 * spacing.button_padding.y);
+    let visible = unfolded(ui.ctx(), rows, depth, fold);
+    ScrollArea::vertical().auto_shrink(false).show_rows(
+        ui,
+        row_height,
+        visible.len(),
+        |ui, range| {
+            for &at in &visible[range] {
+                tree_row(ui, rows, at, depth, fold, |ui, row| {
+                    let entity = entity(row);
+                    let selected = Some(entity.id) == scene.selected;
+                    // Entities the game spawns while running are not saved.
+                    let mut text = RichText::new(entity.label());
+                    text = if entity.scene { text } else { text.italics() };
+                    text = text.color(if entity.name.is_none() || !entity.scene {
+                        MUTED
+                    } else {
+                        TEXT
+                    });
+                    if ui.selectable_label(selected, text).clicked() {
+                        action = Some(HierarchyAction::Select((!selected).then_some(entity.id)));
+                    }
                 });
-                if ui.selectable_label(selected, text).clicked() {
-                    action = Some(HierarchyAction::Select((!selected).then_some(entity.id)));
-                }
-            },
-        );
-    });
+            }
+        },
+    );
     action
 }
 
@@ -459,7 +508,7 @@ impl AssetBrowser {
             return None;
         };
         let mut action = None;
-        let fold = |row: &AssetRow| Id::new(("asset fold", &row.path));
+        let fold = |row: &AssetRow| (Id::new(("asset fold", &row.path)), true);
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             tree(
                 ui,
@@ -810,5 +859,35 @@ mod tests {
         harness.state_mut().select(Some(3));
         harness.run();
         assert!(harness.query_by_label("Mast").is_some());
+    }
+
+    #[test]
+    fn folds_placed_models_and_lays_out_only_rows_in_view() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut entities = vec![
+            r#"{"id":1,"name":"Barrel","asset":"models/barrel.glb"}"#.to_owned(),
+            r#"{"id":2,"name":"Stave","parent":1,"scene":false}"#.to_owned(),
+        ];
+        entities.extend((3..1000).map(|id| format!(r#"{{"id":{id},"name":"Rock {id}"}}"#)));
+        let mut scene = Scene::default();
+        scene.handle(&format!(
+            r#"@besfa {{"type":"entities","entities":[{}]}}"#,
+            entities.join(",")
+        ));
+        let mut harness = Harness::new_ui_state(
+            |ui, scene: &mut Scene| {
+                hierarchy(ui, scene, false, false);
+            },
+            scene,
+        );
+        harness.run();
+        assert!(harness.query_by_label("Stave").is_none(), "starts folded");
+        assert!(harness.query_by_label("Rock 3").is_some());
+        assert!(harness.query_by_label("Rock 999").is_none(), "out of view");
+
+        harness.get_by_label("Unfold").click();
+        harness.run();
+        assert!(harness.query_by_label("Stave").is_some());
     }
 }

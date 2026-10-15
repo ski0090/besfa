@@ -871,7 +871,8 @@ impl ModelPreview {
             .max_height(260.0)
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                for (part, depth) in rows {
+                for (at, depth) in rows {
+                    let part = &model.parts[at];
                     let path = &loaded.paths[&part.id];
                     let hidden = self.hidden.contains(path);
                     ui.horizontal(|ui| {
