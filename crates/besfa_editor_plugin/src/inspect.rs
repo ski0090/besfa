@@ -19,7 +19,6 @@ use bevy::{
         schedule::Schedules,
     },
     prelude::*,
-    reflect::serde::TypedReflectSerializer,
     world_serialization::{DynamicWorldRoot, WorldAssetRoot},
 };
 use serde_json::Value;
@@ -27,7 +26,7 @@ use serde_json::Value;
 use crate::{
     edit::Deleted,
     preview::ModelPreview,
-    scene::{HANDLE_PATHS, SceneEntity, left_out},
+    scene::{SceneEntity, json, left_out},
     scene_view::{EditorOnly, Parked},
 };
 
@@ -309,12 +308,8 @@ fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
                     // Handles to loaded assets show their paths. Other
                     // handles and opaque types do not serialize; show them
                     // the way Debug prints them.
-                    serde_json::to_value(TypedReflectSerializer::with_processor(
-                        value.as_partial_reflect(),
-                        &registry,
-                        &HANDLE_PATHS,
-                    ))
-                    .unwrap_or_else(|_| Value::String(format!("{value:?}")))
+                    json(value.as_partial_reflect(), &registry)
+                        .unwrap_or_else(|_| Value::String(format!("{value:?}")))
                 });
             // A game camera is off in edit mode; show the switch it plays with.
             if let (Some(active), Some(Value::Object(fields))) = (parked, &mut value)

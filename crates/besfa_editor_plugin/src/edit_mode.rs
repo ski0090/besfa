@@ -25,7 +25,6 @@ use crate::{
     reimport,
     scene::{
         SCENE_PATH, asset_file, instance_prefab, project_file, save, save_instance, save_prefab,
-        scene_file,
     },
     scene_view::{self, SceneView},
     shot::{self, Shot},
@@ -124,7 +123,7 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::Save => {
-            let result = terrain::save(world).and_then(|()| save(world, &scene_file()));
+            let result = terrain::save(world).and_then(|()| save(world, &asset_file(SCENE_PATH)));
             match &result {
                 Ok(()) => info!("Saved {SCENE_PATH}"),
                 Err(error) => error!("Could not save {SCENE_PATH}: {error}"),

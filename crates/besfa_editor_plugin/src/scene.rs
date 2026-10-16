@@ -27,6 +27,7 @@ use bevy::{
     ecs::{
         component::{ComponentId, ComponentInfo},
         entity_disabling::Disabled,
+        name::NameOrEntity,
         query::Allow,
     },
     light::Cascades,
@@ -167,13 +168,12 @@ fn mark_loaded(
 )]
 fn adopt_loaded_children(
     mut commands: Commands,
-    children: Query<(Entity, &ChildOf, Has<InheritedVisibility>, Option<&Name>), Added<ChildOf>>,
+    children: Query<(NameOrEntity, &ChildOf, Has<InheritedVisibility>), Added<ChildOf>>,
     parents: Query<(Option<&Children>, Has<InheritedVisibility>), Allow<Disabled>>,
 ) {
-    for (child, child_of, visible, name) in &children {
-        let parent = child_of.parent();
+    for (name, child_of, visible) in &children {
+        let (child, parent) = (name.entity, child_of.parent());
         let Ok((held, parent_visible)) = parents.get(parent) else {
-            let name = name.map_or_else(|| child.to_string(), ToString::to_string);
             warn!("{name}'s parent {parent} is not there; it goes to the top.");
             commands.entity(child).try_remove::<ChildOf>();
             continue;
@@ -217,20 +217,13 @@ fn build_materials(
 
 /// Removing the shape removes the mesh built from it.
 fn drop_mesh(remove: On<Remove<MeshShape>>, mut commands: Commands) {
-    if let Ok(mut entity) = commands.get_entity(remove.entity) {
-        entity.try_remove::<Mesh3d>();
-    }
+    commands.entity(remove.entity).try_remove::<Mesh3d>();
 }
 
 fn drop_material(remove: On<Remove<MeshColor>>, mut commands: Commands) {
-    if let Ok(mut entity) = commands.get_entity(remove.entity) {
-        entity.try_remove::<MeshMaterial3d<StandardMaterial>>();
-    }
-}
-
-/// Where the scene file is on disk: the asset directory the game loads from.
-pub(crate) fn scene_file() -> PathBuf {
-    asset_file(SCENE_PATH)
+    commands
+        .entity(remove.entity)
+        .try_remove::<MeshMaterial3d<StandardMaterial>>();
 }
 
 /// Where the asset at `path`, relative to the asset directory, is on disk.
@@ -259,18 +252,31 @@ pub(crate) fn save(world: &mut World, path: &Path) -> Result<(), String> {
 /// The root is written at the origin and without its parent, so where the
 /// prefab is placed decides where it shows.
 pub(crate) fn save_prefab(world: &mut World, root: Entity, path: &Path) -> Result<(), String> {
-    let mut entities = vec![root];
+    let entities = walk(vec![root], |entity| kept_children(world, entity, true));
+    write(world, &entities, &[root], true, path)
+}
+
+/// `entity`'s children that are not deleted and are scene entities, or
+/// with `scene` false, are not.
+fn kept_children(world: &World, entity: Entity, scene: bool) -> Vec<Entity> {
+    let children = world.get::<Children>(entity).into_iter().flatten();
+    children
+        .copied()
+        .filter(|&child| {
+            world.get::<SceneEntity>(child).is_some() == scene
+                && world.get::<crate::edit::Deleted>(child).is_none()
+        })
+        .collect()
+}
+
+/// `start` and, breadth first, what `below` gives for each entity reached.
+fn walk(mut entities: Vec<Entity>, mut below: impl FnMut(Entity) -> Vec<Entity>) -> Vec<Entity> {
     let mut next = 0;
     while let Some(&entity) = entities.get(next) {
         next += 1;
-        if let Some(children) = world.get::<Children>(entity) {
-            entities.extend(children.iter().filter(|&child| {
-                world.get::<SceneEntity>(child).is_some()
-                    && world.get::<crate::edit::Deleted>(child).is_none()
-            }));
-        }
+        entities.extend(below(entity));
     }
-    write(world, &entities, &[root], true, path)
+    entities
 }
 
 /// The prefab file the instance `root` shows, as an asset path.
@@ -289,31 +295,21 @@ pub(crate) fn instance_prefab(world: &World, root: Entity) -> Result<String, Str
 pub(crate) fn save_instance(world: &mut World, root: Entity, path: &Path) -> Result<(), String> {
     // Writing the scene placed in itself would replace the scene with it,
     // and reloading would respawn the whole scene from that.
-    if path == scene_file() {
+    if path == asset_file(SCENE_PATH) {
         return Err(format!("{SCENE_PATH} is saved with Save scene"));
     }
-    // Copies the editor made inside the instance are the scene's own.
-    let content = |world: &World, entity: Entity| {
-        let children = world.get::<Children>(entity).into_iter().flatten();
-        children
-            .copied()
-            .filter(|&child| {
-                world.get::<SceneEntity>(child).is_none()
-                    && world.get::<crate::edit::Deleted>(child).is_none()
-            })
-            .collect::<Vec<_>>()
-    };
-    let tops = content(world, root);
-    let mut entities = tops.clone();
-    let mut next = 0;
-    while let Some(&entity) = entities.get(next) {
-        next += 1;
-        if world.get::<DynamicWorldRoot>(entity).is_none()
-            && world.get::<WorldAssetRoot>(entity).is_none()
-        {
-            entities.extend(content(world, entity));
+    // Copies the editor made inside the instance are the scene's own, and
+    // instances inside it are written as their paths.
+    let tops = kept_children(world, root, false);
+    let entities = walk(tops.clone(), |entity| {
+        let placed = world.get::<DynamicWorldRoot>(entity).is_some()
+            || world.get::<WorldAssetRoot>(entity).is_some();
+        if placed {
+            Vec::new()
+        } else {
+            kept_children(world, entity, false)
         }
-    }
+    });
     write(world, &entities, &tops, false, path)
 }
 
@@ -335,7 +331,16 @@ fn write(
         return Err(format!("{placed} cannot be placed inside itself"));
     }
     let registry = world.resource::<AppTypeRegistry>().read();
-    let mut scene = dynamic_world(world, entities, &registry);
+    let mut scene = DynamicWorld {
+        entities: entities
+            .iter()
+            .map(|&entity| DynamicEntity {
+                entity,
+                components: saved_components(world, entity, &registry),
+            })
+            .collect(),
+        ..default()
+    };
     let written: HashSet<Entity> = entities.iter().copied().collect();
     for saved in &mut scene.entities {
         let root = roots.contains(&saved.entity);
@@ -352,10 +357,10 @@ fn write(
         if root || orphan {
             saved
                 .components
-                .retain(|component| !is::<ChildOf>(component.as_ref()));
+                .retain(|component| !component.represents::<ChildOf>());
         }
         for component in &mut saved.components {
-            if root && at_origin && is::<Transform>(component.as_ref()) {
+            if root && at_origin && component.represents::<Transform>() {
                 *component = Box::new(Transform::default());
             }
         }
@@ -439,30 +444,22 @@ impl Serialize for ComponentMap<'_> {
     }
 }
 
-fn is<T: 'static>(component: &dyn PartialReflect) -> bool {
-    component
-        .get_represented_type_info()
-        .is_some_and(|info| info.type_id() == TypeId::of::<T>())
-}
-
 /// Serializes handles to loaded assets as their paths, the way scene files
 /// store them; a handle to an asset made in code has no path and fails.
-pub(crate) const HANDLE_PATHS: HandleSerializeProcessor = HandleSerializeProcessor {
+const HANDLE_PATHS: HandleSerializeProcessor = HandleSerializeProcessor {
     ephemeral_handle_behavior: EphemeralHandleBehavior::Error,
 };
 
-fn dynamic_world(world: &World, entities: &[Entity], registry: &TypeRegistry) -> DynamicWorld {
-    let entities = entities
-        .iter()
-        .map(|&entity| DynamicEntity {
-            entity,
-            components: saved_components(world, entity, registry),
-        })
-        .collect();
-    DynamicWorld {
-        resources: Vec::new(),
-        entities,
-    }
+/// `value` as JSON, with handles as their paths.
+pub(crate) fn json(
+    value: &dyn PartialReflect,
+    registry: &TypeRegistry,
+) -> serde_json::Result<serde_json::Value> {
+    serde_json::to_value(TypedReflectSerializer::with_processor(
+        value,
+        registry,
+        &HANDLE_PATHS,
+    ))
 }
 
 /// The entity's components that belong in the file: reflected, not built
@@ -496,13 +493,8 @@ fn saved_components(
             let value = registry
                 .get_type_data::<ReflectComponent>(type_id)?
                 .reflect(entity_ref)?;
-            let serializer = TypedReflectSerializer::with_processor(
-                value.as_partial_reflect(),
-                registry,
-                &HANDLE_PATHS,
-            );
             let copy = saved_value(value, parked);
-            if serde_json::to_value(serializer).is_err() || copy.is_none() {
+            if json(value.as_partial_reflect(), registry).is_err() || copy.is_none() {
                 warn!("Not saving {}: it does not serialize.", info.name());
                 return None;
             }
@@ -1103,7 +1095,7 @@ mod tests {
             .insert(DynamicWorldRoot(assets.load("prefabs/tree.scn.ron")));
         // Refused before anything is written.
         let untouched = |path: &Path| std::fs::read(path).ok();
-        for refused in [asset_file("prefabs/tree.scn.ron"), scene_file()] {
+        for refused in [asset_file("prefabs/tree.scn.ron"), asset_file(SCENE_PATH)] {
             let before = untouched(&refused);
             assert!(save_instance(app.world_mut(), placed, &refused).is_err());
             assert_eq!(untouched(&refused), before, "{}", refused.display());
