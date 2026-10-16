@@ -64,7 +64,16 @@ impl Inspector {
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.add_space(8.0);
-                self.contents(ui, scene, can_apply_prefab)
+                let name = self.name(ui, scene);
+                let terrain = scene
+                    .components
+                    .iter()
+                    .find(|component| component.path == TERRAIN && scene.selected.is_some())
+                    .and_then(|terrain| self.terrain.ui(ui, terrain, self.can_sculpt))
+                    .map(|value| Action::Set(TERRAIN.into(), value));
+                self.components(ui, scene, can_apply_prefab)
+                    .or(terrain)
+                    .or(name)
             })
             .inner
     }
@@ -79,25 +88,6 @@ impl Inspector {
         if ui.small_button(icon).on_hover_text(tip).clicked() {
             self.details = !self.details;
         }
-    }
-
-    /// The inspector without its header, for a panel that scrolls it.
-    pub fn contents(
-        &mut self,
-        ui: &mut Ui,
-        scene: &Inspected,
-        can_apply_prefab: bool,
-    ) -> Option<Action> {
-        let name = self.name(ui, scene);
-        let terrain = scene
-            .components
-            .iter()
-            .find(|component| component.path == TERRAIN && scene.selected.is_some())
-            .and_then(|terrain| self.terrain.ui(ui, terrain, self.can_sculpt))
-            .map(|value| Action::Set(TERRAIN.into(), value));
-        self.components(ui, scene, can_apply_prefab)
-            .or(terrain)
-            .or(name)
     }
 
     /// Simply, the name's field; otherwise the entity's label.
@@ -510,10 +500,7 @@ fn vector(ui: &mut Ui, id: Id, items: &[Value], labels: &[&str]) -> Option<Vec<f
     ui.horizontal(|ui| {
         let gap = ui.spacing().item_spacing.x;
         let width = (ui.available_width() - gap * (items.len() - 1) as f32) / items.len() as f32;
-        for (i, item) in items.iter().enumerate() {
-            let Value::Number(number) = item else {
-                continue;
-            };
+        for (i, number) in items.iter().filter_map(Value::as_number).enumerate() {
             ui.allocate_ui(egui::vec2(width, ui.spacing().interact_size.y), |ui| {
                 if let Some(value) = number_field(ui, id.with(i), number, Some(labels[i])) {
                     let mut values: Vec<f64> = items.iter().filter_map(Value::as_f64).collect();
@@ -528,7 +515,7 @@ fn vector(ui: &mut Ui, id: Id, items: &[Value], labels: &[&str]) -> Option<Vec<f
 
 /// A number field: an integer stays an integer, a float takes whatever is
 /// typed. Text that is no such number puts the old value back.
-fn number_field(
+pub(crate) fn number_field(
     ui: &mut Ui,
     id: Id,
     number: &serde_json::Number,
@@ -537,19 +524,16 @@ fn number_field(
     let shown = format_number(number);
     let text = commit_field(ui, id, &shown, label)?;
     let typed = text.trim().parse::<f64>().ok().filter(|n| n.is_finite())?;
-    let value = if number.is_f64() {
-        json!(typed)
+    let parsed = if number.is_f64() {
+        serde_json::Number::from_f64(typed)?
     } else if typed.fract() != 0.0 {
         return None;
     } else if typed < 0.0 {
-        json!(typed as i64)
+        (typed as i64).into()
     } else {
-        json!(typed as u64)
+        (typed as u64).into()
     };
-    let Value::Number(parsed) = &value else {
-        unreachable!()
-    };
-    (format_number(parsed) != shown).then_some(value)
+    (format_number(&parsed) != shown).then_some(Value::Number(parsed))
 }
 
 /// Three decimals, without trailing zeros: what fits in a field.
@@ -622,17 +606,14 @@ fn row(ui: &mut Ui, label: Option<&str>, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// A copy of `node` with the value at `path` replaced by `leaf`.
+/// A copy of `node` with the value at `path`, keys of nested objects,
+/// replaced by `leaf`.
 fn replace(node: &Value, path: &[String], leaf: Value) -> Value {
-    match (node, path.split_first()) {
-        (Value::Object(map), Some((head, rest))) => {
-            let mut map = map.clone();
-            let child = replace(map.get(head).unwrap_or(&Value::Null), rest, leaf);
-            map.insert(head.clone(), child);
-            Value::Object(map)
-        }
-        _ => leaf,
-    }
+    let mut copy = node.clone();
+    *path
+        .iter()
+        .fold(&mut copy, |node, key| &mut node[key.as_str()]) = leaf;
+    copy
 }
 
 /// A quaternion `[x, y, z, w]` as Euler angles in degrees `[x, y, z]`:
