@@ -193,19 +193,17 @@ fn work(world: &mut World) {
             let (min, max) =
                 bounds(world, &entities).unwrap_or((Vec3::splat(-0.5), Vec3::splat(0.5)));
             let view = framing(min, max, View::ThreeQuarter).transform();
-            let mut camera = world
-                .query_filtered::<(&mut Camera, &mut Transform, Option<&Exposure>), With<ThumbnailCamera>>();
-            let Ok((mut camera, mut transform, exposure)) = camera.single_mut(world) else {
+            let mut camera = world.query_filtered::<
+                (Entity, &mut Camera, &mut Transform, Option<&Exposure>),
+                With<ThumbnailCamera>,
+            >();
+            let Ok((entity, mut camera, mut transform, exposure)) = camera.single_mut(world) else {
                 return finish(world, Some("no thumbnail camera".into()));
             };
             camera.is_active = true;
             *transform = view;
             let (light, from, ambient) = lit(LightPreset::Studio, exposure);
-            let camera = world
-                .query_filtered::<Entity, With<ThumbnailCamera>>()
-                .single(world)
-                .unwrap();
-            world.entity_mut(camera).insert(ambient);
+            world.entity_mut(entity).insert(ambient);
             let mut lights = world
                 .query_filtered::<(&mut DirectionalLight, &mut Transform), With<ThumbnailLight>>();
             if let Ok((mut now, mut at)) = lights.single_mut(world) {
