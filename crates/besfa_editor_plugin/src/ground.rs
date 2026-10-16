@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use besfa_protocol::{Button, Move, PointerEvent, Report, ScatterBrush, ScatterModel};
 use bevy::{
-    ecs::system::SystemState,
+    ecs::{query::QueryFilter, system::SystemState},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
     prelude::*,
     reflect::serde::TypedReflectSerializer,
@@ -51,13 +51,7 @@ struct Ground {
 
 impl Ground {
     fn new(world: &mut World, mut skip: HashSet<Entity>) -> Self {
-        let editor: Vec<Entity> = world
-            .query_filtered::<Entity, Or<(With<EditorOnly>, With<Terrain>)>>()
-            .iter(world)
-            .collect();
-        for entity in editor {
-            skip.extend(subtree(world, entity));
-        }
+        skip.extend(under::<Or<(With<EditorOnly>, With<Terrain>)>>(world));
         Self {
             rays: SystemState::new(world),
             skip,
@@ -80,6 +74,16 @@ impl Ground {
             .first()
             .map(|(_, hit)| (hit.point.y, hit.normal.normalize_or(Vec3::Y)))
     }
+}
+
+/// The entities `F` matches and everything under them.
+fn under<F: QueryFilter>(world: &mut World) -> HashSet<Entity> {
+    let mut query = world.query_filtered::<Entity, F>();
+    let world = &*world;
+    query
+        .iter(world)
+        .flat_map(|entity| subtree(world, entity))
+        .collect()
 }
 
 /// The highest terrain's height at world `x`, `z`, and its normal there.
@@ -257,10 +261,7 @@ pub(crate) fn scatter(
     let weights: Vec<f32> = models.iter().map(|model| model.weight).collect();
     let planned = plan(&weights, spread, &taken);
     let group = scatter_group(world);
-    let skip = scattered
-        .iter()
-        .flat_map(|&(entity, _)| subtree(world, entity))
-        .collect();
+    let skip = under::<With<Scattered>>(world);
     let mut ground = Ground::new(world, skip);
     let mut added = Vec::new();
     for thing in planned {
@@ -373,14 +374,7 @@ pub(crate) fn scatter_paint(
         return;
     };
     // The ground, not what is being scattered on it.
-    let mut skip = HashSet::new();
-    let roots: Vec<Entity> = world
-        .query_filtered::<Entity, Or<(With<Scattered>, With<EditorOnly>)>>()
-        .iter(world)
-        .collect();
-    for root in roots {
-        skip.extend(subtree(world, root));
-    }
+    let skip = under::<Or<(With<Scattered>, With<EditorOnly>)>>(world);
     let rays = rays.get_or_insert_with(|| SystemState::new(world));
     let mut hit = |world: &mut World, pointer: Vec2| {
         let ray = camera.viewport_to_world(&eye, pointer).ok()?;
