@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    inspector::{Action, Inspected, commit_field, format_number},
+    inspector::{Action, Inspected, commit_field, format_number, number_field},
     panels::{ACCENT, MUTED, section, tag},
 };
 
@@ -226,7 +226,7 @@ fn states(ui: &mut Ui, id: Id, machine: &mut Machine, clips: &[String]) {
                     .on_hover_text("The model's clip it plays");
                 ui.checkbox(&mut state.once, "Once")
                     .on_hover_text("Plays once and holds its last pose");
-                number(ui, id.with("speed"), &mut state.speed, "×");
+                number(ui, id.with("speed"), &mut state.speed, Some("×"));
             });
         });
     }
@@ -303,9 +303,20 @@ fn transitions(ui: &mut Ui, id: Id, machine: &mut Machine) {
                     });
             });
             ui.horizontal(|ui| {
-                number(ui, id.with("blend"), &mut transition.blend, "Blend s ")
-                    .on_hover_text("Crossfade seconds");
-                number(ui, id.with("exit"), &mut transition.exit_time, "Exit ").on_hover_text(
+                number(
+                    ui,
+                    id.with("blend"),
+                    &mut transition.blend,
+                    Some("Blend s "),
+                )
+                .on_hover_text("Crossfade seconds");
+                number(
+                    ui,
+                    id.with("exit"),
+                    &mut transition.exit_time,
+                    Some("Exit "),
+                )
+                .on_hover_text(
                     "How much of the clip plays first, 1 for once through; 0 for any time",
                 );
             });
@@ -358,7 +369,7 @@ fn conditions(ui: &mut Ui, id: Id, conditions: &mut Vec<Condition>) {
                 },
             );
             if compares {
-                number(ui, id.with("value"), &mut condition.value, "");
+                number(ui, id.with("value"), &mut condition.value, None);
             }
         });
     }
@@ -371,18 +382,14 @@ fn conditions(ui: &mut Ui, id: Id, conditions: &mut Vec<Condition>) {
 }
 
 /// A number field that commits when it loses focus.
-fn number(ui: &mut Ui, id: Id, value: &mut f32, label: &str) -> egui::Response {
-    let shown = format_number(&serde_json::Number::from_f64(*value as f64).unwrap_or(0.into()));
-    let response = ui.allocate_ui(egui::vec2(72.0, 20.0), |ui| {
-        let label = (!label.is_empty()).then_some(label);
-        if let Some(typed) = commit_field(ui, id, &shown, label)
-            .and_then(|text| text.trim().parse::<f32>().ok())
-            .filter(|typed| typed.is_finite())
-        {
-            *value = typed;
+fn number(ui: &mut Ui, id: Id, value: &mut f32, label: Option<&str>) -> egui::Response {
+    let number = serde_json::Number::from_f64(*value as f64).unwrap_or(0.into());
+    ui.allocate_ui(egui::vec2(72.0, 20.0), |ui| {
+        if let Some(typed) = number_field(ui, id, &number, label).and_then(|v| v.as_f64()) {
+            *value = typed as f32;
         }
-    });
-    response.response
+    })
+    .response
 }
 
 #[cfg(test)]
