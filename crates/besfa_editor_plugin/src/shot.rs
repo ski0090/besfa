@@ -212,7 +212,7 @@ fn captured(capture: On<ScreenshotCaptured>, mut commands: Commands) {
             return;
         };
         world.despawn(job.camera);
-        let error = save(&image, &job.file).err();
+        let error = save(&image, &job.file, false).err();
         match &error {
             Some(error) => warn!("Could not save {}: {error}", job.path),
             None => info!("Saved {}", job.path),

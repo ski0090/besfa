@@ -283,12 +283,13 @@ fn captured(capture: On<ScreenshotCaptured>, mut commands: Commands) {
             job.stage = Stage::Rendering;
             return;
         }
-        let error = save(&image, &job.file).err();
+        let error = save(&image, &job.file, false).err();
         finish(world, error);
     });
 }
 
-pub(crate) fn save(image: &Image, file: &Path) -> Result<(), String> {
+/// Writes `image` to the PNG `file`, without its alpha when `opaque`.
+pub(crate) fn save(image: &Image, file: &Path, opaque: bool) -> Result<(), String> {
     if let Some(folder) = file.parent() {
         std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
     }
@@ -296,10 +297,12 @@ pub(crate) fn save(image: &Image, file: &Path) -> Result<(), String> {
         .clone()
         .try_into_dynamic()
         .map_err(|error| error.to_string())?;
-    image
-        .to_rgba8()
-        .save(file)
-        .map_err(|error| error.to_string())
+    let saved = if opaque {
+        image.to_rgb8().save(file)
+    } else {
+        image.to_rgba8().save(file)
+    };
+    saved.map_err(|error| error.to_string())
 }
 
 /// Reports the picture, drops the model and stops rendering.

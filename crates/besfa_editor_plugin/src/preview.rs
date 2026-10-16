@@ -12,7 +12,7 @@
 use std::{
     collections::HashSet,
     f32::consts::{FRAC_PI_2, FRAC_PI_4, PI},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use besfa_protocol::{
@@ -36,6 +36,7 @@ use crate::{
     edit::subtree,
     inspect::send_report,
     scene_view::{AXIS_COLORS, EDITOR_CAMERA_ORDER, EditorCamera, EditorOnly},
+    thumbnail,
 };
 
 /// The preview's render layer, out of the way of a game's own.
@@ -350,7 +351,7 @@ pub(crate) fn screenshot(world: &mut World, path: String, file: PathBuf) -> Resu
     world
         .spawn(Screenshot(target))
         .observe(move |captured: On<ScreenshotCaptured>| {
-            let error = save_png(&captured.image, &file).err();
+            let error = thumbnail::save(&captured.image, &file, true).err();
             match &error {
                 None => info!("Saved {path}"),
                 Some(error) => error!("Could not save {path}: {error}"),
@@ -361,20 +362,6 @@ pub(crate) fn screenshot(world: &mut World, path: String, file: PathBuf) -> Resu
             });
         });
     Ok(())
-}
-
-fn save_png(image: &Image, file: &Path) -> Result<(), String> {
-    if let Some(folder) = file.parent() {
-        std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
-    }
-    let image = image
-        .clone()
-        .try_into_dynamic()
-        .map_err(|error| error.to_string())?;
-    image
-        .to_rgb8()
-        .save(file)
-        .map_err(|error| error.to_string())
 }
 
 /// Hides the meshes under `hidden` parts, and with `solo` the ones outside
