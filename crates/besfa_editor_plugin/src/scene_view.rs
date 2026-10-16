@@ -544,19 +544,24 @@ fn nearest_handle(
     pointer: Vec2,
 ) -> Option<usize> {
     let project = |point: Vec3| camera.world_to_viewport(camera_global, point).ok();
+    let distance_to = |start, end| {
+        Segment2d::new(start, end)
+            .closest_point(pointer)
+            .distance(pointer)
+    };
     axes.iter()
         .enumerate()
         .filter_map(|(index, &axis)| {
             let distance = match tool {
                 Tool::Translate | Tool::Scale => {
-                    segment_distance(project(origin)?, project(origin + axis * length)?, pointer)
+                    distance_to(project(origin)?, project(origin + axis * length)?)
                 }
                 Tool::Rotate => {
                     let points: Option<Vec<Vec2>> =
                         circle_points(origin, axis, length).map(project).collect();
                     points?
                         .windows(2)
-                        .map(|pair| segment_distance(pair[0], pair[1], pointer))
+                        .map(|pair| distance_to(pair[0], pair[1]))
                         .fold(f32::INFINITY, f32::min)
                 }
             };
@@ -726,12 +731,6 @@ fn circle_points(origin: Vec3, axis: Vec3, radius: f32) -> impl Iterator<Item = 
     })
 }
 
-fn segment_distance(start: Vec2, end: Vec2, point: Vec2) -> f32 {
-    let segment = end - start;
-    let t = ((point - start).dot(segment) / segment.length_squared().max(1e-6)).clamp(0.0, 1.0);
-    point.distance(start + segment * t)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,18 +886,6 @@ mod tests {
                 y: 2.0,
                 button: Button::Right
             }
-        );
-    }
-
-    #[test]
-    fn measures_distance_to_a_segment() {
-        assert_eq!(
-            segment_distance(Vec2::ZERO, Vec2::X * 10.0, Vec2::new(5.0, 3.0)),
-            3.0
-        );
-        assert_eq!(
-            segment_distance(Vec2::ZERO, Vec2::X * 10.0, Vec2::new(-4.0, 3.0)),
-            5.0
         );
     }
 }
