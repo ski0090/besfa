@@ -142,9 +142,8 @@ impl Edits {
         };
         let mut commands = self.rest(&id);
         for (path, value) in pose.transforms {
-            let key = (path.clone(), TRANSFORM.to_owned());
-            let before = self.originals.get(&key).cloned().flatten();
-            self.record(&path, TRANSFORM, before, Change::Set(value.clone()));
+            // record keeps an original it already has, so none is looked up.
+            self.record(&path, TRANSFORM, None, Change::Set(value.clone()));
             if let Some(id) = id(&path) {
                 commands.push(command(id, TRANSFORM, Change::Set(value)));
             }
