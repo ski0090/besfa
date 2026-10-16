@@ -206,10 +206,9 @@ impl TerrainData {
         let z = (grid.y as u32).min(self.resolution - 2);
         let (across, down) = (grid.x - x as f32, grid.y - z as f32);
         let height = |x, z| self.heights[self.index(x, z)];
-        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-        let back = lerp(height(x, z), height(x + 1, z), across);
-        let front = lerp(height(x, z + 1), height(x + 1, z + 1), across);
-        Some(lerp(back, front, down))
+        let back = height(x, z).lerp(height(x + 1, z), across);
+        let front = height(x, z + 1).lerp(height(x + 1, z + 1), across);
+        Some(back.lerp(front, down))
     }
 
     /// The ground as a mesh, each vertex colored by the layers that show
@@ -277,7 +276,7 @@ impl TerrainData {
     }
 }
 
-#[derive(TypePath, Default)]
+#[derive(TypePath)]
 struct TerrainLoader;
 
 impl AssetLoader for TerrainLoader {
@@ -387,10 +386,8 @@ fn surface(
     x: f32,
     z: f32,
 ) -> Option<f32> {
-    let local = transform.rotation.inverse()
-        * (Vec3::new(x, transform.translation.y, z) - transform.translation)
-        / transform.scale;
-    data.height(terrain.size, local.xz())
+    let point = Vec3::new(x, transform.translation.y, z);
+    data.height(terrain.size, local(transform, point))
         .map(|height| transform.translation.y + height * transform.scale.y)
 }
 
@@ -610,11 +607,6 @@ fn local(transform: &Transform, point: Vec3) -> Vec2 {
     (transform.rotation.inverse() * (point - transform.translation) / transform.scale).xz()
 }
 
-/// The stroke the scene view's brush is painting while the left button is
-/// down: on which terrain and file.
-#[derive(Default)]
-pub(crate) struct Painting(Option<(Entity, AssetId<TerrainData>, Stroke)>);
-
 /// Paints the selected terrain with the scene view's brush. The left
 /// button's presses become strokes instead of selections; the other
 /// buttons still turn and move the view. A ring shows the brush on the
@@ -630,14 +622,16 @@ pub(crate) fn paint(
     mut ray_cast: MeshRayCast,
     mut ring: Gizmos<HandleGizmos>,
     mut commands: Commands,
-    mut painting: Local<Painting>,
+    // The stroke painting while the left button is down: on which terrain
+    // and file.
+    mut painting: Local<Option<(Entity, AssetId<TerrainData>, Stroke)>>,
 ) {
     let target = selected.0.filter(|&entity| terrains.contains(entity));
     let (Some(entity), Some(asked), Ok((camera, eye))) = (target, view.brush, camera.single())
     else {
         view.brush_at = None;
         // Cut short: the brush was put away or the terrain deselected.
-        if let Some((entity, file, stroke)) = painting.0.take() {
+        if let Some((entity, file, stroke)) = painting.take() {
             let changed = files.get(file).and_then(|data| stroke.finish(data));
             report_painted(&mut commands, entity, strokes.keep(entity, file, changed));
         }
@@ -671,12 +665,12 @@ pub(crate) fn paint(
                     let point = local(&transform, point);
                     let mut stroke = Stroke::begin(before, terrain.size, brush, point);
                     stroke.to(&mut files.get_mut(file).unwrap(), point);
-                    painting.0 = Some((entity, file, stroke));
+                    *painting = Some((entity, file, stroke));
                 }
             }
             PointerEvent::Move { x, y } => {
                 view.brush_at = hit(Vec2::new(x, y));
-                if let (Some(point), Some((_, file, stroke))) = (view.brush_at, &mut painting.0)
+                if let (Some(point), Some((_, file, stroke))) = (view.brush_at, &mut *painting)
                     && let Some(mut data) = files.get_mut(*file)
                 {
                     stroke.to(&mut data, local(&transform, point));
@@ -688,7 +682,7 @@ pub(crate) fn paint(
                 button: Button::Left,
                 ..
             } => {
-                if let Some((entity, file, stroke)) = painting.0.take() {
+                if let Some((entity, file, stroke)) = painting.take() {
                     let changed = files.get(file).and_then(|data| stroke.finish(data));
                     report_painted(&mut commands, entity, strokes.keep(entity, file, changed));
                 }
@@ -888,7 +882,8 @@ pub(crate) struct Stroke {
     reach: Vec<f32>,
     /// Flatten's height: the ground's where the stroke began.
     level: f32,
-    last: Option<Vec2>,
+    /// Where the brush is.
+    last: Vec2,
     /// The first and last samples changed.
     touched: Option<(UVec2, UVec2)>,
 }
@@ -901,22 +896,18 @@ impl Stroke {
             before,
             size,
             brush,
-            last: None,
+            last: start,
             touched: None,
         }
     }
 
-    /// Moves the brush to `point`, in the terrain's space, painting the
-    /// line there, and writes what changed into `data`.
-    pub(crate) fn to(&mut self, data: &mut TerrainData, point: Vec2) {
-        let from = self.last.replace(point).unwrap_or(point);
-        self.sweep(data, from, point);
-    }
-
-    /// Each sample near the line from `from` to `to` takes the brush as it
-    /// reaches it from the nearest point on the line, so a line is even
-    /// along its length rather than rippled by separate dabs.
-    fn sweep(&mut self, data: &mut TerrainData, from: Vec2, to: Vec2) {
+    /// Moves the brush to `to`, in the terrain's space, painting the line
+    /// there, and writes what changed into `data`. Each sample near the
+    /// line takes the brush as it reaches it from the nearest point on the
+    /// line, so a line is even along its length rather than rippled by
+    /// separate dabs.
+    pub(crate) fn to(&mut self, data: &mut TerrainData, to: Vec2) {
+        let from = std::mem::replace(&mut self.last, to);
         let (size, radius) = (self.size, self.brush.radius);
         let step = self.before.step(size);
         let last = self.before.resolution - 1;
