@@ -120,7 +120,9 @@ fn shared_dir() -> Option<PathBuf> {
 }
 
 fn create_project_with(directory: &Path, shared: Option<&Path>) -> Result<PathBuf, CreateError> {
-    let destination = absolute_path(directory)?;
+    let destination = std::path::absolute(directory).map_err(|error| {
+        filesystem_error("Failed to determine the current working directory.", error)
+    })?;
 
     if destination.exists() {
         return Err(CreateError::new(
@@ -309,23 +311,6 @@ fn cargo_config(target_dir: &Path) -> String {
          [build]\n\
          target-dir = \"{target_dir}\"\n"
     )
-}
-
-fn absolute_path(path: &Path) -> Result<PathBuf, CreateError> {
-    if path.is_absolute() {
-        Ok(path.to_path_buf())
-    } else {
-        env::current_dir()
-            .map(|current_dir| current_dir.join(path))
-            .map_err(|error| {
-                CreateError::new(
-                    20,
-                    "filesystem_error",
-                    "Failed to determine the current working directory.",
-                )
-                .with_diagnostic(error.to_string())
-            })
-    }
 }
 
 fn create_staging_dir(parent: &Path) -> Result<PathBuf, CreateError> {
