@@ -2,6 +2,7 @@
 //! them, and the `besfa_editor_plugin` revision they pin.
 
 use std::{
+    ffi::OsStr,
     fs,
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
@@ -20,9 +21,9 @@ impl Project {
     }
 
     pub fn name(&self) -> &str {
-        self.path
-            .split(['\\', '/'])
-            .rfind(|part| !part.is_empty())
+        Path::new(&self.path)
+            .file_name()
+            .and_then(OsStr::to_str)
             .unwrap_or(&self.path)
     }
 
@@ -150,22 +151,18 @@ pub fn move_to_recycle_bin(directory: &str) -> bool {
 /// Opens `directory` in Explorer.
 pub fn reveal(directory: &str) {
     // Explorer needs backslashes; with '/' it silently opens Documents.
-    shell_open(&directory.replace('/', "\\"));
+    open_url(&directory.replace('/', "\\"));
 }
 
 /// The community's plugins, assets, templates and tools for Bevy, which is
 /// what Bevy has for Unity's Asset Store.
 pub const BEVY_ASSETS: &str = "https://bevy.org/assets/";
 
-/// Opens `url` in the default browser.
-pub fn open_url(url: &str) {
-    shell_open(url);
-}
-
-/// Hands `target` to Explorer, outside the editor's job, so a window or a
-/// browser it starts stays open when the editor exits. Launched from a job
-/// that allows no breakaway, as under `cargo run`, it stays in the job.
-fn shell_open(target: &str) {
+/// Hands `target`, a URL or a folder, to Explorer, which opens the default
+/// browser or a window, outside the editor's job so it stays open when the
+/// editor exits. Launched from a job that allows no breakaway, as under
+/// `cargo run`, it stays in the job.
+pub fn open_url(target: &str) {
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     let mut command = std::process::Command::new("explorer");
     command.arg(target);

@@ -394,8 +394,7 @@ enum HubAction {
 /// appended to the picked location.
 fn browse(dialog: &mut CreateDialog) {
     if let Some(parent) = project::pick_folder("Select location") {
-        let separator = if parent.ends_with('\\') { "" } else { "\\" };
-        dialog.directory = format!("{parent}{separator}new_project");
+        dialog.directory = Path::new(&parent).join("new_project").display().to_string();
         dialog.error = None;
     }
 }
