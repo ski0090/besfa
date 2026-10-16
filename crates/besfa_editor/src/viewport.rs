@@ -14,6 +14,7 @@ use besfa_protocol::{Button, Command, PointerEvent};
 use eframe::{
     egui::{self, Event, EventFilter, Key, PointerButton, Pos2, Rect, Sense, Vec2, mutex::RwLock},
     egui_wgpu::{self, RenderState},
+    wgpu,
 };
 
 const SHARED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
@@ -337,7 +338,10 @@ fn key_code(key: Key) -> Option<String> {
 mod shared {
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use wgpu::hal::{api::Dx12, dx12};
+    use eframe::wgpu::{
+        self,
+        hal::{api::Dx12, dx12},
+    };
     use windows::{
         Win32::{
             Foundation::{CloseHandle, GENERIC_ALL, HANDLE},

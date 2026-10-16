@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use eframe::{
     egui::{self, Color32, ViewportCommand},
-    egui_wgpu,
+    egui_wgpu, wgpu,
 };
 
 use crate::{editor::Editor, hub::Hub, process::Prebuild, project::RecentProjects};

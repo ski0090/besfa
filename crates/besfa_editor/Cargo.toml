@@ -6,9 +6,6 @@ description = "The Besfa editor: project hub and scene editor for Bevy games"
 
 [dependencies]
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
-# Must match the wgpu and windows versions egui-wgpu uses, so the raw D3D12
-# types line up with wgpu-hal's when the viewport texture is shared.
-wgpu = "30"
 besfa_protocol = { path = "../besfa_protocol" }
 # Keeps component fields in the order the game reports them.
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -19,6 +16,8 @@ ron = "0.12"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
+# Must match the windows version wgpu-hal uses, so the raw D3D12 types line
+# up with wgpu-hal's when the viewport texture is shared.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D12",

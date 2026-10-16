@@ -631,7 +631,6 @@ dependencies = [
  "ron",
  "serde",
  "serde_json",
- "wgpu",
  "windows",
 ]
 
