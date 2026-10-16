@@ -627,11 +627,7 @@ impl Editor {
                 before,
                 after,
             } => {
-                let set = |value| Command::Set {
-                    id,
-                    component: component.clone(),
-                    value,
-                };
+                let set = |value| Self::set_command(id, &component, value);
                 self.record(Edit {
                     undo: vec![set(before)],
                     redo: vec![set(after)],

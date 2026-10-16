@@ -281,7 +281,7 @@ impl Review {
     }
 }
 
-fn command(id: u64, component: &str, change: Change) -> Command {
+pub fn command(id: u64, component: &str, change: Change) -> Command {
     let component = component.to_owned();
     match change {
         Change::Set(value) => Command::Set {

@@ -348,16 +348,7 @@ impl ModelPreview {
         };
         let before = self.current(&component);
         self.edits.record(&path, &component, before, change.clone());
-        let command = match change {
-            Change::Set(value) => Command::Set {
-                id,
-                component,
-                value,
-            },
-            Change::Insert => Command::Insert { id, component },
-            Change::Remove => Command::Remove { id, component },
-        };
-        vec![command]
+        vec![review::command(id, &component, change)]
     }
 
     fn now(&self) -> f32 {
