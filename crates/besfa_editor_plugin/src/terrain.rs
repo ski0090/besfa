@@ -2,6 +2,8 @@
 //! painted with brushes. The scene file keeps a terrain's size and layer
 //! colors; its heights and where each layer shows are a `.terrain` file of
 //! their own in the asset folder, which saving the scene writes back.
+//!
+//! Games ask the ground's height with [`TerrainHeight`].
 
 use std::{
     collections::{HashMap, HashSet},
@@ -12,7 +14,7 @@ use besfa_protocol::{Button, PointerEvent, Report, TerrainBrush, TerrainTool};
 use bevy::{
     asset::{AssetLoader, LoadContext, RenderAssetUsages, io::Reader},
     camera::visibility::VisibilitySystems,
-    ecs::{entity_disabling::Disabled, query::Allow},
+    ecs::{entity_disabling::Disabled, query::Allow, system::SystemParam},
     mesh::{Indices, PrimitiveTopology},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
     prelude::*,
@@ -392,9 +394,38 @@ fn surface(
         .map(|height| transform.translation.y + height * transform.scale.y)
 }
 
-/// The height of the highest terrain at each of `points`, world X and Z, or
-/// none where no terrain is or its file has not loaded yet; from transforms
-/// composed afresh, since a command may move a terrain in the frame it asks.
+/// The height of the ground, for game code: what walks on the terrain asks
+/// it where the ground is.
+#[derive(SystemParam)]
+pub struct TerrainHeight<'w, 's> {
+    terrains: Query<
+        'w,
+        's,
+        (
+            &'static Terrain,
+            &'static TerrainHandle,
+            &'static GlobalTransform,
+        ),
+    >,
+    files: Res<'w, Assets<TerrainData>>,
+}
+
+impl TerrainHeight<'_, '_> {
+    /// The height of the highest terrain at world `x`, `z`, or none where
+    /// no terrain is or its file has not loaded yet.
+    pub fn at(&self, x: f32, z: f32) -> Option<f32> {
+        self.terrains
+            .iter()
+            .filter_map(|(terrain, file, global)| {
+                let data = self.files.get(&file.handle)?;
+                surface(terrain, data, &global.compute_transform(), x, z)
+            })
+            .reduce(f32::max)
+    }
+}
+
+/// [`TerrainHeight::at`] for each of `points`, from transforms composed
+/// afresh, since a command may move a terrain in the frame it asks.
 pub(crate) fn heights(world: &mut World, points: &[[f32; 2]]) -> Vec<Option<f32>> {
     let mut query = world.query::<(Entity, &Terrain, &TerrainHandle)>();
     let world = &*world;
