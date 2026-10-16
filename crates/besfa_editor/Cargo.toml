@@ -27,7 +27,6 @@ windows = { version = "0.62", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
     "Win32_UI_Shell",
-    "Win32_UI_Shell_Common",
 ] }
 
 [dev-dependencies]
