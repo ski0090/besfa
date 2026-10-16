@@ -21,28 +21,13 @@ const VIEWPORT_HANDLE: ManualTextureViewHandle = ManualTextureViewHandle(0xBE5FA
 /// The game writes linear-to-sRGB encoded BGRA, which the editor shows as is.
 const VIEWPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 
-#[derive(Resource, Clone)]
-pub(crate) struct ViewportConfig {
-    name: String,
-}
-
-impl ViewportConfig {
-    /// Reads `BESFA_VIEWPORT`, the shared handle name set by the editor. The
-    /// size comes from the texture itself.
-    pub(crate) fn from_env() -> Option<Self> {
-        Some(Self {
-            name: std::env::var("BESFA_VIEWPORT").ok()?,
-        })
-    }
-}
-
-pub(crate) struct ViewportPlugin(pub(crate) ViewportConfig);
+/// In [`crate::default_plugins`] when the editor set `BESFA_VIEWPORT`.
+pub(crate) struct ViewportPlugin;
 
 impl Plugin for ViewportPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(self.0.clone())
-            // Before the game's Startup systems spawn their cameras.
-            .add_systems(PreStartup, open_viewport)
+        // Before the game's Startup systems spawn their cameras.
+        app.add_systems(PreStartup, open_viewport)
             .add_observer(retarget_camera);
     }
 }
@@ -53,21 +38,20 @@ struct ViewportTexture(
     #[expect(dead_code, reason = "held only to keep the texture alive")] wgpu::Texture,
 );
 
+/// Opens the texture `BESFA_VIEWPORT` names, the editor's shared handle.
+/// The size comes from the texture itself.
 fn open_viewport(
     mut commands: Commands,
-    config: Res<ViewportConfig>,
     device: Res<RenderDevice>,
     mut views: ResMut<ManualTextureViews>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let texture = match shared::open(device.wgpu_device(), &config.name) {
+    let name = std::env::var("BESFA_VIEWPORT").unwrap_or_default();
+    let texture = match shared::open(device.wgpu_device(), &name) {
         Ok(texture) => texture,
         Err(error) => {
             // Without a window or a viewport the game would run unseen.
-            error!(
-                "Could not open the editor viewport '{}': {error}",
-                config.name
-            );
+            error!("Could not open the editor viewport '{name}': {error}");
             exit.write(AppExit::error());
             return;
         }
@@ -103,7 +87,6 @@ pub(crate) fn reopen(world: &mut World, name: &str) -> Result<(), String> {
     let texture = shared::open(device.wgpu_device(), name)?;
     let size = show(&mut world.resource_mut::<ManualTextureViews>(), &texture);
     world.insert_resource(ViewportTexture(texture));
-    world.resource_mut::<ViewportConfig>().name = name.into();
     // Cameras recompute their target's size when their projection changes.
     let mut projections = world.query_filtered::<&mut Projection, With<Camera>>();
     for mut projection in projections.iter_mut(world) {

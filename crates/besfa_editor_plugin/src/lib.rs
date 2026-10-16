@@ -55,7 +55,7 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .add(part_changes::PartChangesPlugin)
         .add(terrain::TerrainPlugin)
         .add(animation::AnimationStateMachinePlugin);
-    if edit_mode::requested() {
+    if std::env::var_os("BESFA_EDIT_MODE").is_some() {
         plugins = plugins
             .add(edit_mode::EditModePlugin)
             .add(inspect::InspectPlugin)
@@ -65,9 +65,10 @@ pub fn default_plugins() -> PluginGroupBuilder {
             .add(thumbnail::ThumbnailPlugin)
             .add(shot::ShotPlugin);
     }
-    let viewport = viewport::ViewportConfig::from_env();
+    // The editor's shared texture, which the game renders into.
+    let viewport = std::env::var_os("BESFA_VIEWPORT").is_some();
     // Set by besfa_mcp, so a game it drives opens no window to take focus.
-    if viewport.is_none() && std::env::var_os("BESFA_HEADLESS").is_none() {
+    if !viewport && std::env::var_os("BESFA_HEADLESS").is_none() {
         return plugins;
     }
 
@@ -82,8 +83,9 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .add(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
             1.0 / 60.0,
         )));
-    match viewport {
-        Some(config) => plugins.add(viewport::ViewportPlugin(config)),
-        None => plugins,
+    if viewport {
+        plugins.add(viewport::ViewportPlugin)
+    } else {
+        plugins
     }
 }

@@ -32,10 +32,6 @@ use crate::{
     terrain, thumbnail, viewport,
 };
 
-pub(crate) fn requested() -> bool {
-    std::env::var_os("BESFA_EDIT_MODE").is_some()
-}
-
 // ponytail: pauses virtual time only, so systems that ignore `Time` or read
 // `Time<Real>` keep running. Gate gameplay on an edit/play `State` if that
 // starts to matter.
