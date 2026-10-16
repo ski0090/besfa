@@ -67,6 +67,14 @@ enum Stage {
     Respawning(u32, HashSet<Entity>),
 }
 
+/// The asset a `Modified` event is about.
+fn modified_id<A: Asset>(event: &AssetEvent<A>) -> Option<UntypedAssetId> {
+    match event {
+        AssetEvent::Modified { id } => Some(id.untyped()),
+        _ => None,
+    }
+}
+
 /// The file an asset comes from, without the scene's label.
 fn file_of(path: &bevy::asset::AssetPath) -> String {
     path.without_label()
@@ -76,7 +84,7 @@ fn file_of(path: &bevy::asset::AssetPath) -> String {
 }
 
 /// Loads the model at `path` again, if anything shows it.
-pub(crate) fn reimport(world: &mut World, path: String) -> Result<(), String> {
+pub(crate) fn reimport(world: &mut World, path: String) {
     let roots: Vec<Entity> = world
         .query::<(Entity, &WorldAssetRoot)>()
         .iter(world)
@@ -86,7 +94,7 @@ pub(crate) fn reimport(world: &mut World, path: String) -> Result<(), String> {
     if roots.is_empty() {
         // Nothing shows it; it is read fresh when something does.
         send_report(&Report::Reimported { path, error: None });
-        return Ok(());
+        return;
     }
     world.resource::<AssetServer>().reload(path.clone());
     let mut reloads = world.resource_mut::<Reloads>();
@@ -96,7 +104,6 @@ pub(crate) fn reimport(world: &mut World, path: String) -> Result<(), String> {
         roots,
         stage: Stage::Loading(0),
     });
-    Ok(())
 }
 
 fn respawned(ready: On<WorldInstanceReady>, mut reloads: ResMut<Reloads>) {
@@ -123,14 +130,9 @@ fn follow(
     let modified = |id: UntypedAssetId| assets.get_path(id).map(|path| file_of(&path));
     let loaded: Vec<String> = scenes
         .read()
-        .filter_map(|event| match event {
-            AssetEvent::Modified { id } => modified(id.untyped()),
-            _ => None,
-        })
-        .chain(gltfs.read().filter_map(|event| match event {
-            AssetEvent::Modified { id } => modified(id.untyped()),
-            _ => None,
-        }))
+        .filter_map(modified_id)
+        .chain(gltfs.read().filter_map(modified_id))
+        .filter_map(modified)
         .collect();
     let failures: Vec<(String, String)> = failed
         .read()

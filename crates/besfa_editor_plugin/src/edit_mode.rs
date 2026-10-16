@@ -406,7 +406,8 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
         }
         Command::Reimport { path } => {
             if inside(&path) && (path.ends_with(".glb") || path.ends_with(".gltf")) {
-                reimport::reimport(world, path)
+                reimport::reimport(world, path);
+                Ok(())
             } else {
                 Err(format!(
                     "{path} is not a glTF path inside the asset directory"
