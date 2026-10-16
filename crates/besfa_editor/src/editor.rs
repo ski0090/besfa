@@ -13,7 +13,7 @@ use std::{
 };
 
 use besfa_protocol::{
-    Command, Placement, Report, Request, ScatterBrush, TerrainBrush, Tool, VERSION,
+    Command, Placement, Report, Request, ScatterBrush, SpawnKind, TerrainBrush, Tool, VERSION,
 };
 use eframe::{
     egui::{
@@ -35,6 +35,7 @@ use crate::{
     project::{self, Project},
     scatter::ScatterTools,
     scene::{Edit, EditHistory, Scene},
+    sky::{self, SkyAction},
     terrain::TERRAIN,
     viewport::{ViewportInput, ViewportTexture, adapter_name},
 };
@@ -46,6 +47,9 @@ const TERRAIN_PROTOCOL: u32 = 6;
 /// with the scene view's brush.
 const DROP_PROTOCOL: u32 = 7;
 const SCATTER_PROTOCOL: u32 = 8;
+
+/// The protocol whose plugins draw and spawn the scene's sky.
+const SKY_PROTOCOL: u32 = 10;
 
 /// The log keeps the latest lines.
 const MAX_LOG_LINES: usize = 2000;
@@ -80,6 +84,7 @@ enum RightTab {
     Inspector,
     Scatter,
     Animation,
+    Sky,
 }
 
 enum Dialog {
@@ -277,8 +282,8 @@ impl Editor {
         egui::Panel::left("hierarchy")
             .default_size(220.0)
             .show(ui, |ui| {
-                let terrain = self.protocol >= Some(TERRAIN_PROTOCOL);
-                if let Some(action) = panels::hierarchy(ui, &self.scene, !self.playing, terrain) {
+                let protocol = self.protocol.unwrap_or_default();
+                if let Some(action) = panels::hierarchy(ui, &self.scene, !self.playing, protocol) {
                     self.on_hierarchy(action);
                 }
             });
@@ -295,16 +300,37 @@ impl Editor {
                         }
                     }
                     None => {
+                        let was = self.right_tab;
                         ui.horizontal(|ui| {
                             for (tab, label) in [
                                 (RightTab::Inspector, "Inspector"),
                                 (RightTab::Scatter, "Scatter"),
                                 (RightTab::Animation, "Animation"),
+                                (RightTab::Sky, "Sky"),
                             ] {
                                 ui.selectable_value(&mut self.right_tab, tab, label);
                             }
                         });
-                        if self.right_tab == RightTab::Scatter {
+                        if self.right_tab == RightTab::Sky && was != RightTab::Sky {
+                            self.select_sky();
+                        }
+                        if self.right_tab == RightTab::Sky {
+                            let known = self.protocol >= Some(SKY_PROTOCOL);
+                            let action = egui::ScrollArea::vertical()
+                                .auto_shrink(false)
+                                .show(ui, |ui| sky::ui(ui, &self.scene, known, !self.playing))
+                                .inner;
+                            match action {
+                                Some(SkyAction::Select(id)) => {
+                                    self.on_hierarchy(HierarchyAction::Select(Some(id)));
+                                }
+                                Some(SkyAction::Add) => {
+                                    self.on_hierarchy(HierarchyAction::Spawn(SpawnKind::Sky));
+                                }
+                                Some(SkyAction::Edit(action)) => self.on_inspector(action),
+                                None => {}
+                            }
+                        } else if self.right_tab == RightTab::Scatter {
                             egui::ScrollArea::vertical()
                                 .auto_shrink(false)
                                 .show(ui, |ui| self.scatter.ui(ui));
@@ -853,6 +879,16 @@ impl Editor {
         }
     }
 
+    /// Selects the scene's sky, so the game reports it to the Sky tab.
+    fn select_sky(&mut self) {
+        let sky = self.scene.entities.iter().find(|entity| entity.sky);
+        if let Some(id) = sky.map(|entity| entity.id)
+            && self.scene.selected != Some(id)
+        {
+            self.on_hierarchy(HierarchyAction::Select(Some(id)));
+        }
+    }
+
     fn duplicate(&mut self) {
         if let Some(entity) = self.scene.selected_entity() {
             self.edit(Command::Duplicate { id: entity.id }, vec![]);
@@ -1113,6 +1149,13 @@ impl Editor {
                         if self.previewing {
                             self.show_preview(false);
                         }
+                    }
+                    if ui.button("Sky").clicked() {
+                        self.right_tab = RightTab::Sky;
+                        if self.previewing {
+                            self.show_preview(false);
+                        }
+                        self.select_sky();
                     }
                     let assets = Button::new("Bevy Assets").shortcut_text("Ctrl+9");
                     if ui.add(assets).on_hover_text(project::BEVY_ASSETS).clicked() {

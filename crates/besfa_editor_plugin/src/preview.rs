@@ -623,6 +623,7 @@ fn load(world: &mut World) {
                 .map(Entity::to_bits),
             scene: true,
             asset: None,
+            sky: false,
         })
         .collect();
     let bounds = bounds(world, &entities);

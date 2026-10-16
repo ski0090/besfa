@@ -147,17 +147,22 @@ impl TerrainTools {
     }
 }
 
-/// A layer's color as the game reports an sRGB `Color`, in bytes.
-fn srgb(color: &Value) -> Option<[u8; 3]> {
-    let color = color.get("Srgba")?;
-    let channel = |name: &str| {
-        let value = color[name].as_f64()?;
-        Some((value.clamp(0.0, 1.0) * 255.0).round() as u8)
+/// A `Color` as the game reports it, in sRGB bytes: an sRGB one, or a
+/// linear one, as a game's code may write.
+pub fn srgb(color: &Value) -> Option<[u8; 3]> {
+    let channels = |color: &Value| {
+        let channel = |name: &str| Some(color[name].as_f64()?.clamp(0.0, 1.0) as f32);
+        Some([channel("red")?, channel("green")?, channel("blue")?])
     };
-    Some([channel("red")?, channel("green")?, channel("blue")?])
+    if let Some(linear) = color.get("LinearRgba") {
+        let [red, green, blue] = channels(linear)?;
+        let color = egui::Color32::from(egui::Rgba::from_rgb(red, green, blue));
+        return Some([color.r(), color.g(), color.b()]);
+    }
+    Some(channels(color.get("Srgba")?)?.map(|value| (value * 255.0).round() as u8))
 }
 
-fn srgba(color: [u8; 3]) -> Value {
+pub fn srgba(color: [u8; 3]) -> Value {
     let [red, green, blue] = color.map(|byte| byte as f64 / 255.0);
     json!({"Srgba": {"red": red, "green": green, "blue": blue, "alpha": 1.0}})
 }

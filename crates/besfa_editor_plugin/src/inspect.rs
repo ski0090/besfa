@@ -28,6 +28,7 @@ use crate::{
     preview::ModelPreview,
     scene::{SceneEntity, json, left_out},
     scene_view::{EditorOnly, Parked},
+    sky::Sky,
 };
 
 /// The entity whose components are reported.
@@ -235,6 +236,7 @@ fn entities(world: &mut World) -> Report {
             Option<&ChildOf>,
             Has<SceneEntity>,
             (Option<&DynamicWorldRoot>, Option<&WorldAssetRoot>),
+            Has<Sky>,
         ), (
             Or<(With<Name>, With<Transform>, With<ChildOf>)>,
             Without<EditorOnly>,
@@ -249,7 +251,7 @@ fn entities(world: &mut World) -> Report {
     let entities = entities
         .iter()
         .map(
-            |(entity, name, parent, scene, (placed_scene, model))| EntityInfo {
+            |(entity, name, parent, scene, (placed_scene, model), sky)| EntityInfo {
                 id: entity.to_bits(),
                 name: name.map(|name| name.as_str().into()),
                 parent: parent.map(|parent| parent.parent().to_bits()),
@@ -260,6 +262,7 @@ fn entities(world: &mut World) -> Report {
                     .and_then(|root| root.0.path())
                     .or_else(|| model.and_then(|root| root.0.path()))
                     .map(|path| path.without_label().to_string()),
+                sky: *sky,
             },
         )
         .collect();

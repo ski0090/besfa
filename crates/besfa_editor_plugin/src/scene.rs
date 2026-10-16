@@ -571,6 +571,9 @@ pub(crate) fn left_out(type_id: TypeId) -> bool {
         TypeId::of::<SceneEntity>(),
         TypeId::of::<crate::AnimationClips>(),
         TypeId::of::<crate::scene_view::Parked>(),
+        // The plugin gives cameras the scene's `Sky` as a skybox.
+        TypeId::of::<bevy::light::Skybox>(),
+        TypeId::of::<crate::sky::SkyApplied>(),
         TypeId::of::<Children>(),
         TypeId::of::<RenderTarget>(),
         TypeId::of::<Mesh3d>(),
@@ -880,6 +883,45 @@ mod tests {
                 .is_some()
         );
         assert!(world.get::<Camera3d>(entities[1]).is_some());
+    }
+
+    #[test]
+    fn saves_the_sky_but_not_the_skybox_cameras_get_from_it() {
+        use crate::sky::{Sky, SkyApplied, SkyMode};
+
+        let mut app = test_app();
+        app.register_type::<Sky>()
+            .register_type::<SkyMode>()
+            .register_type::<bevy::light::Skybox>();
+        let sky = Sky {
+            mode: SkyMode::Cubemap,
+            zenith: Color::srgb(0.1, 0.1, 0.3),
+            cubemap: "skies/night.png".into(),
+            rotation: 45.0,
+            ..default()
+        };
+        app.world_mut()
+            .spawn((Name::new("Sky"), sky.clone(), SceneEntity));
+        app.world_mut().spawn((
+            Name::new("Camera"),
+            Camera3d::default(),
+            bevy::light::Skybox::default(),
+            SkyApplied,
+            SceneEntity,
+        ));
+        let dir = std::env::temp_dir().join(format!("besfa-sky-{}", std::process::id()));
+        let path = dir.join(SCENE_PATH);
+
+        save(app.world_mut(), &path).expect("the scene should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(ron.contains("besfa_editor_plugin::sky::Sky"), "{ron}");
+        assert!(!ron.contains("Skybox"), "{ron}");
+        let mut reloaded = test_app();
+        reloaded.register_type::<Sky>().register_type::<SkyMode>();
+        let entities = spawn(&mut reloaded, &ron);
+        assert_eq!(reloaded.world().get::<Sky>(entities[0]), Some(&sky));
     }
 
     #[test]

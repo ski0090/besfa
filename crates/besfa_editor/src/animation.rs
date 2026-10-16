@@ -419,6 +419,7 @@ mod tests {
             parent: None,
             scene: true,
             asset: Some("characters/body1.glb".into()),
+            sky: false,
         };
         let addable = vec![ComponentType {
             name: "AnimationStateMachine".into(),
@@ -519,6 +520,7 @@ mod tests {
                 parent: None,
                 scene: true,
                 asset: None,
+                sky: false,
             };
             let scene = Inspected {
                 selected: Some(7),

@@ -137,7 +137,7 @@ pub fn prebuild_status(ui: &mut Ui, prebuild: &Prebuild) {
 }
 
 /// What the add menu spawns, with its label.
-pub const SPAWN_KINDS: [(SpawnKind, &str); 7] = [
+pub const SPAWN_KINDS: [(SpawnKind, &str); 8] = [
     (SpawnKind::Empty, "Empty"),
     (SpawnKind::Cube, "Cube"),
     (SpawnKind::Sphere, "Sphere"),
@@ -145,7 +145,17 @@ pub const SPAWN_KINDS: [(SpawnKind, &str); 7] = [
     (SpawnKind::Light, "Light"),
     (SpawnKind::Camera, "Camera"),
     (SpawnKind::Terrain, "Terrain"),
+    (SpawnKind::Sky, "Sky"),
 ];
+
+/// The protocol whose plugins spawn `kind`.
+pub fn spawn_protocol(kind: SpawnKind) -> u32 {
+    match kind {
+        SpawnKind::Terrain => 6,
+        SpawnKind::Sky => 10,
+        _ => 0,
+    }
+}
 
 pub enum HierarchyAction {
     Select(Option<u64>),
@@ -158,12 +168,12 @@ pub enum HierarchyAction {
 /// The game's entities as a tree; clicking one selects it, clicking the
 /// selected one clears the selection. The header adds, duplicates and
 /// deletes entities, and saves one as a prefab when `can_save_prefab`.
-/// `terrain`: the game's plugin makes terrain.
+/// `protocol`: what the game's plugin speaks, which decides what it spawns.
 pub fn hierarchy(
     ui: &mut Ui,
     scene: &Scene,
     can_save_prefab: bool,
-    terrain: bool,
+    protocol: u32,
 ) -> Option<HierarchyAction> {
     let mut action = None;
     let selection = scene.selected_entity().is_some();
@@ -190,7 +200,7 @@ pub fn hierarchy(
         }
         ui.menu_button("➕", |ui| {
             for (kind, label) in SPAWN_KINDS {
-                if kind == SpawnKind::Terrain && !terrain {
+                if spawn_protocol(kind) > protocol {
                     continue;
                 }
                 if ui.button(label).clicked() {
@@ -827,7 +837,7 @@ mod tests {
         );
         let mut harness = Harness::new_ui_state(
             |ui, scene: &mut Scene| {
-                hierarchy(ui, scene, false, false);
+                hierarchy(ui, scene, false, 0);
             },
             scene,
         );
@@ -856,7 +866,7 @@ mod tests {
         ));
         let mut harness = Harness::new_ui_state(
             |ui, scene: &mut Scene| {
-                hierarchy(ui, scene, false, false);
+                hierarchy(ui, scene, false, 0);
             },
             scene,
         );

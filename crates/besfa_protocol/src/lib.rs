@@ -38,7 +38,8 @@ use serde_json::Value;
 ///    [`Command::ScatterErase`] answered by [`Report::Scattered`].
 /// 8. The scene view's scatter brush, [`Command::ScatterBrush`].
 /// 9. [`Command::TerrainFill`].
-pub const VERSION: u32 = 9;
+/// 10. The sky: [`SpawnKind::Sky`] and [`EntityInfo::sky`].
+pub const VERSION: u32 = 10;
 
 /// Starts every report line.
 pub const REPORT_PREFIX: &str = "@besfa ";
@@ -395,6 +396,8 @@ pub enum SpawnKind {
     /// Flat ground 256 meters a side covered by its first surface layer,
     /// whose heights and layers go to a file of their own.
     Terrain,
+    /// The scene's sky, a gradient to start with.
+    Sky,
 }
 
 /// A model or prefab to scatter, relative to the asset directory, and how
@@ -637,6 +640,9 @@ pub struct EntityInfo {
     /// The model, scene or prefab file a placed entity shows, which the game
     /// spawns under it; saving keeps only this path.
     pub asset: Option<String>,
+    /// Carries the scene's sky, which the editor's Sky tab edits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sky: bool,
 }
 
 impl EntityInfo {
@@ -1055,6 +1061,7 @@ mod tests {
             parent: None,
             scene: true,
             asset: None,
+            sky: false,
         };
         assert_eq!(entity(Some("Cube")).label(), "Cube");
         assert_eq!(entity(None).label(), "Entity 1v0");

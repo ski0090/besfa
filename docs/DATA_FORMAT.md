@@ -60,6 +60,23 @@
 ),
 ```
 
+## 하늘
+
+씬의 하늘은 엔티티 하나의 `besfa_editor_plugin::sky::Sky` 컴포넌트로 씬 파일에 저장된다([SKY.md](./SKY.md)). `mode`는 `Gradient`(기본)나 `Cubemap`이고, 그라데이션은 머리 위 `zenith`, 지평선 `horizon`, 지평선 아래 `ground` 색과, 지평선 위 높이(0~1)를 몇 제곱해 천정 색으로 섞을지 `blend`(기본 0.5)를 갖는다. 지평선 아래는 높이의 네 배만큼 땅 색으로 섞는다. `cubemap`은 에셋 폴더 기준 이미지 경로로, Bevy가 큐브맵으로 읽는 `.ktx2`·`.dds`나 +X, -X, +Y, -Y, +Z, -Z 여섯 면을 위에서 아래로 쌓은 이미지(높이가 너비의 여섯 배)다. `brightness`(기본 1)는 카메라 노출과 상관없이 고른 색 그대로 보이는 값이 1이고, `rotation`은 위에서 보아 반시계로 돌리는 각도(도)다. 모드를 바꿔도 다른 모드의 값은 남는다. 플러그인은 `Sky`를 씬을 보는 모든 3D 카메라의 Bevy `Skybox`로 그리고(그라데이션은 면마다 64×64 큐브맵으로 만든다), 그 `Skybox`는 저장하지 않는다.
+
+```ron
+"besfa_editor_plugin::sky::Sky": (
+    mode: Gradient,
+    zenith: Srgba((red: 0.2, green: 0.42, blue: 0.78, alpha: 1.0)),
+    horizon: Srgba((red: 0.72, green: 0.84, blue: 0.95, alpha: 1.0)),
+    ground: Srgba((red: 0.32, green: 0.3, blue: 0.28, alpha: 1.0)),
+    blend: 0.5,
+    cubemap: "",
+    brightness: 1.0,
+    rotation: 0.0,
+),
+```
+
 ## 저장 위치
 
 Besfa로 생성한 게임 프로젝트는 씬 외의 에디터 데이터를 프로젝트 루트의 `besfa/` 디렉터리에 저장한다.

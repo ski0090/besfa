@@ -39,7 +39,7 @@ egui(eframe, wgpu DX12) 기반 Windows 데스크톱 에디터다. 프로젝트 �
 
 ### `crates/besfa_editor_plugin`
 
-게임 프로젝트가 의존하는 Bevy 플러그인이다. 씬 파일을 읽고, 에디터가 띄우면 편집 상태로 시작해 에디터의 명령을 받는다. 게임 코드가 쓰는 것으로 지형이 있다: 지형은 `Terrain`(크기와 겉면 색)과 `TerrainFile`(높이 파일 경로)로 씬에 저장되고, 게임 코드는 시스템 인자 `TerrainHeight`의 `at(x, z)`로 그 자리의 땅 높이를 묻는다(캐릭터와 좀비를 땅 위에 세울 때). 흩뿌리기로 놓은 물건에는 `Scattered` 표식이 있어 게임이 골라낼 수 있다.
+게임 프로젝트가 의존하는 Bevy 플러그인이다. 씬 파일을 읽고, 에디터가 띄우면 편집 상태로 시작해 에디터의 명령을 받는다. 게임 코드가 쓰는 것으로 지형이 있다: 지형은 `Terrain`(크기와 겉면 색)과 `TerrainFile`(높이 파일 경로)로 씬에 저장되고, 게임 코드는 시스템 인자 `TerrainHeight`의 `at(x, z)`로 그 자리의 땅 높이를 묻는다(캐릭터와 좀비를 땅 위에 세울 때). 흩뿌리기로 놓은 물건에는 `Scattered` 표식이 있어 게임이 골라낼 수 있다. 씬의 하늘은 `Sky` 컴포넌트(그라데이션 색이나 큐브맵 이미지)이고, 게임 코드가 `Query<&mut Sky>`로 값을 바꾸면 플러그인이 모든 카메라의 하늘을 따라 바꾼다([SKY.md](./SKY.md)).
 
 ### `crates/besfa_mcp`
 
@@ -101,4 +101,5 @@ besfa/
 - [Editor UI](./EDITOR_UI.md)
 - [CLI 계약](./CLI_CONTRACT.md)
 - [에디터 데이터 포맷](./DATA_FORMAT.md)
+- [하늘 편집](./SKY.md)
 - [TODO](./TODO.md)

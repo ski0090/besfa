@@ -22,6 +22,7 @@ const NAME: &str = "bevy_ecs::name::Name";
 const RUNTIME_FIELDS: &[(&str, &[&str])] = &[("bevy_camera::camera::Camera", &["computed"])];
 
 /// What the inspector asks of the game.
+#[derive(Debug, PartialEq)]
 pub enum Action {
     /// A component's type path and its whole new value.
     Set(String, Value),

@@ -29,6 +29,7 @@ mod reimport;
 mod scene;
 mod scene_view;
 mod shot;
+mod sky;
 mod terrain;
 mod thumbnail;
 mod viewport;
@@ -42,6 +43,7 @@ pub use part_changes::{PartChange, PartChanges};
 pub use reimport::Reimported;
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
 pub use scene_view::EditorOnly;
+pub use sky::{Sky, SkyMode};
 pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight};
 
 /// `DefaultPlugins` plus the scene file, adjusted to start in edit mode and
@@ -54,6 +56,7 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .add(scene::ScenePlugin)
         .add(part_changes::PartChangesPlugin)
         .add(terrain::TerrainPlugin)
+        .add(sky::SkyPlugin)
         .add(animation::AnimationStateMachinePlugin);
     if std::env::var_os("BESFA_EDIT_MODE").is_some() {
         plugins = plugins

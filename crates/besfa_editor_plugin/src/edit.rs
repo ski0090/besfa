@@ -24,6 +24,7 @@ use serde_json::Value;
 use crate::{
     scene::{MeshColor, MeshShape, SceneEntity},
     scene_view::keep_parked,
+    sky::Sky,
     terrain::{self, Terrain},
 };
 
@@ -192,6 +193,7 @@ pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Entity {
             Camera3d::default(),
             Transform::from_xyz(0.0, 2.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
         )),
+        SpawnKind::Sky => entity.insert((Name::new("Sky"), Sky::default())),
         SpawnKind::Terrain => {
             // Its file is written when the scene is saved.
             entity.insert((

@@ -484,6 +484,7 @@ impl ModelPreview {
                 parent: None,
                 scene: true,
                 asset: None,
+                sky: false,
             }),
             (id, _) => id
                 .and_then(|id| loaded.model.parts.iter().find(|part| part.id == id))
@@ -990,6 +991,7 @@ mod tests {
             parent,
             scene: true,
             asset: None,
+            sky: false,
         }
     }
 
