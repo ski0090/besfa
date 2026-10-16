@@ -3,6 +3,7 @@
 
 use std::{
     fs,
+    os::windows::process::CommandExt,
     path::{Path, PathBuf},
 };
 
@@ -165,26 +166,19 @@ pub fn open_url(url: &str) {
 /// browser it starts stays open when the editor exits. Launched from a job
 /// that allows no breakaway, as under `cargo run`, it stays in the job.
 fn shell_open(target: &str) {
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     let mut command = std::process::Command::new("explorer");
     command.arg(target);
-    #[cfg(windows)]
+    if command
+        .creation_flags(CREATE_BREAKAWAY_FROM_JOB)
+        .spawn()
+        .is_err()
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-        if command
-            .creation_flags(CREATE_BREAKAWAY_FROM_JOB)
-            .spawn()
-            .is_ok()
-        {
-            return;
-        }
-        command.creation_flags(0);
+        let _ = command.creation_flags(0).spawn();
     }
-    let _ = command.spawn();
 }
 
 /// Asks for a folder with the system dialog; None if cancelled.
-#[cfg(windows)]
 pub fn pick_folder(ok_label: &str) -> Option<String> {
     use windows::{
         Win32::{
@@ -218,11 +212,6 @@ pub fn pick_folder(ok_label: &str) -> Option<String> {
         CoTaskMemFree(Some(name.0 as _));
         path
     }
-}
-
-#[cfg(not(windows))]
-pub fn pick_folder(_: &str) -> Option<String> {
-    None
 }
 
 /// The git revision a Cargo.lock pins `besfa_editor_plugin` to, or None when

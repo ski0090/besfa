@@ -134,7 +134,6 @@ fn style(ctx: &egui::Context) {
 /// exits. Without it a crashed editor leaves cargo and a window-less game
 /// running. The handle is left open on purpose. What must outlive the
 /// editor, like a browser it opened, breaks away from the job.
-#[cfg(windows)]
 fn kill_children_with_editor() {
     use windows::Win32::System::{JobObjects::*, Threading::GetCurrentProcess};
     // SAFETY: plain Win32 calls on a job this process owns.
@@ -154,6 +153,3 @@ fn kill_children_with_editor() {
         let _ = AssignProcessToJobObject(job, GetCurrentProcess());
     }
 }
-
-#[cfg(not(windows))]
-fn kill_children_with_editor() {}

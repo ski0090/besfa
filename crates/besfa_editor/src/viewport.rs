@@ -334,7 +334,6 @@ fn key_code(key: Key) -> Option<String> {
     })
 }
 
-#[cfg(windows)]
 mod shared {
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -453,23 +452,6 @@ mod shared {
             )
         };
         Ok((texture, handle, name))
-    }
-}
-
-#[cfg(not(windows))]
-mod shared {
-    pub(super) struct Handle;
-
-    impl Handle {
-        pub(super) fn close(&mut self) {}
-    }
-
-    pub(super) fn create(
-        _: &wgpu::Device,
-        _: u32,
-        _: u32,
-    ) -> Result<(wgpu::Texture, Handle, String), String> {
-        Err("the viewport is only supported on Windows".into())
     }
 }
 

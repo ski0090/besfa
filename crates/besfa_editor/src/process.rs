@@ -4,6 +4,7 @@
 
 use std::{
     io::{self, Read, Write},
+    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver, Sender},
@@ -26,13 +27,9 @@ pub struct CliProcess {
 
 /// Starts console programs without a console window of their own.
 pub fn command(program: &str) -> Command {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut command = Command::new(on_path(program));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    command.creation_flags(CREATE_NO_WINDOW);
     command
 }
 
