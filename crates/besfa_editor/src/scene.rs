@@ -151,10 +151,6 @@ impl Scene {
         }
     }
 
-    pub fn mark_dirty(&mut self) {
-        self.dirty = true;
-    }
-
     /// A new game process: what the old one reported no longer holds, and it
     /// starts from the scene file. The selection stays, so the same entity is
     /// picked up after a Stop.
@@ -251,12 +247,6 @@ impl EditHistory {
     pub fn discard(&mut self, seq: u64) {
         self.done.retain(|edit| edit.seq != Some(seq));
         self.undone.retain(|edit| edit.seq != Some(seq));
-    }
-
-    /// A new game process: the ids belong to the old one.
-    pub fn clear(&mut self) {
-        self.done.clear();
-        self.undone.clear();
     }
 }
 
@@ -367,7 +357,7 @@ mod tests {
         let mut scene = Scene::default();
         scene.select(Some(7));
         scene.handle(r#"@besfa {"type":"entities","entities":[{"id":7}]}"#);
-        scene.mark_dirty();
+        scene.dirty = true;
         scene.reset();
         assert!(scene.entities.is_empty());
         assert_eq!(scene.selected, Some(7));
@@ -391,7 +381,7 @@ mod tests {
         scene.handle(r#"@besfa {"type":"selected","id":9}"#);
         assert_eq!(scene.selected, Some(9));
         assert!(scene.components.is_empty());
-        scene.mark_dirty();
+        scene.dirty = true;
         scene.handle(r#"@besfa {"type":"saved","error":"denied"}"#);
         assert!(scene.dirty, "a failed save keeps the mark");
         scene.handle(r#"@besfa {"type":"saved","error":null}"#);
@@ -450,7 +440,5 @@ mod tests {
             Some(vec![Command::Restore { id: 1 }]),
             "a failed change leaves nothing to undo"
         );
-        history.clear();
-        assert!(!history.can_undo() && !history.can_redo());
     }
 }

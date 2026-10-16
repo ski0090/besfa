@@ -401,7 +401,7 @@ impl Editor {
     fn launch(&mut self, play: bool, ctx: &egui::Context) {
         self.starting = false;
         self.scene.reset();
-        self.history.clear();
+        self.history = crate::scene::EditHistory::default();
         // The previous game has exited, so nothing renders into them any more.
         self.retired.clear();
         // Requests are numbered per game process.
@@ -521,7 +521,7 @@ impl Editor {
             });
         }
         if !self.playing {
-            self.scene.mark_dirty();
+            self.scene.dirty = true;
         }
     }
 
@@ -558,7 +558,7 @@ impl Editor {
         };
         for command in commands.into_iter().flatten() {
             self.send(command);
-            self.scene.mark_dirty();
+            self.scene.dirty = true;
         }
     }
 
@@ -585,7 +585,7 @@ impl Editor {
                     redo: moves.into_iter().map(|m| set(m.id, m.after)).collect(),
                     seq: None,
                 });
-                self.scene.mark_dirty();
+                self.scene.dirty = true;
             }
             // One scatter stroke: what it placed and what it erased.
             Report::Scattered { added, removed } => {
@@ -604,7 +604,7 @@ impl Editor {
                         .collect(),
                     seq: None,
                 });
-                self.scene.mark_dirty();
+                self.scene.dirty = true;
             }
             // A stroke the scene view's brush painted.
             Report::TerrainPainted { stroke, .. } => {
@@ -614,7 +614,7 @@ impl Editor {
                     redo: vec![restore(false)],
                     seq: None,
                 });
-                self.scene.mark_dirty();
+                self.scene.dirty = true;
             }
             Report::Spawned { id } => self.record(Edit {
                 undo: vec![Command::Delete { id }],
@@ -928,13 +928,6 @@ impl Editor {
         }
     }
 
-    fn close_preview(&mut self) {
-        if self.previewing {
-            self.show_preview(false);
-        }
-        self.preview = None;
-    }
-
     /// The Scene tab and the model preview's tab, while one is open.
     fn tabs(&mut self, ui: &mut Ui) {
         let Some(preview) = &self.preview else {
@@ -963,7 +956,10 @@ impl Editor {
                 .clicked();
         });
         if close {
-            self.close_preview();
+            if self.previewing {
+                self.show_preview(false);
+            }
+            self.preview = None;
         } else if let Some(show) = show {
             self.show_preview(show);
         }
@@ -1131,16 +1127,12 @@ impl Editor {
         let busy = self.starting || prebuild.running();
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                let (label, play) = if self.playing {
-                    ("⏹ Stop", false)
-                } else {
-                    ("▶ Play", true)
-                };
+                let label = if self.playing { "⏹ Stop" } else { "▶ Play" };
                 if ui.add_enabled(!busy, Button::new(label)).clicked() {
-                    if play {
-                        self.play(ctx)
-                    } else {
+                    if self.playing {
                         self.restart(ctx)
+                    } else {
+                        self.play(ctx)
                     }
                 }
                 ui.add_space(12.0);
@@ -1187,11 +1179,10 @@ impl Editor {
         }
         // Different, not necessarily older: a push made while the editor
         // runs leaves the project ahead of the prebuild.
-        let differs = self.plugin_revision.as_ref().is_some_and(|project| {
-            self.latest_plugin_revision
-                .as_ref()
-                .is_some_and(|latest| latest != project)
-        });
+        let differs = matches!(
+            (&self.plugin_revision, &self.latest_plugin_revision),
+            (Some(project), Some(latest)) if project != latest
+        );
         let (icon, color, state) = if differs || warning.is_some() {
             ("⚠", WARNING, "differs from")
         } else {
@@ -1226,8 +1217,7 @@ impl Editor {
         };
         let scale = (panel.width() / size.x).min(panel.height() / size.y);
         let rect = egui::Rect::from_center_size(panel.center(), size * scale);
-        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        ui.painter().image(texture, rect, uv, Color32::WHITE);
+        egui::Image::new((texture, size)).paint_at(ui, rect);
         let mut commands = Vec::new();
         let response = self.input.ui(ui, rect, size, self.playing, &mut |command| {
             commands.push(command)
@@ -1410,23 +1400,25 @@ impl Editor {
 /// Why a game whose plugin speaks protocol `version` needs a look, if it
 /// does.
 fn protocol_warning(version: u32) -> Option<String> {
-    use std::cmp::Ordering;
-    match version.cmp(&VERSION) {
-        Ordering::Equal => None,
-        Ordering::Less if version == 0 => Some(
+    if version == VERSION {
+        return None;
+    }
+    if version == 0 {
+        return Some(
             "The game's besfa_editor_plugin predates protocol versions, so failed edits \
              stay in the undo history. Update the plugin."
                 .into(),
-        ),
-        Ordering::Less => Some(format!(
-            "The game's besfa_editor_plugin speaks protocol {version}, older than this \
-             editor's {VERSION}. Update the plugin."
-        )),
-        Ordering::Greater => Some(format!(
-            "The game's besfa_editor_plugin speaks protocol {version}, newer than this \
-             editor's {VERSION}. Update the editor."
-        )),
+        );
     }
+    let (age, fix) = if version < VERSION {
+        ("older", "plugin")
+    } else {
+        ("newer", "editor")
+    };
+    Some(format!(
+        "The game's besfa_editor_plugin speaks protocol {version}, {age} than this \
+         editor's {VERSION}. Update the {fix}."
+    ))
 }
 
 impl Drop for Editor {
@@ -1448,7 +1440,7 @@ struct SourceWatch {
     directory: PathBuf,
     files: Vec<(PathBuf, SystemTime)>,
     polled: Instant,
-    changed: Option<Instant>,
+    changed: bool,
 }
 
 impl SourceWatch {
@@ -1457,7 +1449,7 @@ impl SourceWatch {
             files: rust_files(&directory),
             directory,
             polled: Instant::now(),
-            changed: None,
+            changed: false,
         }
     }
 
@@ -1471,10 +1463,10 @@ impl SourceWatch {
         let files = rust_files(&self.directory);
         if files != self.files {
             self.files = files;
-            self.changed = Some(Instant::now());
+            self.changed = true;
             return false;
         }
-        self.changed.take().is_some()
+        std::mem::take(&mut self.changed)
     }
 }
 
