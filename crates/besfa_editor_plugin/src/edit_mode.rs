@@ -312,7 +312,7 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
                 return Ok(());
             }
             match world.get_resource_mut::<SceneView>() {
-                Some(mut view) if view.active => view.events.push(event),
+                Some(mut view) if !view.stopped => view.events.push(event),
                 _ => input::pointer(world, event),
             }
             Ok(())
@@ -364,7 +364,7 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             if path.is_some()
                 && !world
                     .get_resource::<SceneView>()
-                    .is_some_and(|view| view.active)
+                    .is_some_and(|view| !view.stopped)
             {
                 Err("models are previewed in edit mode".into())
             } else {

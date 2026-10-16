@@ -33,10 +33,10 @@ use crate::{
 pub struct EditorOnly;
 
 /// The scene view's state, fed by the editor's commands.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub(crate) struct SceneView {
-    /// Off once the game plays.
-    pub(crate) active: bool,
+    /// Set once the game plays.
+    pub(crate) stopped: bool,
     pub(crate) tool: Tool,
     /// Pointer events since the last frame.
     pub(crate) events: Vec<PointerEvent>,
@@ -62,27 +62,6 @@ pub(crate) struct SceneView {
     pub(crate) brush_at: Option<Vec3>,
     /// Scatters with the left button instead of selecting, while set.
     pub(crate) scatter: Option<ScatterBrush>,
-}
-
-impl Default for SceneView {
-    fn default() -> Self {
-        Self {
-            active: true,
-            tool: Tool::default(),
-            events: Vec::new(),
-            focus: false,
-            fly: Vec3::ZERO,
-            fast: false,
-            looking: false,
-            pointer: Vec2::ZERO,
-            pressed: None,
-            hovered: None,
-            drag: None,
-            brush: None,
-            brush_at: None,
-            scatter: None,
-        }
-    }
 }
 
 /// A handle being dragged.
@@ -194,7 +173,7 @@ impl Plugin for SceneViewPlugin {
                 PostUpdate,
                 (
                     draw.after(TransformSystems::Propagate).run_if(shown),
-                    park_game_cameras.run_if(|view: Res<SceneView>| view.active),
+                    park_game_cameras.run_if(|view: Res<SceneView>| !view.stopped),
                 ),
             );
     }
@@ -202,14 +181,14 @@ impl Plugin for SceneViewPlugin {
 
 /// In edit mode, unless the model preview shows instead.
 fn shown(view: Res<SceneView>, preview: Option<Res<ModelPreview>>) -> bool {
-    view.active && !preview.is_some_and(|preview| preview.showing)
+    !view.stopped && !preview.is_some_and(|preview| preview.showing)
 }
 
 /// Stops the scene view and removes the editor camera, so the game's own
 /// cameras show.
 pub(crate) fn stop(world: &mut World) {
     if let Some(mut view) = world.get_resource_mut::<SceneView>() {
-        view.active = false;
+        view.stopped = true;
     }
     let cameras: Vec<Entity> = world
         .query_filtered::<Entity, With<EditorCamera>>()
