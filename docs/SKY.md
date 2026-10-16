@@ -16,7 +16,7 @@
 | 그라데이션(절차적) | 색 세 개라 게임이 시각에 따라 보간하기 쉽다. 에셋이 필요 없다 | 구름·별 같은 무늬가 없다 |
 | 큐브맵 이미지 | 그린 하늘·HDR 사진을 그대로 쓴다 | 하루 시계로 색을 바꾸기 어렵다(밝기와 회전만) |
 
-둘 다 지원한다. 두 방식 모두 Bevy 0.20의 `Skybox`(카메라 컴포넌트, 큐브맵 이미지)로 그린다. 그라데이션은 플러그인이 CPU에서 작은 큐브맵(면마다 64×64)을 만들어 같은 `Skybox`에 넣으므로, 셰이더를 새로 쓰지 않고 무한히 먼 배경·깊이 처리·노출을 Bevy가 맡는다. 값이 바뀐 프레임에만 다시 만든다(64×64×6 픽셀, 하루 시계가 매 프레임 바꿔도 가볍다).
+둘 다 지원한다. 두 방식 모두 Bevy 0.20의 `Skybox`(카메라 컴포넌트, 큐브맵 이미지)로 그린다. 그라데이션은 플러그인이 CPU에서 큐브맵(면마다 256×256)을 칠해 같은 `Skybox`에 넣으므로, 셰이더를 새로 쓰지 않고 무한히 먼 배경·깊이 처리·노출을 Bevy가 맡는다. 해와 달 원반도 이 큐브맵에 함께 칠한다. 값이 바뀐 프레임에만 다시 칠한다(약 39만 픽셀, 1.5 MB. 하루 시계가 매 프레임 해를 옮겨도 한 프레임에 몇 ms다). 면마다 256이면 1도가 약 2.8픽셀이라 지름 3도 원반이 8픽셀쯤으로, 샘플러의 선형 보간과 원반 가장자리의 부드러운 경계로 계단이 보이지 않는다.
 
 절차적 대기 산란(Bevy의 `Atmosphere`)은 해 방향으로 하늘색이 정해져 "하늘색을 직접 고른다"는 요구와 맞지 않고, 카메라마다 무거운 설정이 필요해 이번에는 하지 않는다.
 
@@ -34,12 +34,33 @@ pub struct Sky {
     pub cubemap: String,      // 에셋 폴더 기준 이미지 경로
     pub brightness: f32,      // 1이면 고른 색 그대로(카메라 노출을 상쇄한다)
     pub rotation: f32,        // 하늘을 위에서 보아 반시계로 돌리는 각도(도)
+    pub sun: Sun,
+    pub moon: Moon,
+}
+
+pub struct Sun {
+    pub show: bool,           // 기본 true
+    pub direction: Vec3,      // 보는 사람에게서 해 쪽으로(월드 기준, 길이는 상관없다)
+    pub size: f32,            // 겉보기 지름(도), 기본 3
+    pub color: Color,         // 원반과 둘레 빛의 색
+}
+
+pub struct Moon {
+    pub show: bool,           // 기본 false
+    pub direction: Vec3,
+    pub size: f32,            // 기본 4
+    pub color: Color,         // 밝은 쪽의 색
+    pub phase: f32,           // 0 삭, 0.25 상현(오른쪽 반), 0.5 보름, 0.75 하현(왼쪽 반), 1 다시 삭
 }
 ```
 
 - 모드를 바꿔도 다른 모드의 값은 남는다. 게임이 모드를 바꿔 낮은 그라데이션, 밤은 별 큐브맵처럼 쓸 수도 있다.
 - 그라데이션 색: 방향의 높이 `y`(-1~1)가 0 이상이면 `horizon`에서 `zenith`로 `y^blend`만큼, 0 아래면 `horizon`에서 `ground`로 `min(1, -4y)`만큼 선형 색 공간에서 섞는다.
 - 큐브맵: Bevy가 읽는 큐브맵(`.ktx2`, `.dds`)이나 여섯 면(+X, -X, +Y, -Y, +Z, -Z)을 세로로 쌓은 PNG·JPG(높이 = 너비 × 6). 쌓은 이미지는 플러그인이 큐브맵으로 바꿔 읽는다. 아직 읽는 중이거나 읽지 못하면 그라데이션을 보이고, 실패는 로그에 남긴다.
+- 해: 원반은 `color`로 칠하고, 둘레로 지름의 네 배까지 옅어지는 빛을 더한다. 방향은 월드 기준이라 `rotation`과 상관없이 그 방향에 보인다. 지평선 아래(땅 색 부분)에서는 잘린다.
+- 달: 원반 안에서 위상으로 정한 쪽만 `color`로 칠하고 어두운 쪽은 하늘이 비친다. 위상은 0~1을 한 바퀴로 보고, 원반을 공으로 여겨 빛이 `phase`에 따라 뒤(삭)에서 오른쪽(상현), 앞(보름), 왼쪽(하현)으로 돈다고 보고 경계를 부드럽게 그린다. 북반구에서 보듯 차는 달은 오른쪽이 밝다. 해와 마찬가지로 지평선 아래에서 잘린다.
+- 해와 달은 그라데이션 모드에서만 그린다. 큐브맵 모드에서는 이미지가 하늘 전체이므로 그리지 않는다.
+- 게임은 빛의 방향을 그대로 쓸 수 있다: `DirectionalLight`는 Transform의 앞(-Z)으로 비추므로 해 방향은 `transform.back()`이다.
 - 씬에 `Sky`가 여럿이면 처음 찾은 것을 쓴다. `Sky`가 없으면 플러그인은 아무것도 하지 않는다(지금처럼 `ClearColor`).
 
 ## 플러그인 동작
@@ -60,17 +81,28 @@ pub struct Sky {
 - 오른쪽 패널에 Inspector, Scatter, Animation 옆의 Sky 탭. Window > Sky로도 연다.
 - 탭을 열면 씬의 하늘 엔티티를 선택해(그래야 게임이 값을 보고한다) 그 `Sky`를 보여 준다. 하늘이 없으면 Add sky 버튼, 플러그인이 버전 10보다 오래되면 갱신하라는 안내.
 - Gradient·Cubemap 고르기, 모드별로 Zenith·Horizon·Ground 색 버튼과 Blend 막대, 또는 이미지 경로 칸(Assets 탭에서 이미지를 끌어 놓을 수 있다). 공통으로 Brightness, Rotation.
+- 그라데이션 모드에서 Sun과 Moon 묶음: Show 체크 상자, 색 버튼, Size(도), 방향은 Elevation(지평선 위 각도, -90~90)과 Azimuth(북쪽 -Z에서 동쪽 +X로 도는 각도, 0~360) 막대로 고친다. Moon에는 Phase 막대(0~1)와 그 위상의 이름(New, Waxing crescent, First quarter, Waxing gibbous, Full, Waning gibbous, Last quarter, Waning crescent)이 있다.
 - 바꿀 때마다 컴포넌트 전체를 `set`으로 보낸다. Inspector의 변경처럼 되돌리기와 저장하지 않은 변경 표시에 들어가고, 실행 상태에서 바꾼 것은 Stop하면 사라진다. 실행 상태에서는 게임이 바꾸는 값을 따라 보여 준다.
 
 ## 게임에서 쓰기
 
 ```rust
-use besfa_editor_plugin::{Sky, SkyMode};
+use besfa_editor_plugin::Sky;
 
-fn day_sky(clock: Res<DayClock>, mut skies: Query<&mut Sky>) {
+fn day_sky(
+    clock: Res<DayClock>,
+    daylight: Single<&Transform, With<DirectionalLight>>,
+    mut skies: Query<&mut Sky>,
+) {
     for mut sky in &mut skies {
         sky.zenith = clock.zenith_color();
         sky.horizon = clock.horizon_color();
+        // 빛이 비추는 반대쪽이 해다.
+        sky.sun.direction = *daylight.back();
+        sky.sun.show = clock.is_day();
+        sky.moon.direction = *daylight.back();
+        sky.moon.show = !clock.is_day();
+        sky.moon.phase = (clock.day() as f32 / 8.0).fract();
     }
 }
 ```
@@ -78,11 +110,11 @@ fn day_sky(clock: Res<DayClock>, mut skies: Query<&mut Sky>) {
 ## 하지 않는 것(후속)
 
 - 하늘이 장면 조명(환경광, `EnvironmentMapLight`)에 주는 영향. 지금은 배경만 그린다.
-- 해·달 원반, 구름, 별 같은 절차적 무늬.
+- 구름, 별 같은 절차적 무늬. 큐브맵 모드 위의 해·달.
 - HDR(`.hdr`/`.exr`) 정거 원통 이미지를 큐브맵으로 바꾸기.
 
 ## 테스트
 
-- 플러그인: 그라데이션 색 계산, 큐브맵 이미지 생성, 카메라에 `Skybox`가 들어가고 값을 바꾸면 따라가며 `Sky`를 떼면 빠지는지, 씬 저장·읽기 왕복에서 `Sky`가 남고 `Skybox`는 빠지는지.
+- 플러그인: 그라데이션 색 계산, 해 원반과 숨기기, 달 위상(삭·보름·상현), 회전해도 해가 월드 방향에 남는지, 큐브맵 이미지 생성, 카메라에 `Skybox`가 들어가고 값을 바꾸면 따라가며 `Sky`를 떼면 빠지는지, 씬 저장·읽기 왕복에서 `Sky`가 남고 `Skybox`는 빠지는지.
 - 프로토콜: `SpawnKind::Sky`, `EntityInfo.sky`의 직렬화와 옛 보고와의 호환.
 - 에디터: Sky 탭이 하늘이 없으면 Add sky를, 있으면 색을 보여 주고 바꾼 값을 `set`으로 내는지.

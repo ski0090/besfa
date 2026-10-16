@@ -4,8 +4,14 @@
 //! follows the component whenever it changes, so a game's code can move
 //! the sky by writing to it, in edit mode and in play alike.
 //!
-//! A gradient is painted into a small cubemap on the CPU, so both kinds
-//! share the one `Skybox` path and need no shader of their own.
+//! A gradient, with the sun and moon over it, is painted into a cubemap on
+//! the CPU, so both kinds share the one `Skybox` path and need no shader of
+//! their own.
+
+use std::{
+    f32::consts::{PI, TAU},
+    sync::OnceLock,
+};
 
 use bevy::{
     asset::{LoadState, RenderAssetUsages},
@@ -18,8 +24,9 @@ use bevy::{
     },
 };
 
-/// Pixels along a side of each face of a gradient's cubemap.
-const FACE: u32 = 64;
+/// Pixels along a side of each face of a gradient's cubemap: about three
+/// a degree, so a sun a few degrees across is a round disc.
+const FACE: u32 = 256;
 
 pub(crate) struct SkyPlugin;
 
@@ -54,6 +61,61 @@ pub struct Sky {
     pub brightness: f32,
     /// Degrees the sky turns counterclockwise, seen from above.
     pub rotation: f32,
+    /// Drawn on the gradient only, as is the moon.
+    pub sun: Sun,
+    pub moon: Moon,
+}
+
+/// The sun's disc and the glow around it.
+#[derive(Reflect, Clone, Debug, PartialEq)]
+#[reflect(Default)]
+pub struct Sun {
+    pub show: bool,
+    /// Toward the sun in the world, of any length: a `DirectionalLight`'s
+    /// `Transform::back()`, since it shines forward.
+    pub direction: Vec3,
+    /// Degrees across.
+    pub size: f32,
+    pub color: Color,
+}
+
+impl Default for Sun {
+    fn default() -> Self {
+        Self {
+            show: true,
+            direction: Vec3::new(0.4, 0.6, -0.5),
+            size: 3.0,
+            color: Color::srgb(1.0, 0.96, 0.86),
+        }
+    }
+}
+
+/// The moon's disc, lit as far as its phase.
+#[derive(Reflect, Clone, Debug, PartialEq)]
+#[reflect(Default)]
+pub struct Moon {
+    pub show: bool,
+    /// Toward the moon in the world, of any length.
+    pub direction: Vec3,
+    /// Degrees across.
+    pub size: f32,
+    /// The lit side's color; the dark side shows the sky.
+    pub color: Color,
+    /// Around once from 0 to 1: 0 new, 0.25 first quarter (the right half
+    /// lit), 0.5 full, 0.75 last quarter (the left half).
+    pub phase: f32,
+}
+
+impl Default for Moon {
+    fn default() -> Self {
+        Self {
+            show: false,
+            direction: Vec3::new(-0.4, 0.5, 0.5),
+            size: 4.0,
+            color: Color::srgb(0.88, 0.90, 0.95),
+            phase: 0.5,
+        }
+    }
 }
 
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -77,6 +139,8 @@ impl Default for Sky {
             cubemap: String::new(),
             brightness: 1.0,
             rotation: 0.0,
+            sun: Sun::default(),
+            moon: Moon::default(),
         }
     }
 }
@@ -94,6 +158,63 @@ impl Sky {
         };
         horizon.mix(&other.to_linear(), amount)
     }
+
+    /// What the gradient shows along the unit `direction` in the world:
+    /// its color with the sun and moon over it, which the ground cuts off.
+    pub fn shade(&self, direction: Vec3) -> LinearRgba {
+        let mut color = self.color(direction);
+        if direction.y < 0.0 {
+            return color;
+        }
+        if self.sun.show {
+            let sun = self.sun.direction.normalize_or(Vec3::Y);
+            let radius = (self.sun.size.max(0.01) / 2.0).to_radians();
+            let cosine = direction.dot(sun);
+            // The glow reaches four times the radius out.
+            if cosine > (radius * 4.0).min(PI).cos() {
+                let angle = cosine.clamp(-1.0, 1.0).acos();
+                let tint = self.sun.color.to_linear();
+                let glow = (1.0 - angle / (radius * 4.0)).max(0.0).powi(2) * 0.35;
+                color = color + tint * glow;
+                color = color.mix(&tint, edge(radius - angle));
+            }
+        }
+        if self.moon.show {
+            color = self.moon_over(color, direction);
+        }
+        color
+    }
+
+    /// `color` with the moon's lit side over it, where `direction` meets it.
+    fn moon_over(&self, color: LinearRgba, direction: Vec3) -> LinearRgba {
+        let moon = self.moon.direction.normalize_or(Vec3::Y);
+        let radius = (self.moon.size.max(0.01) / 2.0).to_radians();
+        if direction.dot(moon) < (radius + EDGE).min(PI).cos() {
+            return color;
+        }
+        // The disc as seen: up toward the zenith, right as the eye has it.
+        let up = (Vec3::Y - moon * moon.y).normalize_or(Vec3::NEG_Z);
+        let right = moon.cross(up);
+        let across = radius.sin();
+        let (x, y) = (direction.dot(right) / across, direction.dot(up) / across);
+        let off_center = (x * x + y * y).sqrt();
+        let inside = edge((1.0 - off_center) * radius);
+        // The light goes round once a phase: from behind it, to its right,
+        // to the eye's side, to its left. `z` faces the eye.
+        let z = (1.0 - off_center.min(1.0).powi(2)).sqrt();
+        let turn = self.moon.phase * TAU;
+        let lit = x.min(1.0) * turn.sin() - z * turn.cos();
+        let lit = ((lit + 0.08) / 0.16).clamp(0.0, 1.0);
+        color.mix(&self.moon.color.to_linear(), inside * lit)
+    }
+}
+
+/// About a pixel of the cubemap, in radians, over which a disc's edge fades.
+const EDGE: f32 = std::f32::consts::FRAC_PI_2 / FACE as f32;
+
+/// How much of a pixel `inside` radians within an edge is covered.
+fn edge(inside: f32) -> f32 {
+    (inside / EDGE + 0.5).clamp(0.0, 1.0)
 }
 
 /// Put on a camera with the `Skybox` this plugin gave it, which goes with
@@ -232,19 +353,18 @@ fn show(
     }
 }
 
-/// The gradient as a cubemap, sRGB, faces in Bevy's order.
+/// The gradient with the sun and moon as a cubemap, sRGB, faces in Bevy's
+/// order. The skybox turns the cubemap by the sky's rotation and samples it
+/// with Z flipped, so each texel is painted with what shows in the world
+/// where it ends up.
 fn gradient_image(sky: &Sky) -> Image {
     let format = TextureFormat::Rgba8UnormSrgb;
-    let mut data = Vec::with_capacity((FACE * FACE * 6) as usize * format.pixel_size().unwrap());
-    for face in 0..6 {
-        for y in 0..FACE {
-            for x in 0..FACE {
-                let u = (x as f32 + 0.5) / FACE as f32 * 2.0 - 1.0;
-                let v = (y as f32 + 0.5) / FACE as f32 * 2.0 - 1.0;
-                let color = Srgba::from(sky.color(face_direction(face, u, v)));
-                data.extend_from_slice(&color.to_u8_array());
-            }
-        }
+    let turn = Quat::from_rotation_y(sky.rotation.to_radians());
+    let mut data = Vec::with_capacity(texels().len() * format.pixel_size().unwrap());
+    for texel in texels() {
+        let world = turn * Vec3::new(texel.x, texel.y, -texel.z);
+        let color = Srgba::from(sky.shade(world));
+        data.extend_from_slice(&color.to_u8_array());
     }
     let mut image = Image::new(
         Extent3d {
@@ -260,6 +380,25 @@ fn gradient_image(sky: &Sky) -> Image {
     );
     image.texture_view_descriptor = Some(cube_view());
     image
+}
+
+/// The unit direction through each texel of a cubemap, face by face, row
+/// by row.
+fn texels() -> &'static [Vec3] {
+    static TEXELS: OnceLock<Vec<Vec3>> = OnceLock::new();
+    TEXELS.get_or_init(|| {
+        let mut texels = Vec::with_capacity((FACE * FACE * 6) as usize);
+        for face in 0..6 {
+            for y in 0..FACE {
+                for x in 0..FACE {
+                    let u = (x as f32 + 0.5) / FACE as f32 * 2.0 - 1.0;
+                    let v = (y as f32 + 0.5) / FACE as f32 * 2.0 - 1.0;
+                    texels.push(face_direction(face, u, v).normalize());
+                }
+            }
+        }
+        texels
+    })
 }
 
 /// The direction through the point `u`, `v` (each -1 to 1, `v` down) of a
@@ -334,6 +473,79 @@ mod tests {
         );
         let half = sky.color(Vec3::new(1.0, 1.0, 0.0));
         assert!(!close(half, sky.zenith) && !close(half, sky.horizon));
+    }
+
+    #[test]
+    fn shows_the_sun_where_it_is_unless_hidden_or_below_the_ground() {
+        let mut sky = Sky::default();
+        let sun = sky.sun.direction.normalize();
+        assert!(close(sky.shade(sun), sky.sun.color));
+        let beside = Quat::from_rotation_y(0.5) * sun;
+        assert!(
+            close(sky.shade(beside), Color::from(sky.color(beside))),
+            "far off"
+        );
+
+        sky.sun.show = false;
+        assert!(close(sky.shade(sun), Color::from(sky.color(sun))));
+        sky.sun.show = true;
+        sky.sun.direction = Vec3::new(0.0, -0.5, 1.0);
+        let down = sky.sun.direction.normalize();
+        assert!(close(sky.shade(down), sky.ground), "set below the horizon");
+    }
+
+    #[test]
+    fn lights_the_moon_as_far_as_its_phase() {
+        let mut sky = Sky::default();
+        sky.sun.show = false;
+        sky.moon.show = true;
+        let moon = sky.moon.direction.normalize();
+        let up = (Vec3::Y - moon * moon.y).normalize();
+        let right = moon.cross(up);
+        let half = (sky.moon.size / 4.0).to_radians().sin();
+        let (east, west) = (
+            (moon + right * half).normalize(),
+            (moon - right * half).normalize(),
+        );
+        let lit = |sky: &Sky, at: Vec3| close(sky.shade(at), sky.moon.color);
+        let dark = |sky: &Sky, at: Vec3| close(sky.shade(at), Color::from(sky.color(at)));
+
+        sky.moon.phase = 0.5;
+        assert!(
+            lit(&sky, moon) && lit(&sky, east) && lit(&sky, west),
+            "full"
+        );
+        sky.moon.phase = 0.0;
+        assert!(
+            dark(&sky, moon) && dark(&sky, east) && dark(&sky, west),
+            "new"
+        );
+        sky.moon.phase = 0.25;
+        assert!(lit(&sky, east) && dark(&sky, west), "first quarter");
+        sky.moon.phase = 0.75;
+        assert!(dark(&sky, east) && lit(&sky, west), "last quarter");
+    }
+
+    #[test]
+    fn keeps_the_sun_where_it_is_in_the_world_however_the_sky_turns() {
+        let sky = Sky {
+            rotation: 90.0,
+            ..default()
+        };
+        let sun = sky.sun.direction.normalize();
+        // The skybox turns the texel by the rotation and flips its Z.
+        let seen = Quat::from_rotation_y(-90f32.to_radians()) * sun;
+        let texel = Vec3::new(seen.x, seen.y, -seen.z);
+        let nearest = (0..texels().len())
+            .max_by(|&a, &b| texels()[a].dot(texel).total_cmp(&texels()[b].dot(texel)))
+            .unwrap();
+        let image = gradient_image(&sky);
+        let pixel = &image.data.as_ref().unwrap()[nearest * 4..nearest * 4 + 3];
+        let want = Srgba::from(sky.sun.color).to_u8_array();
+        assert!(
+            pixel.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 3),
+            "{pixel:?}"
+        );
     }
 
     #[test]

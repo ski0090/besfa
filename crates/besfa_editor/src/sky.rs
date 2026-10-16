@@ -88,20 +88,7 @@ fn edit(ui: &mut Ui, id: Id, sky: &mut Value) {
             ("horizon", "Horizon"),
             ("ground", "Ground"),
         ] {
-            ui.horizontal(|ui| {
-                match srgb(&sky[field]) {
-                    Some(mut color) => {
-                        if ui.color_edit_button_srgb(&mut color).changed() {
-                            sky[field] = srgba(color);
-                        }
-                    }
-                    None => {
-                        ui.label(RichText::new("?").color(MUTED))
-                            .on_hover_text("Set as another color space");
-                    }
-                }
-                ui.label(label);
-            });
+            color(ui, &mut sky[field], label);
         }
         number(ui, sky, "blend", |number| {
             Slider::new(number, 0.05..=4.0)
@@ -109,6 +96,13 @@ fn edit(ui: &mut Ui, id: Id, sky: &mut Value) {
                 .text("Blend")
         })
         .on_hover_text("How far the horizon's color reaches up; less shows more of the zenith");
+        // Plugins from before the sun and moon have neither.
+        for (field, label) in [("sun", "Sun"), ("moon", "Moon")] {
+            if let Some(body) = sky.get_mut(field) {
+                section(ui, label);
+                disc(ui, body, field == "moon");
+            }
+        }
     }
     section(ui, "Both");
     number(ui, sky, "brightness", |number| {
@@ -121,6 +115,106 @@ fn edit(ui: &mut Ui, id: Id, sky: &mut Value) {
             .text("Rotation")
     })
     .on_hover_text("Turns the sky counterclockwise, seen from above");
+}
+
+/// A color button and its label; `?` for a color it cannot show.
+fn color(ui: &mut Ui, value: &mut Value, label: &str) {
+    ui.horizontal(|ui| {
+        match srgb(value) {
+            Some(mut color) => {
+                if ui.color_edit_button_srgb(&mut color).changed() {
+                    *value = srgba(color);
+                }
+            }
+            None => {
+                ui.label(RichText::new("?").color(MUTED))
+                    .on_hover_text("Set as another color space");
+            }
+        }
+        ui.label(label);
+    });
+}
+
+/// The sun's or the moon's fields; the moon has a phase.
+fn disc(ui: &mut Ui, body: &mut Value, moon: bool) {
+    let mut show = body["show"].as_bool().unwrap_or_default();
+    if ui.checkbox(&mut show, "Show").changed() {
+        body["show"] = show.into();
+    }
+    color(ui, &mut body["color"], "Color");
+    number(ui, body, "size", |number| {
+        Slider::new(number, 0.5..=30.0)
+            .logarithmic(true)
+            .suffix("°")
+            .text("Size")
+    })
+    .on_hover_text("Degrees across");
+    let [mut elevation, mut azimuth] = angles(&body["direction"]);
+    let raised = ui
+        .add(
+            Slider::new(&mut elevation, -90.0..=90.0)
+                .suffix("°")
+                .text("Elevation"),
+        )
+        .on_hover_text("Above the horizon");
+    let turned = ui
+        .add(
+            Slider::new(&mut azimuth, 0.0..=360.0)
+                .suffix("°")
+                .text("Azimuth"),
+        )
+        .on_hover_text("From north (-Z) toward east (+X)");
+    if raised.changed() || turned.changed() {
+        body["direction"] = direction(elevation, azimuth);
+    }
+    if moon {
+        number(ui, body, "phase", |number| {
+            Slider::new(number, 0.0..=1.0).text("Phase")
+        })
+        .on_hover_text("0 new, 0.25 first quarter, 0.5 full, 0.75 last quarter");
+        let phase = body["phase"].as_f64().unwrap_or_default() as f32;
+        tag(ui, phase_name(phase));
+    }
+}
+
+/// A direction `[x, y, z]` as its elevation and azimuth in degrees.
+fn angles(direction: &Value) -> [f32; 2] {
+    let at = |index: usize| direction[index].as_f64().unwrap_or_default() as f32;
+    let [x, y, z] = [at(0), at(1), at(2)];
+    let length = (x * x + y * y + z * z).sqrt();
+    if length == 0.0 {
+        return [90.0, 0.0];
+    }
+    let elevation = (y / length).clamp(-1.0, 1.0).asin().to_degrees();
+    let azimuth = x.atan2(-z).to_degrees().rem_euclid(360.0);
+    [elevation, azimuth]
+}
+
+/// The unit direction `[x, y, z]` at `elevation` and `azimuth` in degrees.
+fn direction(elevation: f32, azimuth: f32) -> Value {
+    let (elevation, azimuth) = (elevation.to_radians(), azimuth.to_radians());
+    let level = elevation.cos();
+    let round = |value: f32| ((value * 1e4).round() / 1e4) as f64;
+    serde_json::json!([
+        round(azimuth.sin() * level),
+        round(elevation.sin()),
+        round(-azimuth.cos() * level)
+    ])
+}
+
+/// What the moon looks like at `phase`.
+fn phase_name(phase: f32) -> &'static str {
+    const NAMES: [&str; 8] = [
+        "New",
+        "Waxing crescent",
+        "First quarter",
+        "Waxing gibbous",
+        "Full",
+        "Waning gibbous",
+        "Last quarter",
+        "Waning crescent",
+    ];
+    NAMES[((phase.rem_euclid(1.0) * 8.0).round() as usize) % 8]
 }
 
 /// The `slider` made for the number `sky[field]`.
@@ -193,6 +287,8 @@ mod tests {
             "cubemap": "",
             "brightness": 1.0,
             "rotation": 0.0,
+            "sun": {"show": true, "direction": [0.0, 1.0, -1.0], "size": 3.0, "color": srgba([255, 245, 220])},
+            "moon": {"show": false, "direction": [0.0, 0.5, 1.0], "size": 4.0, "color": srgba([225, 230, 240]), "phase": 0.25},
         })
     }
 
@@ -253,6 +349,28 @@ mod tests {
         assert_eq!(path, SKY);
         assert_eq!(value["mode"], "Cubemap");
         assert_eq!(value["zenith"], sky_value()["zenith"], "the rest stays");
+    }
+
+    #[test]
+    fn edits_the_sun_and_moon_and_names_the_phase() {
+        let mut harness = tab(selected_sky(), true);
+        harness.run();
+        harness.get_by_label("Sun");
+        harness.get_by_label("First quarter");
+        harness.get_all_by_label("Show").next().unwrap().click();
+        harness.run();
+        let Some(SkyAction::Edit(Action::Set(_, value))) = harness.state().1.as_ref() else {
+            panic!("asked {:?}", harness.state().1);
+        };
+        assert_eq!(value["sun"]["show"], false);
+        assert_eq!(value["moon"], sky_value()["moon"], "the moon stays");
+
+        assert_eq!(angles(&json!([0.0, 1.0, -1.0])), [45.0, 0.0]);
+        let [elevation, azimuth] = angles(&direction(30.0, 90.0));
+        assert!((elevation - 30.0).abs() < 0.01 && (azimuth - 90.0).abs() < 0.01);
+        assert_eq!(direction(0.0, 90.0), json!([1.0, 0.0, 0.0]), "east is +X");
+        assert_eq!(phase_name(0.5), "Full");
+        assert_eq!(phase_name(0.98), "New");
     }
 
     #[test]

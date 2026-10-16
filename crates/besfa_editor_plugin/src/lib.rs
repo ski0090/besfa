@@ -43,7 +43,7 @@ pub use part_changes::{PartChange, PartChanges};
 pub use reimport::Reimported;
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
 pub use scene_view::EditorOnly;
-pub use sky::{Sky, SkyMode};
+pub use sky::{Moon, Sky, SkyMode, Sun};
 pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight};
 
 /// `DefaultPlugins` plus the scene file, adjusted to start in edit mode and
