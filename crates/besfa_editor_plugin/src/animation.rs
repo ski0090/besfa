@@ -18,12 +18,9 @@ pub struct AnimationStateMachinePlugin;
 
 impl Plugin for AnimationStateMachinePlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<AnimationStateMachine>()
-            .register_type::<AnimationParams>()
-            .register_type::<AnimationClips>()
-            // After the game's Update has written the parameters, before
-            // the players advance.
-            .add_systems(PostUpdate, (build, run).chain().before(AnimationSystems))
+        // After the game's Update has written the parameters, before the
+        // players advance.
+        app.add_systems(PostUpdate, (build, run).chain().before(AnimationSystems))
             .add_observer(stopped);
     }
 }

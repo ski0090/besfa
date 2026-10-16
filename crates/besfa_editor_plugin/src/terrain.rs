@@ -39,9 +39,7 @@ pub(crate) struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<Terrain>()
-            .register_type::<TerrainFile>()
-            .init_asset::<TerrainData>()
+        app.init_asset::<TerrainData>()
             .register_asset_loader(TerrainLoader)
             .init_resource::<Strokes>()
             // Before bounds are worked out, so a painted terrain's mesh is

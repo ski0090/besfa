@@ -29,15 +29,6 @@ const MAX_SCATTER: u32 = 10_000;
 /// Where a ray looking for the ground below a scattered thing starts.
 const SKY: f32 = 10_000.0;
 
-pub(crate) struct GroundPlugin;
-
-impl Plugin for GroundPlugin {
-    fn build(&self, app: &mut App) {
-        app.register_type::<Scattered>()
-            .register_type::<ScatterGroup>();
-    }
-}
-
 /// A thing scatter placed, which erasing may take away again; things
 /// placed by hand have none.
 #[derive(Component, Reflect, Clone, Copy, Debug, Default)]

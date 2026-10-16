@@ -99,9 +99,7 @@ pub(crate) struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<MeshShape>()
-            .register_type::<MeshColor>()
-            .add_systems(Startup, load)
+        app.add_systems(Startup, load)
             .add_systems(PreUpdate, mark_loaded)
             // After SpawnScene, so a loaded scene gets its meshes this frame.
             .add_systems(PostUpdate, (build_meshes, build_materials))

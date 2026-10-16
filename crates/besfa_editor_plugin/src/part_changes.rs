@@ -43,9 +43,7 @@ pub(crate) struct PartChangesPlugin;
 
 impl Plugin for PartChangesPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<PartChanges>()
-            .add_observer(spawned)
-            .add_observer(cleared);
+        app.add_observer(spawned).add_observer(cleared);
     }
 }
 

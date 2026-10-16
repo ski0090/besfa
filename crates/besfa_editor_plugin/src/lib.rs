@@ -54,7 +54,6 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .add(scene::ScenePlugin)
         .add(part_changes::PartChangesPlugin)
         .add(terrain::TerrainPlugin)
-        .add(ground::GroundPlugin)
         .add(animation::AnimationStateMachinePlugin);
     if edit_mode::requested() {
         plugins = plugins
