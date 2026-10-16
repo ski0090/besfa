@@ -4,6 +4,7 @@
 // A console only while developing.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod animation;
 mod editor;
 mod hub;
 mod inspector;

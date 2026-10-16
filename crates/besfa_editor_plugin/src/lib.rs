@@ -17,6 +17,7 @@ use bevy::{
     winit::WinitPlugin,
 };
 
+mod animation;
 mod edit;
 mod edit_mode;
 mod ground;
@@ -32,6 +33,10 @@ mod terrain;
 mod thumbnail;
 mod viewport;
 
+pub use animation::{
+    AnimationClips, AnimationCondition, AnimationParams, AnimationState, AnimationStateMachine,
+    AnimationStateMachinePlugin, AnimationTransition, ConditionTest,
+};
 pub use ground::{ScatterGroup, Scattered};
 pub use part_changes::{PartChange, PartChanges};
 pub use reimport::Reimported;
@@ -49,7 +54,8 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .add(scene::ScenePlugin)
         .add(part_changes::PartChangesPlugin)
         .add(terrain::TerrainPlugin)
-        .add(ground::GroundPlugin);
+        .add(ground::GroundPlugin)
+        .add(animation::AnimationStateMachinePlugin);
     if edit_mode::requested() {
         plugins = plugins
             .add(edit_mode::EditModePlugin)

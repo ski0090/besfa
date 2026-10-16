@@ -24,6 +24,7 @@ use eframe::{
 use serde_json::Value;
 
 use crate::{
+    animation,
     inspector::{Action, Inspector, TRANSFORM},
     panels::{
         self, ACCENT, AssetAction, AssetBrowser, GOOD, HierarchyAction, MUTED, Reimport, WARNING,
@@ -73,6 +74,14 @@ enum AfterSave {
     Close,
 }
 
+/// What the right panel shows while the scene is in the viewport.
+#[derive(Clone, Copy, PartialEq)]
+enum RightTab {
+    Inspector,
+    Scatter,
+    Animation,
+}
+
 enum Dialog {
     /// Asks for a prefab's file name, without folders or extension.
     PrefabName(String),
@@ -108,8 +117,7 @@ pub struct Editor {
     /// The scatter brush, as last sent.
     scatter_brush: Option<ScatterBrush>,
     scatter: ScatterTools,
-    /// The right panel shows the Scatter tab instead of the Inspector.
-    scatter_tab: bool,
+    right_tab: RightTab,
     /// The viewport panel's size in physical pixels, which the texture
     /// follows once it settles.
     wanted_viewport: Option<[u32; 2]>,
@@ -172,7 +180,7 @@ impl Editor {
             brush: None,
             scatter_brush: None,
             scatter: ScatterTools::default(),
-            scatter_tab: false,
+            right_tab: RightTab::Inspector,
             wanted_viewport: None,
             resize_at: None,
             input: ViewportInput::default(),
@@ -288,13 +296,27 @@ impl Editor {
                     }
                     None => {
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut self.scatter_tab, false, "Inspector");
-                            ui.selectable_value(&mut self.scatter_tab, true, "Scatter");
+                            for (tab, label) in [
+                                (RightTab::Inspector, "Inspector"),
+                                (RightTab::Scatter, "Scatter"),
+                                (RightTab::Animation, "Animation"),
+                            ] {
+                                ui.selectable_value(&mut self.right_tab, tab, label);
+                            }
                         });
-                        if self.scatter_tab {
+                        if self.right_tab == RightTab::Scatter {
                             egui::ScrollArea::vertical()
                                 .auto_shrink(false)
                                 .show(ui, |ui| self.scatter.ui(ui));
+                        } else if self.right_tab == RightTab::Animation {
+                            let scene = self.scene.inspected();
+                            let action = egui::ScrollArea::vertical()
+                                .auto_shrink(false)
+                                .show(ui, |ui| animation::ui(ui, &scene))
+                                .inner;
+                            if let Some(action) = action {
+                                self.on_inspector(action);
+                            }
                         } else {
                             self.inspector.can_sculpt =
                                 self.protocol >= Some(TERRAIN_PROTOCOL) && !self.playing;
@@ -1094,6 +1116,12 @@ impl Editor {
                     }
                 });
                 ui.menu_button("Window", |ui| {
+                    if ui.button("Animation State Machine").clicked() {
+                        self.right_tab = RightTab::Animation;
+                        if self.previewing {
+                            self.show_preview(false);
+                        }
+                    }
                     let assets = Button::new("Bevy Assets").shortcut_text("Ctrl+9");
                     if ui.add(assets).on_hover_text(project::BEVY_ASSETS).clicked() {
                         project::open_url(project::BEVY_ASSETS);
@@ -1138,7 +1166,7 @@ impl Editor {
                 {
                     self.scatter.on = !self.scatter.on;
                     if self.scatter.on {
-                        self.scatter_tab = true;
+                        self.right_tab = RightTab::Scatter;
                         self.inspector.terrain.tool = None;
                     }
                 }

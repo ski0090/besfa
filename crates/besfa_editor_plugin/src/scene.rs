@@ -579,6 +579,7 @@ fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn Partial
 pub(crate) fn left_out(type_id: TypeId) -> bool {
     [
         TypeId::of::<SceneEntity>(),
+        TypeId::of::<crate::AnimationClips>(),
         TypeId::of::<crate::scene_view::Parked>(),
         TypeId::of::<Children>(),
         TypeId::of::<RenderTarget>(),

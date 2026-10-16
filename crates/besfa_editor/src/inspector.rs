@@ -571,7 +571,7 @@ pub fn format_number(number: &serde_json::Number) -> String {
 /// A text field that commits when it loses focus, Enter included, and shows
 /// `value`, the game's newest, while nobody is typing in it. Returns the
 /// typed text when it differs from `value`.
-fn commit_field(ui: &mut Ui, id: Id, value: &str, label: Option<&str>) -> Option<String> {
+pub fn commit_field(ui: &mut Ui, id: Id, value: &str, label: Option<&str>) -> Option<String> {
     let typing = ui.data(|data| data.get_temp::<String>(id));
     let was_typing = typing.is_some();
     let mut text = typing.unwrap_or_else(|| value.to_owned());

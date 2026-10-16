@@ -13,7 +13,9 @@ use bevy::{
     asset::HandleDeserializeProcessor,
     ecs::{entity_disabling::Disabled, reflect::ReflectFromWorld},
     prelude::*,
-    reflect::{TypeRegistration, TypeRegistry, serde::TypedReflectDeserializer},
+    reflect::{
+        ReflectMut, ReflectRef, TypeRegistration, TypeRegistry, serde::TypedReflectDeserializer,
+    },
     world_serialization::{DynamicWorldRoot, WorldAssetRoot},
 };
 use serde::de::DeserializeSeed;
@@ -68,6 +70,7 @@ pub(crate) fn set(
     let result = match reflect.reflect_mut(&mut target) {
         Some(mut component) => component
             .try_apply(value.as_ref())
+            .map(|()| trim_lists(component.as_partial_reflect_mut(), value.as_ref()))
             .map_err(|error| error.to_string()),
         None => {
             reflect.insert(&mut target, value.as_ref(), &registry);
@@ -76,6 +79,47 @@ pub(crate) fn set(
     };
     keep_parked(world, entity);
     result
+}
+
+/// Applying a value keeps the items of a list past the value's end; drop
+/// them, so a shorter list replaces a longer one.
+// ponytail: follows lists through structs, tuple structs and enums; maps,
+// tuples and arrays of lists keep their extra items.
+fn trim_lists(target: &mut dyn PartialReflect, value: &dyn PartialReflect) {
+    match (target.reflect_mut(), value.reflect_ref()) {
+        (ReflectMut::List(list), ReflectRef::List(value)) => {
+            while list.len() > value.len() {
+                list.pop();
+            }
+            for (index, item) in value.iter().enumerate() {
+                if let Some(target) = list.get_mut(index) {
+                    trim_lists(target, item);
+                }
+            }
+        }
+        (ReflectMut::Struct(fields), ReflectRef::Struct(value)) => {
+            for (name, item) in value.iter_fields() {
+                if let Some(target) = fields.field_mut(name) {
+                    trim_lists(target, item);
+                }
+            }
+        }
+        (ReflectMut::TupleStruct(fields), ReflectRef::TupleStruct(value)) => {
+            for (index, item) in value.iter_fields().enumerate() {
+                if let Some(target) = fields.field_mut(index) {
+                    trim_lists(target, item);
+                }
+            }
+        }
+        (ReflectMut::Enum(variant), ReflectRef::Enum(value)) => {
+            for (index, item) in value.iter_fields().enumerate() {
+                if let Some(target) = variant.field_at_mut(index) {
+                    trim_lists(target, item.value());
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Adds `component` to `entity` with its default value.
@@ -411,6 +455,75 @@ mod tests {
             "a value of the wrong shape is refused"
         );
         assert!(set(&mut world, cube, "no::Such", &json!(1)).is_err());
+    }
+
+    #[test]
+    fn a_shorter_list_replaces_a_longer_one() {
+        use crate::{AnimationStateMachine, ConditionTest};
+        const MACHINE: &str = "besfa_editor_plugin::animation::AnimationStateMachine";
+        let mut world = world();
+        world
+            .resource::<AppTypeRegistry>()
+            .write()
+            .register::<AnimationStateMachine>();
+        let character = world.spawn_empty().id();
+        let walk = json!({"from": "idle", "to": "walk", "conditions": [
+            {"param": "speed", "test": "Greater", "value": 0.1},
+            {"param": "grounded", "test": "True"},
+        ]});
+        set(
+            &mut world,
+            character,
+            MACHINE,
+            &json!({
+                "states": [{"name": "idle", "clip": "idle"}, {"name": "walk", "clip": "walk"}],
+                "transitions": [walk, {"from": "walk", "to": "idle"}],
+            }),
+        )
+        .unwrap();
+        set(
+            &mut world,
+            character,
+            MACHINE,
+            &json!({
+                "states": [{"name": "idle", "clip": "idle", "speed": 0.5}],
+                "transitions": [{"from": "idle", "to": "walk", "conditions": [
+                    {"param": "speed", "test": "Greater", "value": 0.1},
+                ]}],
+            }),
+        )
+        .unwrap();
+
+        let machine = world.get::<AnimationStateMachine>(character).unwrap();
+        assert_eq!(machine.states.len(), 1);
+        assert_eq!(machine.states[0].speed, 0.5);
+        assert_eq!(machine.transitions.len(), 1);
+        assert_eq!(machine.transitions[0].conditions.len(), 1);
+        assert_eq!(
+            machine.transitions[0].conditions[0].test,
+            ConditionTest::Greater
+        );
+        assert_eq!(
+            machine.transitions[0].blend, 0.2,
+            "left out, so the default"
+        );
+
+        // A list item added by a set is built from what was given.
+        set(
+            &mut world,
+            character,
+            MACHINE,
+            &json!({
+                "transitions": [{"from": "idle", "to": "walk"}, {"to": "idle", "conditions": [{}]}],
+            }),
+        )
+        .unwrap();
+        let machine = world.get::<AnimationStateMachine>(character).unwrap();
+        assert_eq!(machine.transitions[1].from, "");
+        assert_eq!(
+            machine.transitions[1].conditions[0].test,
+            ConditionTest::Greater
+        );
     }
 
     #[test]
