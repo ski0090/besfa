@@ -43,6 +43,7 @@ pub struct Sun {
     pub direction: Vec3,      // 보는 사람에게서 해 쪽으로(월드 기준, 길이는 상관없다)
     pub size: f32,            // 겉보기 지름(도), 기본 3
     pub color: Color,         // 원반과 둘레 빛의 색
+    pub flare: f32,           // 렌즈 플레어 세기, 0이면 없음(기본) ~ 1
 }
 
 pub struct Moon {
@@ -59,7 +60,8 @@ pub struct Moon {
 - 큐브맵: Bevy가 읽는 큐브맵(`.ktx2`, `.dds`)이나 여섯 면(+X, -X, +Y, -Y, +Z, -Z)을 세로로 쌓은 PNG·JPG(높이 = 너비 × 6). 쌓은 이미지는 플러그인이 큐브맵으로 바꿔 읽는다. 아직 읽는 중이거나 읽지 못하면 그라데이션을 보이고, 실패는 로그에 남긴다.
 - 해: 원반은 `color`로 칠하고, 둘레로 지름의 네 배까지 옅어지는 빛을 더한다. 방향은 월드 기준이라 `rotation`과 상관없이 그 방향에 보인다. 지평선 아래(땅 색 부분)에서는 잘린다.
 - 달: 원반 안에서 위상으로 정한 쪽만 `color`로 칠하고 어두운 쪽은 하늘이 비친다. 위상은 0~1을 한 바퀴로 보고, 원반을 공으로 여겨 빛이 `phase`에 따라 뒤(삭)에서 오른쪽(상현), 앞(보름), 왼쪽(하현)으로 돈다고 보고 경계를 부드럽게 그린다. 북반구에서 보듯 차는 달은 오른쪽이 밝다. 해와 마찬가지로 지평선 아래에서 잘린다.
-- 해와 달은 그라데이션 모드에서만 그린다. 큐브맵 모드에서는 이미지가 하늘 전체이므로 그리지 않는다.
+- 렌즈 플레어: 화면 공간 효과라 큐브맵에 칠할 수 없으므로, 하늘을 그리는 카메라마다 UI 원 일곱 개(`Ghost`, `EditorOnly`라 Hierarchy와 씬 파일에 없다)를 그 카메라에 붙여(`UiTargetCamera`) 해가 보이는 화면 점에서 화면 가운데를 지나는 선 위에 늘어놓는다. 해 색에 `flare`만큼의 투명도로, 해가 화면 가장자리로 갈수록 옅어지고 화면 밖, 지평선 아래, 카메라 뒤에 있거나 카메라에서 해 쪽으로 쏜 광선이 메시에 맞으면(해가 가려지면) 숨는다. 게임 UI 아래(`GlobalZIndex(-1000)`)에 그리고 마우스를 받지 않는다. 편집 상태의 뷰포트(편집용 카메라)에서도 보인다.
+- 해와 달은 그라데이션 모드에서만 그린다(플레어도). 큐브맵 모드에서는 이미지가 하늘 전체이므로 그리지 않는다.
 - 게임은 빛의 방향을 그대로 쓸 수 있다: `DirectionalLight`는 Transform의 앞(-Z)으로 비추므로 해 방향은 `transform.back()`이다.
 - 씬에 `Sky`가 여럿이면 처음 찾은 것을 쓴다. `Sky`가 없으면 플러그인은 아무것도 하지 않는다(지금처럼 `ClearColor`).
 
@@ -81,7 +83,7 @@ pub struct Moon {
 - 오른쪽 패널에 Inspector, Scatter, Animation 옆의 Sky 탭. Window > Sky로도 연다.
 - 탭을 열면 씬의 하늘 엔티티를 선택해(그래야 게임이 값을 보고한다) 그 `Sky`를 보여 준다. 하늘이 없으면 Add sky 버튼, 플러그인이 버전 10보다 오래되면 갱신하라는 안내.
 - Gradient·Cubemap 고르기, 모드별로 Zenith·Horizon·Ground 색 버튼과 Blend 막대, 또는 이미지 경로 칸(Assets 탭에서 이미지를 끌어 놓을 수 있다). 공통으로 Brightness, Rotation.
-- 그라데이션 모드에서 Sun과 Moon 묶음: Show 체크 상자, 색 버튼, Size(도), 방향은 Elevation(지평선 위 각도, -90~90)과 Azimuth(북쪽 -Z에서 동쪽 +X로 도는 각도, 0~360) 막대로 고친다. Moon에는 Phase 막대(0~1)와 그 위상의 이름(New, Waxing crescent, First quarter, Waxing gibbous, Full, Waning gibbous, Last quarter, Waning crescent)이 있다.
+- 그라데이션 모드에서 Sun과 Moon 묶음: Show 체크 상자, 색 버튼, Size(도), Sun의 Lens flare(0~1), 방향은 Elevation(지평선 위 각도, -90~90)과 Azimuth(북쪽 -Z에서 동쪽 +X로 도는 각도, 0~360) 막대로 고친다. Moon에는 Phase 막대(0~1)와 그 위상의 이름(New, Waxing crescent, First quarter, Waxing gibbous, Full, Waning gibbous, Last quarter, Waning crescent)이 있다.
 - 바꿀 때마다 컴포넌트 전체를 `set`으로 보낸다. Inspector의 변경처럼 되돌리기와 저장하지 않은 변경 표시에 들어가고, 실행 상태에서 바꾼 것은 Stop하면 사라진다. 실행 상태에서는 게임이 바꾸는 값을 따라 보여 준다.
 
 ## 게임에서 쓰기
@@ -115,6 +117,6 @@ fn day_sky(
 
 ## 테스트
 
-- 플러그인: 그라데이션 색 계산, 해 원반과 숨기기, 달 위상(삭·보름·상현), 회전해도 해가 월드 방향에 남는지, 큐브맵 이미지 생성, 카메라에 `Skybox`가 들어가고 값을 바꾸면 따라가며 `Sky`를 떼면 빠지는지, 씬 저장·읽기 왕복에서 `Sky`가 남고 `Skybox`는 빠지는지.
+- 플러그인: 렌즈 플레어가 하늘을 그리는 카메라마다 한 벌 생기고 하늘이 없어지면 사라지는지, 화면 가장자리에서 옅어지는지, 그라데이션 색 계산, 해 원반과 숨기기, 달 위상(삭·보름·상현), 회전해도 해가 월드 방향에 남는지, 큐브맵 이미지 생성, 카메라에 `Skybox`가 들어가고 값을 바꾸면 따라가며 `Sky`를 떼면 빠지는지, 씬 저장·읽기 왕복에서 `Sky`가 남고 `Skybox`는 빠지는지.
 - 프로토콜: `SpawnKind::Sky`, `EntityInfo.sky`의 직렬화와 옛 보고와의 호환.
 - 에디터: Sky 탭이 하늘이 없으면 Add sky를, 있으면 색을 보여 주고 바꾼 값을 `set`으로 내는지.

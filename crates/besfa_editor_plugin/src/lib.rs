@@ -23,6 +23,7 @@ mod edit_mode;
 mod ground;
 mod input;
 mod inspect;
+mod lens_flare;
 mod part_changes;
 mod preview;
 mod reimport;
@@ -57,6 +58,7 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .add(part_changes::PartChangesPlugin)
         .add(terrain::TerrainPlugin)
         .add(sky::SkyPlugin)
+        .add(lens_flare::LensFlarePlugin)
         .add(animation::AnimationStateMachinePlugin);
     if std::env::var_os("BESFA_EDIT_MODE").is_some() {
         plugins = plugins

@@ -167,6 +167,14 @@ fn disc(ui: &mut Ui, body: &mut Value, moon: bool) {
     if raised.changed() || turned.changed() {
         body["direction"] = direction(elevation, azimuth);
     }
+    if !moon {
+        number(ui, body, "flare", |number| {
+            Slider::new(number, 0.0..=1.0).text("Lens flare")
+        })
+        .on_hover_text(
+            "Rings of the sun's color across the picture while the sun is in sight; 0 for none",
+        );
+    }
     if moon {
         number(ui, body, "phase", |number| {
             Slider::new(number, 0.0..=1.0).text("Phase")
@@ -287,7 +295,7 @@ mod tests {
             "cubemap": "",
             "brightness": 1.0,
             "rotation": 0.0,
-            "sun": {"show": true, "direction": [0.0, 1.0, -1.0], "size": 3.0, "color": srgba([255, 245, 220])},
+            "sun": {"show": true, "direction": [0.0, 1.0, -1.0], "size": 3.0, "color": srgba([255, 245, 220]), "flare": 0.0},
             "moon": {"show": false, "direction": [0.0, 0.5, 1.0], "size": 4.0, "color": srgba([225, 230, 240]), "phase": 0.25},
         })
     }
@@ -357,6 +365,7 @@ mod tests {
         harness.run();
         harness.get_by_label("Sun");
         harness.get_by_label("First quarter");
+        assert!(harness.get_all_by_label("Lens flare").next().is_some());
         harness.get_all_by_label("Show").next().unwrap().click();
         harness.run();
         let Some(SkyAction::Edit(Action::Set(_, value))) = harness.state().1.as_ref() else {

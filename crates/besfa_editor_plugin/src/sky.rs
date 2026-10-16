@@ -77,6 +77,9 @@ pub struct Sun {
     /// Degrees across.
     pub size: f32,
     pub color: Color,
+    /// How strong the lens flare is, 0 for none to 1: rings of the sun's
+    /// color across the picture while the sun is in sight.
+    pub flare: f32,
 }
 
 impl Default for Sun {
@@ -86,6 +89,7 @@ impl Default for Sun {
             direction: Vec3::new(0.4, 0.6, -0.5),
             size: 3.0,
             color: Color::srgb(1.0, 0.96, 0.86),
+            flare: 0.0,
         }
     }
 }
