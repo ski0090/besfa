@@ -53,11 +53,6 @@ pub(crate) fn report_selection(entity: Option<Entity>) {
     });
 }
 
-/// Tells the editor whether the scene file was written.
-pub(crate) fn report_saved(error: Option<String>) {
-    send_report(&Report::Saved { error });
-}
-
 /// Writes one report line.
 pub(crate) fn send_report(report: &Report) {
     write(&report.line());
@@ -69,7 +64,7 @@ impl Plugin for InspectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Selected>()
             .init_resource::<Changes>()
-            .init_resource::<EntitiesChanged>()
+            .insert_resource(EntitiesChanged(true))
             // Last: after Update and transform propagation, so values are current.
             .add_systems(Last, (note_entity_changes, report).chain())
             .add_observer(note_removal);
@@ -121,12 +116,6 @@ fn write_if_changed(last: &mut String, report: Report) {
 /// last written. It starts out unwritten.
 #[derive(Resource)]
 struct EntitiesChanged(bool);
-
-impl Default for EntitiesChanged {
-    fn default() -> Self {
-        Self(true)
-    }
-}
 
 /// Notes a change to what the entities report shows: a name, a parent, a
 /// saved or placed mark, or an entity joining the list.
@@ -196,6 +185,7 @@ fn report(
     }
 
     // The model preview's part, reported the way the selection is.
+    let changes = Some(world.resource::<Changes>().0);
     let part = world
         .get_resource::<ModelPreview>()
         .and_then(|preview| preview.selected);
@@ -204,7 +194,7 @@ fn report(
             &mut last_part,
             Report::Entity {
                 id: part.to_bits(),
-                changes: Some(world.resource::<Changes>().0),
+                changes,
                 components,
             },
         ),
@@ -223,7 +213,7 @@ fn report(
             &mut last_entity,
             Report::Entity {
                 id: entity.to_bits(),
-                changes: Some(world.resource::<Changes>().0),
+                changes,
                 components,
             },
         ),
@@ -320,20 +310,13 @@ fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
             // The registry's path is what `set` and the scene file use;
             // the type name can differ from it.
             let registration = info.type_id().and_then(|id| registry.get(id));
-            let path = registration.map_or_else(
-                || info.name().to_string(),
-                |registration| registration.type_info().type_path().to_string(),
-            );
-            let name = registration.map_or_else(
-                || info.name().shortname().to_string(),
-                |registration| {
-                    registration
-                        .type_info()
-                        .type_path_table()
-                        .short_path()
-                        .to_string()
-                },
-            );
+            let (path, name) = match registration {
+                Some(registration) => {
+                    let table = registration.type_info().type_path_table();
+                    (table.path().into(), table.short_path().into())
+                }
+                None => (info.name().to_string(), info.name().shortname().to_string()),
+            };
             ComponentData {
                 name,
                 path,
@@ -390,7 +373,7 @@ fn system_names(schedule: &Schedule) -> Vec<String> {
 /// computed from other components.
 fn addable_components(world: &World) -> Report {
     let registry = world.resource::<AppTypeRegistry>().read();
-    let mut components: Vec<(&str, &str)> = registry
+    let mut components: Vec<ComponentType> = registry
         .iter()
         .filter(|registration| {
             registration.data::<ReflectComponent>().is_some()
@@ -400,17 +383,13 @@ fn addable_components(world: &World) -> Report {
         })
         .map(|registration| {
             let table = registration.type_info().type_path_table();
-            (table.short_path(), table.path())
+            ComponentType {
+                name: table.short_path().into(),
+                path: table.path().into(),
+            }
         })
         .collect();
-    components.sort_unstable_by_key(|(_, path)| *path);
-    let components = components
-        .into_iter()
-        .map(|(name, path)| ComponentType {
-            name: name.into(),
-            path: path.into(),
-        })
-        .collect();
+    components.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     Report::Components { components }
 }
 
@@ -476,7 +455,7 @@ mod tests {
             std::mem::take(&mut app.world_mut().resource_mut::<EntitiesChanged>().0)
         }
         let mut app = App::new();
-        app.init_resource::<EntitiesChanged>()
+        app.insert_resource(EntitiesChanged(true))
             .add_systems(Update, note_entity_changes)
             .add_observer(note_removal);
         let cube = app
