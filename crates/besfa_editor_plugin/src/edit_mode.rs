@@ -14,12 +14,12 @@ use std::{
     sync::{Mutex, PoisonError, mpsc},
 };
 
-use besfa_protocol::{Command, Report, Request, VERSION};
+use besfa_protocol::{Command, Placement, Report, Request, VERSION};
 use bevy::{input::InputSystems, prelude::*};
 
 use crate::{
     edit, ground, input,
-    inspect::{Changes, Selected, report_saved, select, send_report},
+    inspect::{Changes, Selected, select, send_report},
     part_changes,
     preview::{self, ModelPreview},
     reimport,
@@ -128,7 +128,9 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
                 Ok(()) => info!("Saved {SCENE_PATH}"),
                 Err(error) => error!("Could not save {SCENE_PATH}: {error}"),
             }
-            report_saved(result.clone().err());
+            send_report(&Report::Saved {
+                error: result.clone().err(),
+            });
             return result;
         }
         Command::Set {
@@ -151,25 +153,13 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             Ok(())
         }),
         Command::Spawn { kind, place } => {
-            let parent = place.parent.map(|id| edit::parent(world, id)).transpose();
-            parent.and_then(|parent| {
-                let entity = edit::spawn(world, kind)?;
-                edit::place(world, entity, &place, parent);
-                spawned(world, entity);
-                Ok(())
-            })
+            spawn_placed(world, &place, |world| Ok(edit::spawn(world, kind)))
         }
         Command::Duplicate { id } => entity(id)
             .and_then(|entity| edit::duplicate(world, entity))
             .map(|copy| spawned(world, copy)),
         Command::Instantiate { path, place } => {
-            let parent = place.parent.map(|id| edit::parent(world, id)).transpose();
-            parent.and_then(|parent| {
-                let entity = edit::instantiate(world, &path)?;
-                edit::place(world, entity, &place, parent);
-                spawned(world, entity);
-                Ok(())
-            })
+            spawn_placed(world, &place, |world| edit::instantiate(world, &path))
         }
         Command::TerrainStroke {
             id,
@@ -449,6 +439,20 @@ fn spawned(world: &mut World, entity: Entity) {
         id: entity.to_bits(),
     });
     select(world, Some(entity));
+}
+
+/// Puts the scene entity `make` spawns where `place` says, then reports
+/// and selects it.
+fn spawn_placed(
+    world: &mut World,
+    place: &Placement,
+    make: impl FnOnce(&mut World) -> Result<Entity, String>,
+) -> Result<(), String> {
+    let parent = place.parent.map(|id| edit::parent(world, id)).transpose()?;
+    let entity = make(world)?;
+    edit::place(world, entity, place, parent);
+    spawned(world, entity);
+    Ok(())
 }
 
 /// Whether `path` is relative and stays inside the folder it is joined to.

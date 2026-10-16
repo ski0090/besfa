@@ -153,7 +153,7 @@ pub(crate) fn remove(world: &mut World, entity: Entity, component: &str) -> Resu
 
 /// Spawns a scene entity at the origin, so saving keeps it. A terrain
 /// gets a new file of its own.
-pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Result<Entity, String> {
+pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Entity {
     let file = match kind {
         SpawnKind::Terrain => Some(terrain::new_file(world)),
         _ => None,
@@ -202,7 +202,7 @@ pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Result<Entity, String
             ))
         }
     };
-    Ok(entity.id())
+    entity.id()
 }
 
 /// Spawns a copy of `entity` with every component that can be cloned. The
@@ -558,9 +558,9 @@ mod tests {
     #[test]
     fn places_and_reparents_keeping_entities_where_they_are_in_the_world() {
         let mut world = world();
-        let forest = spawn(&mut world, SpawnKind::Empty).unwrap();
+        let forest = spawn(&mut world, SpawnKind::Empty);
         world.get_mut::<Transform>(forest).unwrap().translation = Vec3::new(-55.0, 0.0, 0.0);
-        let tree = spawn(&mut world, SpawnKind::Cube).unwrap();
+        let tree = spawn(&mut world, SpawnKind::Cube);
         let place_tree = Placement {
             translation: Some([-60.0, 0.0, 5.0]),
             yaw: Some(90.0),
@@ -622,7 +622,7 @@ mod tests {
     fn spawns_duplicates_deletes_and_restores_scene_entities() {
         let mut world = world();
 
-        let cube = spawn(&mut world, SpawnKind::Cube).unwrap();
+        let cube = spawn(&mut world, SpawnKind::Cube);
         assert!(world.get::<SceneEntity>(cube).is_some());
         assert_eq!(world.get::<Name>(cube).unwrap().as_str(), "Cube");
         world.get_mut::<Transform>(cube).unwrap().translation.x = 5.0;

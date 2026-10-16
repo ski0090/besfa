@@ -16,10 +16,7 @@ use bevy::{
         touch::TouchPhase,
     },
     prelude::*,
-    reflect::{
-        TypeInfo, Typed,
-        enums::{DynamicEnum, DynamicVariant, VariantInfo},
-    },
+    reflect::enums::{DynamicEnum, DynamicVariant},
     window::CursorMoved,
 };
 
@@ -116,13 +113,10 @@ pub(crate) fn focus_lost(world: &mut World) {
     world.write_message(KeyboardFocusLost);
 }
 
-/// The variant of `T` named `name` that holds no data.
-fn unit_variant<T: FromReflect + Typed>(name: &str) -> Option<T> {
-    let TypeInfo::Enum(info) = T::type_info() else {
-        return None;
-    };
-    matches!(info.variant(name)?, VariantInfo::Unit(_))
-        .then(|| T::from_reflect(&DynamicEnum::new(name, DynamicVariant::Unit)))?
+/// The variant of `T` named `name` that holds no data; none for a variant
+/// with data or no variant of that name.
+fn unit_variant<T: FromReflect>(name: &str) -> Option<T> {
+    T::from_reflect(&DynamicEnum::new(name, DynamicVariant::Unit))
 }
 
 #[cfg(test)]
