@@ -42,7 +42,7 @@ pub use part_changes::{PartChange, PartChanges};
 pub use reimport::Reimported;
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
 pub use scene_view::EditorOnly;
-pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight};
+pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle};
 
 /// `DefaultPlugins` plus the scene file, adjusted to start in edit mode and
 /// render into the editor viewport when the editor launched the game, or
