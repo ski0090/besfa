@@ -40,15 +40,11 @@ use crate::{
 };
 
 /// The preview's render layer, out of the way of a game's own.
-const PREVIEW_LAYER: usize = 31;
+const PREVIEW_LAYER: RenderLayers = RenderLayers::layer(31);
 
 /// How long a spawned model waits for its meshes' bounds before it is
 /// reported without the ones still missing.
 const BOUNDS_FRAMES: u32 = 30;
-
-fn layer() -> RenderLayers {
-    RenderLayers::layer(PREVIEW_LAYER)
-}
 
 /// The model preview's state, fed by the editor's commands.
 #[derive(Resource, Default)]
@@ -130,14 +126,14 @@ impl Plugin for PreviewPlugin {
             .insert_gizmo_config(
                 PreviewGizmos,
                 GizmoConfig {
-                    render_layers: layer(),
+                    render_layers: PREVIEW_LAYER,
                     ..default()
                 },
             )
             .insert_gizmo_config(
                 OverlayGizmos,
                 GizmoConfig {
-                    render_layers: layer(),
+                    render_layers: PREVIEW_LAYER,
                     // In front of everything.
                     depth_bias: -1.0,
                     ..default()
@@ -163,12 +159,6 @@ pub(crate) fn showing(preview: Option<Res<ModelPreview>>) -> bool {
     preview.is_some_and(|preview| preview.showing)
 }
 
-pub(crate) fn showing_in(world: &World) -> bool {
-    world
-        .get_resource::<ModelPreview>()
-        .is_some_and(|preview| preview.showing)
-}
-
 fn spawn_camera_and_light(mut commands: Commands) {
     commands.spawn((
         Name::new("Preview camera"),
@@ -190,14 +180,14 @@ fn spawn_camera_and_light(mut commands: Commands) {
             ..default()
         }),
         AmbientLight::default(),
-        layer(),
+        PREVIEW_LAYER,
     ));
     commands.spawn((
         Name::new("Preview light"),
         EditorOnly,
         PreviewLight::default(),
         DirectionalLight::default(),
-        layer(),
+        PREVIEW_LAYER,
     ));
 }
 
@@ -219,7 +209,7 @@ pub(crate) fn show(world: &mut World, path: Option<String>) -> Result<(), String
                 Name::new("Model preview"),
                 Isolated,
                 EditorOnly,
-                layer(),
+                PREVIEW_LAYER,
                 Transform::default(),
                 WorldAssetRoot(assets.load(format!("{path}#Scene0"))),
             ))
@@ -411,11 +401,11 @@ fn meshes_to_hide(
         .into_iter()
         .filter(|&entity| world.get::<Mesh3d>(entity).is_some())
         .filter(|&mesh| {
-            let mut line = std::iter::successors(Some(mesh), |&entity| {
+            let line: Vec<Entity> = std::iter::successors(Some(mesh), |&entity| {
                 world.get::<ChildOf>(entity).map(ChildOf::parent)
             })
-            .take_while(|&entity| entity != root);
-            let line: Vec<Entity> = line.by_ref().collect();
+            .take_while(|&entity| entity != root)
+            .collect();
             line.iter().any(|entity| hidden.contains(entity))
                 || solo.is_some_and(|solo| !line.contains(&solo))
         })
@@ -786,17 +776,12 @@ pub(crate) fn bounds(world: &World, entities: &[Entity]) -> Option<(Vec3, Vec3)>
         ) else {
             continue;
         };
-        let (center, half) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents));
-        for corner in 0..8 {
-            let sign = Vec3::new(
-                if corner & 1 == 0 { -1.0 } else { 1.0 },
-                if corner & 2 == 0 { -1.0 } else { 1.0 },
-                if corner & 4 == 0 { -1.0 } else { 1.0 },
-            );
-            let point = global.transform_point(center + half * sign);
-            min = min.min(point);
-            max = max.max(point);
-        }
+        // The box around the turned box: its corners reach |M| h from the center.
+        let affine = global.affine();
+        let center = affine.transform_point3a(aabb.center);
+        let half = affine.matrix3.abs() * aabb.half_extents;
+        min = min.min((center - half).into());
+        max = max.max((center + half).into());
     }
     (min.x <= max.x).then_some((min, max))
 }

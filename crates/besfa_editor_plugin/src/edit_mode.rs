@@ -350,7 +350,10 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             fast,
         } => {
             // The preview takes the button's release, which would stop it.
-            if preview::showing_in(world) {
+            if world
+                .get_resource::<ModelPreview>()
+                .is_some_and(|preview| preview.showing)
+            {
                 return Ok(());
             }
             if let Some(mut view) = world.get_resource_mut::<SceneView>() {

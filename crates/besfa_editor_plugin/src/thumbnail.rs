@@ -32,7 +32,7 @@ use crate::{
 };
 
 /// The thumbnails' render layer, apart from the preview's and a game's.
-const LAYER: usize = 30;
+const LAYER: RenderLayers = RenderLayers::layer(30);
 
 /// Pixels a side.
 const SIZE: u32 = 256;
@@ -106,10 +106,6 @@ struct ThumbnailCamera;
 #[derive(Component)]
 struct ThumbnailLight;
 
-fn layer() -> RenderLayers {
-    RenderLayers::layer(LAYER)
-}
-
 fn spawn_camera_and_light(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let image = Image::new_target_texture(SIZE, SIZE, TextureFormat::Rgba8UnormSrgb, None);
     commands.spawn((
@@ -130,14 +126,14 @@ fn spawn_camera_and_light(mut commands: Commands, mut images: ResMut<Assets<Imag
             near: 0.01,
             ..default()
         }),
-        layer(),
+        LAYER,
     ));
     commands.spawn((
         Name::new("Thumbnail light"),
         EditorOnly,
         ThumbnailLight,
         DirectionalLight::default(),
-        layer(),
+        LAYER,
     ));
 }
 
@@ -166,7 +162,7 @@ fn work(world: &mut World) {
                 Name::new("Thumbnail"),
                 EditorOnly,
                 Isolated,
-                layer(),
+                LAYER,
                 Transform::default(),
                 WorldAssetRoot(scene),
             ))
