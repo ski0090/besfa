@@ -8,14 +8,13 @@
 
 use bevy::{
     prelude::*,
-    reflect::serde::TypedReflectSerializer,
     world_serialization::{WorldAssetRoot, WorldInstanceReady},
 };
 use serde_json::Value;
 
 use crate::{
     edit::{self, subtree},
-    scene::{HANDLE_PATHS, SceneEntity},
+    scene::{SceneEntity, json},
     scene_view::EditorOnly,
 };
 
@@ -55,7 +54,11 @@ fn placement(world: &World, entity: Entity) -> Option<(Entity, String)> {
     let mut names = Vec::new();
     let mut current = entity;
     loop {
-        names.push(label(world, current));
+        // The part's name, or the way Bevy prints an unnamed entity.
+        names.push(match world.get::<Name>(current) {
+            Some(name) => name.as_str().to_owned(),
+            None => current.to_string(),
+        });
         current = world.get::<ChildOf>(current)?.parent();
         if world.get::<WorldAssetRoot>(current).is_some() {
             // The preview's model keeps its changes in the editor.
@@ -66,13 +69,6 @@ fn placement(world: &World, entity: Entity) -> Option<(Entity, String)> {
             return Some((current, names.join("/")));
         }
     }
-}
-
-/// A part's name, or the way Bevy prints an unnamed entity.
-fn label(world: &World, entity: Entity) -> String {
-    world
-        .get::<Name>(entity)
-        .map_or_else(|| entity.to_string(), |name| name.as_str().to_owned())
 }
 
 /// Notes on its model's root that the editor changed `component` of
@@ -88,22 +84,14 @@ fn record(world: &mut World, entity: Entity, component: &str) {
         value,
     };
     let mut root = world.entity_mut(root);
-    match root.get_mut::<PartChanges>() {
-        Some(mut changes) => {
-            let parts = &mut changes.parts;
-            match parts
-                .iter_mut()
-                .find(|old| old.part == change.part && old.component == change.component)
-            {
-                Some(old) => *old = change,
-                None => parts.push(change),
-            }
-        }
-        None => {
-            root.insert(PartChanges {
-                parts: vec![change],
-            });
-        }
+    let mut changes = root.entry::<PartChanges>().or_default();
+    let parts = &mut changes.get_mut().parts;
+    match parts
+        .iter_mut()
+        .find(|old| old.part == change.part && old.component == change.component)
+    {
+        Some(old) => *old = change,
+        None => parts.push(change),
     }
 }
 
@@ -114,12 +102,7 @@ fn component_json(world: &World, entity: Entity, component: &str) -> Option<Valu
     let value = registration
         .data::<ReflectComponent>()?
         .reflect(world.entity(entity))?;
-    serde_json::to_value(TypedReflectSerializer::with_processor(
-        value.as_partial_reflect(),
-        &registry,
-        &HANDLE_PATHS,
-    ))
-    .ok()
+    json(value.as_partial_reflect(), &registry).ok()
 }
 
 /// Makes the changes again on the parts of `root` there are now.
