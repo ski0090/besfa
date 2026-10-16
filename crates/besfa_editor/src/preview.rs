@@ -8,7 +8,7 @@
 //! shown is never reported.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     fs,
     path::PathBuf,
     time::Instant,
@@ -69,6 +69,19 @@ struct Loaded {
     paths: HashMap<u64, String>,
 }
 
+impl Loaded {
+    /// The id the game gave the part at `path` this time the model loaded;
+    /// [`ROOT`] is the root.
+    fn id(&self, path: &str) -> Option<u64> {
+        if path == ROOT {
+            return self.model.root;
+        }
+        self.paths
+            .iter()
+            .find_map(|(&id, part)| (part == path).then_some(id))
+    }
+}
+
 pub struct ModelPreview {
     /// Relative to the asset folder.
     pub path: String,
@@ -87,7 +100,7 @@ pub struct ModelPreview {
     speed: f32,
     looping: bool,
     /// Parts by path; see [`Loaded::paths`].
-    hidden: HashSet<String>,
+    hidden: BTreeSet<String>,
     solo: Option<String>,
     light: LightPreset,
     view: View,
@@ -121,54 +134,45 @@ impl ModelPreview {
     /// the way its review file says.
     pub fn new(path: String, project: PathBuf) -> Self {
         let review_file = review::file(&project, &path);
+        let (mut review, review_error) = match Review::read(&review_file) {
+            Ok(review) => (review.unwrap_or_default(), None),
+            Err(error) => (
+                Review::default(),
+                Some(format!("Could not read the review: {error}")),
+            ),
+        };
         let mut preview = Self {
             review_file,
             written: String::new(),
-            review_error: None,
-            wanted_clip: None,
+            review_error,
+            wanted_clip: review.clip.take(),
             path,
             project,
             loaded: None,
             clip: None,
-            rest: false,
+            rest: review.rest,
             playing: true,
             duration: 0.0,
             time: 0.0,
             since: Instant::now(),
-            speed: 1.0,
-            looping: true,
-            hidden: HashSet::new(),
-            solo: None,
-            light: LightPreset::default(),
-            view: View::default(),
-            overlays: Overlays::default(),
+            speed: review.speed,
+            looping: review.looping,
+            hidden: review.hidden.iter().cloned().collect(),
+            solo: review.solo.take(),
+            light: review.light,
+            view: review.view,
+            overlays: review.overlays,
             shots: 0,
             shot: None,
             selected: None,
             components: Vec::new(),
             inspector: Inspector::default(),
-            edits: Edits::default(),
+            edits: review.edits(),
             pose_name: String::new(),
             replay: false,
         };
-        match Review::read(&preview.review_file) {
-            Ok(Some(mut review)) => {
-                preview.edits = review.edits();
-                preview.wanted_clip = review.clip.take();
-                preview.rest = review.rest;
-                preview.speed = review.speed;
-                preview.looping = review.looping;
-                preview.light = review.light;
-                preview.view = review.view;
-                preview.overlays = review.overlays;
-                preview.hidden = review.hidden.into_iter().collect();
-                preview.solo = review.solo;
-                preview.written = preview.review().text();
-            }
-            Ok(None) => preview.written = preview.review().text(),
-            Err(error) => {
-                preview.review_error = Some(format!("Could not read the review: {error}"))
-            }
+        if preview.review_error.is_none() {
+            preview.written = preview.review().text();
         }
         preview
     }
@@ -180,8 +184,6 @@ impl ModelPreview {
             (Some(clip), Some(clips)) => clips.get(clip).map(|clip| clip.name.clone()),
             _ => self.wanted_clip.clone(),
         };
-        let mut hidden: Vec<String> = self.hidden.iter().cloned().collect();
-        hidden.sort();
         let mut review = Review {
             clip,
             rest: self.rest,
@@ -190,7 +192,7 @@ impl ModelPreview {
             light: self.light,
             view: self.view,
             overlays: self.overlays,
-            hidden,
+            hidden: self.hidden.iter().cloned().collect(),
             solo: self.solo.clone(),
             ..Review::default()
         };
@@ -266,29 +268,17 @@ impl ModelPreview {
         // The model is new: what the panel changed applies again, and the
         // part shown is picked by name.
         commands.extend(self.edits.replay(|path| self.id(path)));
-        if self
-            .selected
-            .as_deref()
-            .and_then(|path| self.id(path))
-            .is_none()
-        {
+        let id = self.selected.as_deref().and_then(|path| self.id(path));
+        if id.is_none() {
             self.selected = None;
         }
-        let id = self.selected.as_deref().and_then(|path| self.id(path));
         commands.push(Command::PreviewSelect { id });
         commands
     }
 
     /// The id the game gave the part at `path` this time the model loaded.
     fn id(&self, path: &str) -> Option<u64> {
-        let loaded = self.loaded.as_ref()?;
-        if path == ROOT {
-            return loaded.model.root;
-        }
-        loaded
-            .paths
-            .iter()
-            .find_map(|(&id, part)| (part == path).then_some(id))
+        self.loaded.as_ref()?.id(path)
     }
 
     /// Takes the game's report on an entity if it is the selected part's,
@@ -359,10 +349,7 @@ impl ModelPreview {
 
     /// Notes the game's answer to a screenshot.
     pub fn screenshot(&mut self, path: String, error: Option<String>) {
-        self.shot = Some(match error {
-            None => Ok(path),
-            Some(error) => Err(error),
-        });
+        self.shot = Some(error.map_or(Ok(path), Err));
     }
 
     /// The next free `screenshots/<model>-<n>.png`, counting on from the
@@ -397,15 +384,13 @@ impl ModelPreview {
     }
 
     fn parts(&self, loaded: &Loaded) -> Command {
-        let id = |wanted: &String| {
-            loaded
-                .paths
-                .iter()
-                .find_map(|(&id, path)| (path == wanted).then_some(id))
-        };
         Command::PreviewParts {
-            hidden: self.hidden.iter().filter_map(id).collect(),
-            solo: self.solo.as_ref().and_then(id),
+            hidden: self
+                .hidden
+                .iter()
+                .filter_map(|path| loaded.id(path))
+                .collect(),
+            solo: self.solo.as_deref().and_then(|path| loaded.id(path)),
         }
     }
 
@@ -436,7 +421,6 @@ impl ModelPreview {
             });
             return send;
         };
-        let mut loaded_back = None;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             let model = &loaded.model;
             ui.horizontal(|ui| {
@@ -450,7 +434,7 @@ impl ModelPreview {
             }
             if let Some(error) = &model.error {
                 ui.label(RichText::new(error).color(ERROR));
-                loaded_back = Some(loaded);
+                self.loaded = Some(loaded);
                 return;
             }
             if let Some([width, height, depth]) = model.size {
@@ -481,10 +465,6 @@ impl ModelPreview {
             self.selected_ui(ui, scene, &mut send);
             self.poses_ui(ui, &mut send);
         });
-        // An error report returns early.
-        if let Some(loaded) = loaded_back {
-            self.loaded = Some(loaded);
-        }
         send
     }
 
@@ -874,9 +854,7 @@ impl ModelPreview {
                             .on_hover_text(if hidden { "Show" } else { "Hide" })
                             .clicked()
                         {
-                            if hidden {
-                                self.hidden.remove(path);
-                            } else {
+                            if !self.hidden.remove(path) {
                                 self.hidden.insert(path.clone());
                             }
                             changed = true;
@@ -924,16 +902,7 @@ impl ModelPreview {
     /// Shows the components of the part at `path`, while `loaded` is out
     /// of `self`.
     fn select_in(&mut self, loaded: &Loaded, path: Option<String>) -> Command {
-        let id = path.as_deref().and_then(|path| {
-            if path == ROOT {
-                loaded.model.root
-            } else {
-                loaded
-                    .paths
-                    .iter()
-                    .find_map(|(&id, part)| (part == path).then_some(id))
-            }
-        });
+        let id = path.as_deref().and_then(|path| loaded.id(path));
         self.selected = path;
         self.components.clear();
         Command::PreviewSelect { id }
