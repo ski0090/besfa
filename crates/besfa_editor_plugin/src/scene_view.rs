@@ -16,13 +16,13 @@ use bevy::{
     camera::{RenderTarget, primitives::Aabb, visibility::RenderLayers},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings},
     prelude::*,
-    reflect::{TypePath, serde::TypedReflectSerializer},
+    reflect::TypePath,
     render::render_resource::TextureFormat,
     transform::TransformSystems,
 };
-use serde_json::Value;
 
 use crate::{
+    ground::transform_value,
     inspect::{Selected, report_selection, send_report},
     preview::{ModelPreview, PreviewCamera},
     scene::SceneEntity,
@@ -616,15 +616,11 @@ fn report_edited(
         return;
     }
     let registry = registry.read();
-    let value = |transform: &Transform| {
-        serde_json::to_value(TypedReflectSerializer::new(transform, &registry))
-            .unwrap_or(Value::Null)
-    };
     send_report(&Report::Edited {
         id: entity.to_bits(),
         component: Transform::type_path().into(),
-        before: value(before),
-        after: value(after),
+        before: transform_value(&registry, before),
+        after: transform_value(&registry, after),
     });
 }
 

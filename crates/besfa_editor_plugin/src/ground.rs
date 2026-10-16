@@ -9,13 +9,13 @@ use bevy::{
     ecs::{query::QueryFilter, system::SystemState},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
     prelude::*,
-    reflect::serde::TypedReflectSerializer,
+    reflect::{TypeRegistry, serde::TypedReflectSerializer},
     world_serialization::{DynamicWorldRoot, WorldAssetRoot},
 };
 use serde_json::Value;
 
 use crate::{
-    edit::{self, Deleted, in_world, relative, subtree},
+    edit::{self, in_world, is_scene_entity, relative, subtree},
     inspect::send_report,
     preview::bounds,
     scene::SceneEntity,
@@ -129,12 +129,6 @@ pub(crate) fn drop_to_surface(world: &mut World, ids: &[u64]) -> (Vec<Move>, Vec
     (moves, failures)
 }
 
-fn is_scene_entity(world: &World, entity: Entity) -> bool {
-    world
-        .get_entity(entity)
-        .is_ok_and(|entity| entity.contains::<SceneEntity>() && !entity.contains::<Deleted>())
-}
-
 /// `entity`, or for a group, the things in it: a group has no mesh or
 /// asset of its own and holds scene entities.
 fn things_in(world: &World, entity: Entity) -> Vec<Entity> {
@@ -190,17 +184,17 @@ fn drop_one(world: &mut World, entity: Entity) -> Option<Option<Move>> {
         return Some(None);
     }
     *world.get_mut::<Transform>(entity)? = local;
+    let registry = world.resource::<AppTypeRegistry>().read();
     Some(Some(Move {
         id: entity.to_bits(),
-        before: transform_value(world, &before),
-        after: transform_value(world, &local),
+        before: transform_value(&registry, &before),
+        after: transform_value(&registry, &local),
     }))
 }
 
 /// `transform` as `set` takes it.
-fn transform_value(world: &World, transform: &Transform) -> Value {
-    let registry = world.resource::<AppTypeRegistry>().read();
-    serde_json::to_value(TypedReflectSerializer::new(transform, &registry)).unwrap_or(Value::Null)
+pub(crate) fn transform_value(registry: &TypeRegistry, transform: &Transform) -> Value {
+    serde_json::to_value(TypedReflectSerializer::new(transform, registry)).unwrap_or(Value::Null)
 }
 
 /// Where and how many things `scatter` spreads.
@@ -349,7 +343,7 @@ pub(crate) struct Scattering {
 pub(crate) fn scatter_paint(
     world: &mut World,
     mut painting: Local<Scattering>,
-    mut rays: Local<Option<SystemState<MeshRayCast<'static, 'static>>>>,
+    mut rays: Local<SystemState<MeshRayCast<'static, 'static>>>,
 ) {
     let brush = world
         .get_resource::<SceneView>()
@@ -375,7 +369,6 @@ pub(crate) fn scatter_paint(
     };
     // The ground, not what is being scattered on it.
     let skip = under::<Or<(With<Scattered>, With<EditorOnly>)>>(world);
-    let rays = rays.get_or_insert_with(|| SystemState::new(world));
     let mut hit = |world: &mut World, pointer: Vec2| {
         let ray = camera.viewport_to_world(&eye, pointer).ok()?;
         let keep = |entity: Entity| !skip.contains(&entity);

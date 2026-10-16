@@ -296,12 +296,15 @@ pub(crate) fn place(world: &mut World, entity: Entity, place: &Placement, parent
 /// and not a part of a placed model, which saving would leave out.
 pub(crate) fn parent(world: &World, id: u64) -> Result<Entity, String> {
     Entity::try_from_bits(id)
-        .filter(|&entity| {
-            world.get_entity(entity).is_ok_and(|entity| {
-                entity.contains::<SceneEntity>() && !entity.contains::<Deleted>()
-            })
-        })
+        .filter(|&entity| is_scene_entity(world, entity))
         .ok_or_else(|| format!("{id} is not a scene entity that can be a parent"))
+}
+
+/// A scene entity that is not deleted.
+pub(crate) fn is_scene_entity(world: &World, entity: Entity) -> bool {
+    world
+        .get_entity(entity)
+        .is_ok_and(|entity| entity.contains::<SceneEntity>() && !entity.contains::<Deleted>())
 }
 
 /// Moves a scene entity under `parent`, or to the top without one, where it
