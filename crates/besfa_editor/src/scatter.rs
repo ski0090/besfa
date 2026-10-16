@@ -6,13 +6,13 @@
 use besfa_protocol::{ScatterBrush, ScatterModel};
 use eframe::egui::{self, DragValue, RichText, Slider, Ui};
 
-use crate::panels::{MUTED, section};
+use crate::panels::{MUTED, can_place, section};
 
 pub struct ScatterTools {
     /// Painting with the left button instead of selecting.
     pub on: bool,
-    /// Asset paths and how often each comes up against the others.
-    pub models: Vec<(String, f32)>,
+    /// The models and prefabs, and how often each comes up.
+    pub models: Vec<ScatterModel>,
     /// The brush's radius in meters.
     pub size: f32,
     /// Things per 100 square meters.
@@ -46,14 +46,7 @@ impl ScatterTools {
             return None;
         }
         Some(ScatterBrush {
-            models: self
-                .models
-                .iter()
-                .map(|(path, weight)| ScatterModel {
-                    path: path.clone(),
-                    weight: *weight,
-                })
-                .collect(),
+            models: self.models.clone(),
             radius: self.size,
             density: self.density,
             spacing: self.spacing,
@@ -74,15 +67,19 @@ impl ScatterTools {
                 );
             }
             let mut gone = None;
-            for (index, (path, weight)) in self.models.iter_mut().enumerate() {
+            for (index, model) in self.models.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     if ui.small_button("✕").on_hover_text("Remove").clicked() {
                         gone = Some(index);
                     }
-                    ui.add(DragValue::new(weight).range(0.0..=10.0).speed(0.05))
-                        .on_hover_text("How often it comes up against the others");
-                    let name = path.rsplit('/').next().unwrap_or(path);
-                    ui.label(name).on_hover_text(path.as_str());
+                    ui.add(
+                        DragValue::new(&mut model.weight)
+                            .range(0.0..=10.0)
+                            .speed(0.05),
+                    )
+                    .on_hover_text("How often it comes up against the others");
+                    let name = model.path.rsplit('/').next().unwrap_or(&model.path);
+                    ui.label(name).on_hover_text(model.path.as_str());
                 });
             }
             if let Some(index) = gone {
@@ -90,10 +87,13 @@ impl ScatterTools {
             }
         });
         if let Some(path) = dropped
-            && scatterable(&path)
-            && !self.models.iter().any(|(listed, _)| *listed == *path)
+            && can_place(&path)
+            && !self.models.iter().any(|model| model.path == *path)
         {
-            self.models.push(((*path).clone(), 1.0));
+            self.models.push(ScatterModel {
+                path: (*path).clone(),
+                weight: 1.0,
+            });
         }
         ui.add_space(8.0);
         ui.add(
@@ -128,11 +128,6 @@ impl ScatterTools {
     }
 }
 
-/// A model or prefab, the kinds scatter places.
-fn scatterable(path: &str) -> bool {
-    path.ends_with(".glb") || path.ends_with(".gltf") || path.ends_with(".scn.ron")
-}
-
 #[cfg(test)]
 mod tests {
     use egui_kittest::{Harness, kittest::Queryable};
@@ -145,12 +140,15 @@ mod tests {
         assert!(tools.brush(false).is_none());
         tools.on = true;
         assert!(tools.brush(false).is_none(), "nothing to place");
-        tools.models.push(("models/oak.glb".into(), 2.0));
+        tools.models.push(ScatterModel {
+            path: "models/oak.glb".into(),
+            weight: 2.0,
+        });
         let brush = tools.brush(false).unwrap();
         assert_eq!(brush.models[0].weight, 2.0);
         assert!(!brush.erase);
         assert!(tools.brush(true).unwrap().erase);
-        assert!(scatterable("prefabs/rock.scn.ron") && !scatterable("textures/grass.png"));
+        assert!(can_place("prefabs/rock.scn.ron") && !can_place("textures/grass.png"));
     }
 
     #[test]
@@ -162,10 +160,10 @@ mod tests {
         harness.run();
         harness.get_by_label("Drag prefabs or models here to scatter them.");
 
-        harness
-            .state_mut()
-            .models
-            .push(("models/oak.glb".into(), 1.0));
+        harness.state_mut().models.push(ScatterModel {
+            path: "models/oak.glb".into(),
+            weight: 1.0,
+        });
         harness.state_mut().on = true;
         harness.run();
         harness.get_by_label("oak.glb");

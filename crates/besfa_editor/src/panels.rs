@@ -168,27 +168,25 @@ pub fn hierarchy(
     let mut action = None;
     let selection = scene.selected_entity().is_some();
     panel_header(ui, "Hierarchy", |ui| {
-        if can_save_prefab
-            && ui
-                .add_enabled(selection, egui::Button::new("📦").small())
-                .on_hover_text("Save as prefab")
-                .clicked()
-        {
-            action = Some(HierarchyAction::SavePrefab);
-        }
-        if ui
-            .add_enabled(selection, egui::Button::new("🗑").small())
-            .on_hover_text("Delete (Delete)")
-            .clicked()
-        {
-            action = Some(HierarchyAction::Delete);
-        }
-        if ui
-            .add_enabled(selection, egui::Button::new("🗐").small())
-            .on_hover_text("Duplicate (Ctrl+D)")
-            .clicked()
-        {
-            action = Some(HierarchyAction::Duplicate);
+        let buttons = [
+            (
+                can_save_prefab,
+                "📦",
+                "Save as prefab",
+                HierarchyAction::SavePrefab,
+            ),
+            (true, "🗑", "Delete (Delete)", HierarchyAction::Delete),
+            (true, "🗐", "Duplicate (Ctrl+D)", HierarchyAction::Duplicate),
+        ];
+        for (shown, icon, tip, act) in buttons {
+            if shown
+                && ui
+                    .add_enabled(selection, egui::Button::new(icon).small())
+                    .on_hover_text(tip)
+                    .clicked()
+            {
+                action = Some(act);
+            }
         }
         ui.menu_button("➕", |ui| {
             for (kind, label) in SPAWN_KINDS {
@@ -267,9 +265,7 @@ pub fn hierarchy(
 
 /// Files the scene can show: glTF models, and scene and prefab files.
 pub fn can_place(path: &str) -> bool {
-    [".glb", ".gltf", ".scn.ron"]
-        .iter()
-        .any(|extension| path.ends_with(extension))
+    can_preview(path) || path.ends_with(".scn.ron")
 }
 
 /// glTF models, which the model preview shows.
@@ -344,6 +340,7 @@ const THUMBNAIL_TIP: f32 = 128.0;
 /// dragged out as their asset path; double-clicking a model previews it.
 /// Models show their thumbnails, and models that change on disk are
 /// noticed, to load them again and picture them anew.
+#[derive(Default)]
 pub struct AssetBrowser {
     directory: PathBuf,
     /// None while there is no asset folder.
@@ -370,13 +367,7 @@ impl AssetBrowser {
     pub fn new(directory: PathBuf) -> Self {
         Self {
             directory,
-            rows: None,
-            listed: None,
-            models: HashMap::new(),
-            reimports: HashMap::new(),
-            thumbnails: HashMap::new(),
-            textures: HashMap::new(),
-            asked: HashMap::new(),
+            ..Default::default()
         }
     }
 
@@ -523,11 +514,6 @@ impl AssetBrowser {
                         texture(ui.ctx(), textures, &row.path, &file, made)
                     });
                     let label = RichText::new(&row.name).color(TEXT);
-                    let picture = |ui: &mut Ui, side: f32| {
-                        if let Some(texture) = &thumbnail {
-                            ui.image((texture.id(), egui::vec2(side, side)));
-                        }
-                    };
                     // The thumbnail, or the icon, in a slot of the same size.
                     let slot = |ui: &mut Ui| {
                         let side = egui::vec2(THUMBNAIL_ROW, THUMBNAIL_ROW);
@@ -549,7 +535,9 @@ impl AssetBrowser {
                         // Not `hovered`: egui clears it while the button is down.
                         if can_preview(&row.path) {
                             let name = name.response.on_hover_ui(|ui| {
-                                picture(ui, THUMBNAIL_TIP);
+                                if let Some(texture) = &thumbnail {
+                                    ui.image((texture.id(), egui::Vec2::splat(THUMBNAIL_TIP)));
+                                }
                                 ui.label("Double-click to preview");
                             });
                             if name.contains_pointer()
