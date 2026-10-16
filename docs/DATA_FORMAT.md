@@ -43,6 +43,23 @@
 
 흩뿌리기로 놓은 물건은 씬 파일에 다른 놓인 모델·프리팹과 같이 저장되고, `besfa_editor_plugin::ground::Scattered` 표식이 붙는다. 흩뿌린 것 지우기는 이 표식이 있는 것만 지우므로 손으로 놓은 물건은 남는다. 흩뿌린 물건은 이름이 `Scatter`이고 `besfa_editor_plugin::ground::ScatterGroup` 표식이 붙은 묶음 아래에 모인다.
 
+## 애니메이션 상태 기계
+
+놓인 glTF 모델의 루트에 붙는 `besfa_editor_plugin::animation::AnimationStateMachine`은 씬 파일에 다른 컴포넌트처럼 저장된다. `states`는 상태 목록이고 첫 상태에서 시작한다. 상태는 이름 `name`, 모델의 이름 붙은 glTF 클립 `clip`, 한 번만 틀고 마지막 자세로 멈추는 `once`(기본 false, 반복), 배속 `speed`(기본 1)를 갖는다. `transitions`는 목록 순서대로 살피는 전이다. 전이는 출발 상태 `from`(`*`이면 도착 상태가 아닌 모든 상태), 도착 상태 `to`, 모두 맞아야 하는 조건 `conditions`, 크로스페이드 초 `blend`(기본 0.2), 출발 상태의 클립을 얼마나 튼 뒤에 넘어갈지 `exit_time`(1이면 한 바퀴, 0이면 언제든, 기본 0)을 갖는다. 조건은 파라미터 이름 `param`, 시험 `test`(`Greater`·`Less`: 실수 파라미터를 `value`와 비교, `True`·`False`: 참거짓 파라미터, `Trigger`: 당긴 트리거, 전이를 타면 놓는다), `value`를 갖는다. 빠진 필드는 모두 기본값이 된다. 상태 기계를 붙이면 `besfa_editor_plugin::animation::AnimationParams`도 함께 붙는다. 게임이 쓰는 `floats`·`bools`·`triggers`와 지금 트는 상태 `state`를 담고, 쓴 적 없는 파라미터는 0과 false로 읽는다. 씬 파일에는 처음 값이 저장된다. 모델의 클립 이름 `AnimationClips`는 플러그인이 계산하므로 저장하지 않는다.
+
+```ron
+"besfa_editor_plugin::animation::AnimationStateMachine": (
+    states: [
+        (name: "idle", clip: "idle"),
+        (name: "walk", clip: "walk", speed: 1.2),
+    ],
+    transitions: [
+        (from: "idle", to: "walk", conditions: [(param: "speed", test: Greater, value: 0.1)]),
+        (from: "walk", to: "idle", conditions: [(param: "speed", test: Less, value: 0.1)]),
+    ],
+),
+```
+
 ## 저장 위치
 
 Besfa로 생성한 게임 프로젝트는 씬 외의 에디터 데이터를 프로젝트 루트의 `besfa/` 디렉터리에 저장한다.

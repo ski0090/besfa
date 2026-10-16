@@ -42,7 +42,7 @@ Restart the editor after installing the CLI so it picks up the PATH change.
 
 The target folder must not exist yet; its name becomes the project name.
 
-`besfa new` also writes a `.mcp.json`, so Claude Code opened in the project can run the game through `besfa mcp`: place, sculpt, scatter and take pictures of the scene without the editor. The game runs without a window. Don't let it and the editor work on the same project at once, since both write the scene file. In an older project, add the same file:
+`besfa new` also writes a `.mcp.json`, so Claude Code opened in the project can run the game through `besfa mcp`: place, sculpt, scatter, set up animation state machines and take pictures of the scene without the editor. The game runs without a window. Don't let it and the editor work on the same project at once, since both write the scene file. In an older project, add the same file:
 
 ```json
 { "mcpServers": { "besfa": { "command": "besfa", "args": ["mcp"] } } }
