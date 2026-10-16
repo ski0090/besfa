@@ -16,6 +16,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
+/// The features the editor runs a game with, for `besfa new`'s check.
+pub use besfa_protocol::run_features;
 use besfa_protocol::{Command, EntityInfo, Placement, Report, Request, SpawnKind};
 use serde_json::{Value, json};
 
@@ -79,7 +81,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "start",
-            "description": "Builds and runs the Besfa game project at `project` in edit mode, paused, as the editor's Run does (`cargo run --features bevy/dynamic_linking`). Returns once cargo starts; the other tools wait for the game. The game runs without a window, so nothing on screen shows it; `thumbnail` still renders. One game at a time; do not run one on a project the editor has open, since both would write its scene file.",
+            "description": "Builds and runs the Besfa game project at `project` in edit mode, paused, as the editor's Run does (`cargo run --features bevy/dynamic_linking`, plus `besfa_editor` when the game declares it). Returns once cargo starts; the other tools wait for the game. The game runs without a window, so nothing on screen shows it; `thumbnail` still renders. One game at a time; do not run one on a project the editor has open, since both would write its scene file.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"project": {"type": "string", "description": "Absolute path of the game project, the folder with its Cargo.toml; by default the folder the server runs in, which is the game's when its .mcp.json starts `besfa mcp`."}},
@@ -382,8 +384,13 @@ impl Game {
     /// Starts the game the way the editor does, minus its viewport and any
     /// window, so the shared Bevy build is reused.
     fn start(project: &Path) -> io::Result<Game> {
+        let manifest = std::fs::read_to_string(project.join("Cargo.toml")).unwrap_or_default();
         let mut cargo = quiet("cargo")
-            .args(["run", "--features", "bevy/dynamic_linking"])
+            .args([
+                "run",
+                "--features",
+                &besfa_protocol::run_features(&manifest),
+            ])
             .current_dir(project)
             // Read by besfa_editor_plugin: start paused and take commands.
             .env("BESFA_EDIT_MODE", "1")

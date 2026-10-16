@@ -47,11 +47,12 @@ let plugins = besfa_editor_plugin::default_plugins();
 let plugins = besfa_components::default_plugins();
 ```
 
-- 에디터, `besfa_mcp`, `besfa new`의 미리 빌드는 게임을 `--features bevy/dynamic_linking,besfa_editor`로 실행한다. 그 feature가 없는 옛 프로젝트는 cargo가 실패하므로 `Cargo.toml`의 `[features]`에 `besfa_editor`가 있을 때만 붙인다.
+- 에디터, `besfa_mcp`, `besfa new`의 미리 빌드는 게임을 `--features bevy/dynamic_linking,besfa_editor`로 실행한다. 그 feature가 없는 옛 프로젝트는 cargo가 실패하므로 `Cargo.toml`의 `[features]`에 `besfa_editor`가 있을 때만 붙인다(`besfa_protocol::run_features`).
+- `cargo update -p besfa_editor_plugin`은 같은 git 저장소의 `besfa_components`도 함께 올리므로, 에디터의 플러그인 갱신 아이콘은 그대로 쓴다.
 - `besfa new` 템플릿(`Cargo.toml`, `main.rs`)을 위처럼 바꾼다. 기존 게임(Duskhold)은 고치지 않아도 지금처럼 동작하고, 원할 때 같은 모양으로 옮긴다.
 
 ## 테스트와 완료 기준
 
 - 옮긴 테스트가 새 크레이트에서 통과하고, 옛 타입 경로로 쓰인 씬(템플릿 씬, 하늘·지형·상태 기계가 든 씬)을 읽는 테스트를 더한다.
 - `cargo test --workspace`, `cargo build --workspace`, `besfa new`로 만든 프로젝트의 빌드, 이 워크트리를 쓰는 Duskhold의 `cargo build`가 통과한다.
-- `cargo tree -p besfa_components`에 `besfa_protocol`·`windows`가 없다.
+- 템플릿 게임을 `besfa_editor` 없이 빌드하면 `cargo tree`에 `besfa_editor_plugin`·`besfa_protocol`이 없다(`windows`·`wgpu`는 Bevy 자체가 쓴다).

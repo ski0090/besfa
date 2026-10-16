@@ -28,6 +28,7 @@ impl Plugin for AnimationStateMachinePlugin {
 /// States and the transitions between them. The first state is where the
 /// machine starts.
 #[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[type_path = "besfa_editor_plugin::animation"]
 #[reflect(Component, Default)]
 #[require(AnimationParams)]
 pub struct AnimationStateMachine {
@@ -38,6 +39,7 @@ pub struct AnimationStateMachine {
 // `#[reflect(Default)]` fills each field left out from `Default`: `set`
 // panics on a list item it cannot build from what it was given.
 #[derive(Reflect, Clone, Debug, PartialEq)]
+#[type_path = "besfa_editor_plugin::animation"]
 #[reflect(Default)]
 pub struct AnimationState {
     pub name: String,
@@ -62,6 +64,7 @@ impl Default for AnimationState {
 /// Taken, first in the list first, when every condition holds and the
 /// exit time has passed.
 #[derive(Reflect, Clone, Debug, PartialEq)]
+#[type_path = "besfa_editor_plugin::animation"]
 #[reflect(Default)]
 pub struct AnimationTransition {
     /// A state's name, or `*` for any state but `to`.
@@ -88,6 +91,7 @@ impl Default for AnimationTransition {
 }
 
 #[derive(Reflect, Clone, Debug, Default, PartialEq)]
+#[type_path = "besfa_editor_plugin::animation"]
 #[reflect(Default)]
 pub struct AnimationCondition {
     pub param: String,
@@ -97,6 +101,7 @@ pub struct AnimationCondition {
 }
 
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[type_path = "besfa_editor_plugin::animation"]
 #[reflect(Default)]
 pub enum ConditionTest {
     /// A float parameter is above the value.
@@ -113,6 +118,7 @@ pub enum ConditionTest {
 /// What the game tells the machine. Parameters it never wrote read as 0
 /// and false.
 #[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[type_path = "besfa_editor_plugin::animation"]
 #[reflect(Component, Default)]
 pub struct AnimationParams {
     pub floats: BTreeMap<String, f32>,
@@ -127,6 +133,7 @@ pub struct AnimationParams {
 /// The named clips of the model the machine plays, for the editor to pick
 /// from; computed, so the scene file leaves it out.
 #[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[type_path = "besfa_editor_plugin::animation"]
 #[reflect(Component)]
 pub struct AnimationClips(pub Vec<String>);
 

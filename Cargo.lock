@@ -621,6 +621,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "besfa_components"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "ron",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "besfa_editor"
 version = "0.1.0"
 dependencies = [
@@ -638,6 +648,7 @@ dependencies = [
 name = "besfa_editor_plugin"
 version = "0.1.0"
 dependencies = [
+ "besfa_components",
  "besfa_protocol",
  "bevy",
  "ron",

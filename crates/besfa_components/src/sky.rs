@@ -28,7 +28,7 @@ use bevy::{
 /// a degree, so a sun a few degrees across is a round disc.
 const FACE: u32 = 256;
 
-pub(crate) struct SkyPlugin;
+pub struct SkyPlugin;
 
 impl Plugin for SkyPlugin {
     fn build(&self, app: &mut App) {
@@ -40,6 +40,7 @@ impl Plugin for SkyPlugin {
 /// The scene's sky, which every camera showing the scene draws behind
 /// everything else. With more than one in the scene, the first is drawn.
 #[derive(Component, Reflect, Clone, Debug, PartialEq)]
+#[type_path = "besfa_editor_plugin::sky"]
 #[reflect(Component, Default)]
 pub struct Sky {
     pub mode: SkyMode,
@@ -68,6 +69,7 @@ pub struct Sky {
 
 /// The sun's disc and the glow around it.
 #[derive(Reflect, Clone, Debug, PartialEq)]
+#[type_path = "besfa_editor_plugin::sky"]
 #[reflect(Default)]
 pub struct Sun {
     pub show: bool,
@@ -96,6 +98,7 @@ impl Default for Sun {
 
 /// The moon's disc, lit as far as its phase.
 #[derive(Reflect, Clone, Debug, PartialEq)]
+#[type_path = "besfa_editor_plugin::sky"]
 #[reflect(Default)]
 pub struct Moon {
     pub show: bool,
@@ -123,6 +126,7 @@ impl Default for Moon {
 }
 
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[type_path = "besfa_editor_plugin::sky"]
 #[reflect(Default)]
 pub enum SkyMode {
     #[default]
@@ -224,7 +228,8 @@ fn edge(inside: f32) -> f32 {
 /// Put on a camera with the `Skybox` this plugin gave it, which goes with
 /// the sky. A camera the game gave a skybox itself is left alone.
 #[derive(Component)]
-pub(crate) struct SkyApplied;
+#[doc(hidden)]
+pub struct SkyApplied;
 
 /// The images the sky shows.
 #[derive(Resource, Default)]

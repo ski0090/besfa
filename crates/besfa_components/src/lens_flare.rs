@@ -14,7 +14,7 @@ use bevy::{
 };
 
 use crate::{
-    scene_view::EditorOnly,
+    EditorOnly,
     sky::{Sky, SkyApplied, SkyMode},
 };
 
@@ -31,7 +31,7 @@ const GHOSTS: [(f32, f32, f32); 7] = [
     (1.8, 0.11, 0.12),
 ];
 
-pub(crate) struct LensFlarePlugin;
+pub struct LensFlarePlugin;
 
 impl Plugin for LensFlarePlugin {
     fn build(&self, app: &mut App) {
@@ -47,7 +47,7 @@ impl Plugin for LensFlarePlugin {
 
 /// One ring of the flare over `camera`.
 #[derive(Component)]
-pub(crate) struct Ghost {
+pub struct Ghost {
     camera: Entity,
     index: usize,
 }

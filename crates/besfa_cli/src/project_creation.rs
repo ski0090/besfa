@@ -54,9 +54,10 @@ pub(crate) fn prebuild() -> Result<(), CreateError> {
         eprintln!("Could not update besfa_editor_plugin, building the pinned version.");
     }
 
-    // Same features as the editor's Run, or the build is not reused.
+    // Same features as the editor's Run of a new game, or the build is not
+    // reused.
     let status = Command::new("cargo")
-        .args(["build", "--features", "bevy/dynamic_linking"])
+        .args(["build", "--features", "bevy/dynamic_linking,besfa_editor"])
         .current_dir(&project)
         .status()
         .map_err(cargo_start_error)?;
@@ -230,7 +231,14 @@ const MCP_CONFIG: &str = r#"{
 
 /// Appended to the `[dependencies]` table that ends Cargo's generated manifest.
 const TEMPLATE_DEPENDENCIES: &str = r#"bevy = "0.20.0"
-besfa_editor_plugin = { git = "https://github.com/ski0090/besfa" }
+# The scene file, terrain, sky and the rest of what the game ships with.
+besfa_components = { git = "https://github.com/ski0090/besfa" }
+# The Besfa editor's side, only while it runs the game: release builds
+# leave it out.
+besfa_editor_plugin = { git = "https://github.com/ski0090/besfa", optional = true }
+
+[features]
+besfa_editor = ["dep:besfa_editor_plugin"]
 
 # Bevy is slow unoptimized: optimize dependencies, keep the game quick to rebuild.
 [profile.dev]
@@ -370,7 +378,13 @@ mod tests {
         let manifest = manifest.expect("Cargo.toml should be created");
         assert!(manifest.contains("name = \"demo_game\""));
         assert!(manifest.contains("[dependencies]\nbevy = \"0.20.0\""));
+        assert!(manifest.contains("besfa_components = { git ="));
         assert!(manifest.contains("besfa_editor_plugin = { git ="));
+        assert_eq!(
+            besfa_mcp::run_features(&manifest),
+            "bevy/dynamic_linking,besfa_editor",
+            "the editor runs a new game with its plugin"
+        );
         assert_eq!(main.expect("main.rs should be created"), TEMPLATE_MAIN);
         let scene = scene.expect("the scene file should be created");
         assert!(scene.contains("\"demo_game::Spin\": ()"), "{scene}");

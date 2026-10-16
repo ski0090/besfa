@@ -1,0 +1,88 @@
+//! The components a Besfa game ships with, and the plugins that make them
+//! work: the scene file, changes to placed models' parts, terrain, the sky
+//! and its lens flare, and animation state machines.
+//!
+//! Games use [`default_plugins`] in place of `DefaultPlugins`, or
+//! `besfa_editor_plugin::default_plugins` while the Besfa editor runs them,
+//! which adds the editor's side on top of these.
+//!
+//! Each reflected type keeps the path it had in `besfa_editor_plugin`
+//! (`besfa_editor_plugin::sky::Sky`), which scene files name it by.
+
+use bevy::{app::PluginGroupBuilder, prelude::*};
+
+pub mod animation;
+pub mod ground;
+pub mod lens_flare;
+pub mod part_changes;
+#[doc(hidden)]
+pub mod reflect;
+pub mod scene;
+pub mod sky;
+pub mod terrain;
+
+pub use animation::{
+    AnimationClips, AnimationCondition, AnimationParams, AnimationState, AnimationStateMachine,
+    AnimationStateMachinePlugin, AnimationTransition, ConditionTest,
+};
+pub use ground::{ScatterGroup, Scattered};
+pub use part_changes::{PartChange, PartChanges};
+pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
+pub use sky::{Moon, Sky, SkyMode, Sun};
+pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight};
+
+/// `DefaultPlugins` that load the scene from `assets/scenes/main.scn.ron`
+/// and run the components in it.
+pub fn default_plugins() -> PluginGroupBuilder {
+    DefaultPlugins
+        .build()
+        .add(scene::ScenePlugin)
+        // Saved changes to placed models' parts apply in play as well.
+        .add(part_changes::PartChangesPlugin)
+        .add(terrain::TerrainPlugin)
+        .add(sky::SkyPlugin)
+        .add(lens_flare::LensFlarePlugin)
+        .add(animation::AnimationStateMachinePlugin)
+}
+
+/// Kept out of the editor's Hierarchy and the scene file.
+#[derive(Component)]
+pub struct EditorOnly;
+
+/// A placed or previewed model's root, once the model file it shows was
+/// loaded again and the root spawned it anew. Games that change what a
+/// model spawns, like swapping its materials, do it again here; Bevy's
+/// `WorldInstanceReady` also comes for it.
+#[derive(EntityEvent, Clone, Copy, Debug)]
+pub struct Reimported {
+    pub entity: Entity,
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::reflect::TypePath;
+
+    use super::*;
+
+    #[test]
+    fn keeps_the_type_paths_scene_files_name_types_by() {
+        for (path, name) in [
+            (Sky::type_path(), "sky::Sky"),
+            (Sun::type_path(), "sky::Sun"),
+            (Terrain::type_path(), "terrain::Terrain"),
+            (TerrainFile::type_path(), "terrain::TerrainFile"),
+            (MeshShape::type_path(), "scene::MeshShape"),
+            (MeshColor::type_path(), "scene::MeshColor"),
+            (PartChanges::type_path(), "part_changes::PartChanges"),
+            (Scattered::type_path(), "ground::Scattered"),
+            (ScatterGroup::type_path(), "ground::ScatterGroup"),
+            (
+                AnimationStateMachine::type_path(),
+                "animation::AnimationStateMachine",
+            ),
+            (AnimationParams::type_path(), "animation::AnimationParams"),
+        ] {
+            assert_eq!(path, format!("besfa_editor_plugin::{name}"));
+        }
+    }
+}

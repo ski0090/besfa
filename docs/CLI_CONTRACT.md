@@ -20,7 +20,7 @@ cargo new --bin <프로젝트 이름>
 
 프로젝트 이름은 `DIRECTORY`의 마지막 경로 구성 요소에서 결정한다. Cargo가 프로젝트를 만든 뒤, `besfa`는 내장 Bevy 시작 코드를 적용한다.
 
-- `Cargo.toml`의 `[dependencies]`에 `bevy = "0.20.0"`과 `besfa_editor_plugin`(이 저장소의 git 의존성)을 추가하고, Bevy 권장 `dev` 프로필 최적화 설정을 붙인다.
+- `Cargo.toml`의 `[dependencies]`에 `bevy = "0.20.0"`, `besfa_components`, 그리고 `optional = true`인 `besfa_editor_plugin`(둘 다 이 저장소의 git 의존성)을 추가하고, `[features]`의 `besfa_editor = ["dep:besfa_editor_plugin"]`과 Bevy 권장 `dev` 프로필 최적화 설정을 붙인다. `src/main.rs`는 `besfa_editor` feature가 켜져 있으면 `besfa_editor_plugin::default_plugins()`, 아니면 `besfa_components::default_plugins()`를 쓴다. 그래서 릴리즈 빌드(`cargo build --release`)에는 에디터 플러그인이 들어가지 않는다.
 - `src/main.rs`를 씬 파일을 읽고 큐브를 돌리는 게임으로 바꾼다. 원본은 `crates/besfa_cli/template/main.rs`다.
 - 프로젝트 루트에 `.mcp.json`을 써서, 그 폴더의 Claude Code 같은 에이전트가 `besfa mcp`로 게임을 띄우고 고치게 한다.
 - `assets/scenes/main.scn.ron`에 카메라, 조명, 회전하는 큐브가 있는 씬을 쓴다. 원본은 `crates/besfa_cli/template/main.scn.ron`이고, `{{crate}}`를 프로젝트의 크레이트 이름(디렉터리 이름의 `-`를 `_`로)으로 바꾼다. 형식은 [DATA_FORMAT.md](./DATA_FORMAT.md)의 '씬 파일'을 따른다.
@@ -34,7 +34,7 @@ cargo new --bin <프로젝트 이름>
 besfa prebuild
 ```
 
-`%LOCALAPPDATA%/Besfa/prebuild`를 `besfa new`와 같은 템플릿의 게임 프로젝트로 만들고(`Cargo.toml`, `src/main.rs`, `.cargo/config.toml`이 템플릿과 다를 때만 다시 써서, 바뀐 것이 없으면 다시 컴파일하지 않는다), 그 안에서 `cargo update -p besfa_editor_plugin`으로 플러그인을 최신 git 커밋으로 올린 뒤(에디터의 Run이 package cache 잠금을 기다리지 않도록 재시도 없이 요청당 10초만 기다리고, 실패하면 경고만 남기고 고정된 버전으로 계속한다) `cargo build --features bevy/dynamic_linking`을 실행한다. 공유 target 디렉터리, 의존성, feature, 프로필이 에디터의 Run과 같으므로, 이후 게임의 첫 Run은 게임 코드만 컴파일한다. 빌드가 만든 `Cargo.lock`은 `besfa new`가 새 프로젝트로 복사한다. Cargo 출력은 그대로 표준 출력·오류로 나간다. `LOCALAPPDATA`가 없으면 종료 코드 `20`, Cargo 실행이나 빌드가 실패하면 `30`을 반환한다.
+`%LOCALAPPDATA%/Besfa/prebuild`를 `besfa new`와 같은 템플릿의 게임 프로젝트로 만들고(`Cargo.toml`, `src/main.rs`, `.cargo/config.toml`이 템플릿과 다를 때만 다시 써서, 바뀐 것이 없으면 다시 컴파일하지 않는다), 그 안에서 `cargo update -p besfa_editor_plugin`으로 플러그인을 최신 git 커밋으로 올린 뒤(에디터의 Run이 package cache 잠금을 기다리지 않도록 재시도 없이 요청당 10초만 기다리고, 실패하면 경고만 남기고 고정된 버전으로 계속한다) `cargo build --features bevy/dynamic_linking,besfa_editor`를 실행한다. 공유 target 디렉터리, 의존성, feature, 프로필이 에디터의 Run과 같으므로, 이후 게임의 첫 Run은 게임 코드만 컴파일한다. 빌드가 만든 `Cargo.lock`은 `besfa new`가 새 프로젝트로 복사한다. Cargo 출력은 그대로 표준 출력·오류로 나간다. `LOCALAPPDATA`가 없으면 종료 코드 `20`, Cargo 실행이나 빌드가 실패하면 `30`을 반환한다.
 
 ```text
 besfa mcp

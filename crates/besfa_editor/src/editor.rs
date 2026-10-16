@@ -455,10 +455,12 @@ impl Editor {
                 ("WGPU_ADAPTER_NAME", adapter),
             ]);
         }
-        // Dynamic linking makes rebuilds after a code change much faster.
-        // Only the editor turns it on, so a plain `cargo build` stays
-        // standalone.
-        let args = ["run", "--features", "bevy/dynamic_linking"];
+        // Dynamic linking makes rebuilds after a code change much faster, and
+        // the editor feature brings in the plugin; a plain `cargo build`
+        // stays standalone and without the editor.
+        let manifest = fs::read_to_string(self.project.file("Cargo.toml")).unwrap_or_default();
+        let features = besfa_protocol::run_features(&manifest);
+        let args = ["run", "--features", features.as_str()];
         match CliProcess::start(Path::new(&self.project.path), "cargo", &args, &env, ctx) {
             Ok(game) => self.game = Some(game),
             Err(error) => return self.log(format!("Could not start cargo: {error}")),

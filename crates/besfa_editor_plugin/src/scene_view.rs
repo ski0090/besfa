@@ -28,9 +28,7 @@ use crate::{
     scene::SceneEntity,
 };
 
-/// Kept out of the Hierarchy and the scene file.
-#[derive(Component)]
-pub struct EditorOnly;
+pub use besfa_components::EditorOnly;
 
 /// The scene view's state, fed by the editor's commands.
 #[derive(Resource, Default)]

@@ -65,14 +65,14 @@ cargo install --path crates/besfa_cli
 
 ### 게임 프로젝트의 플러그인
 
-게임은 `besfa_editor_plugin`을 GitHub에서 받고, `Cargo.lock`이 커밋 하나에 고정합니다. 그래서 업데이트하기 전까지는 그 플러그인을 계속 씁니다. 에디터 툴바 오른쪽의 아이콘이 프로젝트의 커밋과 Bevy 미리 빌드의 커밋을 비교해 보여 줍니다.
+게임은 `besfa_components`와 `besfa_editor_plugin`을 GitHub에서 받고, `Cargo.lock`이 커밋 하나에 고정합니다. 그래서 업데이트하기 전까지는 그 플러그인을 계속 씁니다. `besfa new`로 만든 게임은 에디터 플러그인을 `besfa_editor` feature로만 켜고 에디터가 그 feature로 실행하므로, 릴리즈 빌드(`cargo build --release`)에는 에디터 없이 `besfa_components`만 들어갑니다. 에디터 툴바 오른쪽의 아이콘이 프로젝트의 커밋과 Bevy 미리 빌드의 커밋을 비교해 보여 줍니다.
 
 - 초록 체크: 같은 커밋입니다.
 - 노란 경고: 다른 커밋입니다. 마우스를 올리면 누르면 무엇을 하는지 나옵니다.
 
 ![툴바의 노란 경고 아이콘과 툴팁](docs/images/plugin-update-available.png)
 
-아이콘을 누르면 업데이트합니다. 에디터는 프로젝트에서 `cargo update -p besfa_editor_plugin`을 실행하고(다른 의존성은 건드리지 않습니다), 게임을 멈춘 뒤 새 플러그인으로 다시 빌드합니다. cargo의 출력은 **Log** 패널에 나오고(`Process exited with code 1.`은 이전 게임을 멈춘 기록입니다), 아이콘은 초록으로 바뀝니다.
+아이콘을 누르면 업데이트합니다. 에디터는 프로젝트에서 `cargo update -p besfa_editor_plugin`을 실행하고(같은 저장소의 `besfa_components`도 함께 올리고, 다른 의존성은 건드리지 않습니다), 게임을 멈춘 뒤 새 플러그인으로 다시 빌드합니다. cargo의 출력은 **Log** 패널에 나오고(`Process exited with code 1.`은 이전 게임을 멈춘 기록입니다), 아이콘은 초록으로 바뀝니다.
 
 ![업데이트 뒤의 초록 아이콘과 Log 패널의 cargo 출력](docs/images/plugin-updated.png)
 

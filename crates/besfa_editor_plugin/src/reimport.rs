@@ -18,6 +18,8 @@ use bevy::{
     world_serialization::{WorldAsset, WorldAssetRoot, WorldInstanceReady},
 };
 
+pub use besfa_components::Reimported;
+
 use crate::inspect::send_report;
 
 /// Frames the file must stay loaded before the models respawn: more than
@@ -26,15 +28,6 @@ const SETTLE_FRAMES: u32 = 5;
 
 /// Frames to wait for the respawned models before giving up on them.
 const GIVE_UP_FRAMES: u32 = 600;
-
-/// A placed or previewed model's root, once the model file it shows was
-/// loaded again and the root spawned it anew. Games that change what a
-/// model spawns, like swapping its materials, do it again here; Bevy's
-/// `WorldInstanceReady` also comes for it.
-#[derive(EntityEvent, Clone, Copy, Debug)]
-pub struct Reimported {
-    pub entity: Entity,
-}
 
 pub(crate) struct ReimportPlugin;
 

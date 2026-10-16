@@ -17,52 +17,41 @@ use bevy::{
     winit::WinitPlugin,
 };
 
-mod animation;
 mod edit;
 mod edit_mode;
 mod ground;
 mod input;
 mod inspect;
-mod lens_flare;
 mod part_changes;
 mod preview;
 mod reimport;
 mod scene;
 mod scene_view;
 mod shot;
-mod sky;
 mod terrain;
 mod thumbnail;
 mod viewport;
 
-pub use animation::{
+// The game's components, which games built before `besfa_components` name
+// through this crate.
+pub(crate) use besfa_components::sky;
+pub use besfa_components::{
     AnimationClips, AnimationCondition, AnimationParams, AnimationState, AnimationStateMachine,
-    AnimationStateMachinePlugin, AnimationTransition, ConditionTest,
+    AnimationStateMachinePlugin, AnimationTransition, ConditionTest, EditorOnly, MeshColor,
+    MeshShape, Moon, PartChange, PartChanges, Reimported, SCENE_PATH, ScatterGroup, Scattered,
+    SceneEntity, Sky, SkyMode, Sun, Terrain, TerrainData, TerrainFile, TerrainHandle,
+    TerrainHeight,
 };
-pub use ground::{ScatterGroup, Scattered};
-pub use part_changes::{PartChange, PartChanges};
-pub use reimport::Reimported;
-pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
-pub use scene_view::EditorOnly;
-pub use sky::{Moon, Sky, SkyMode, Sun};
-pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight};
 
-/// `DefaultPlugins` plus the scene file, adjusted to start in edit mode and
+/// `besfa_components::default_plugins`, adjusted to start in edit mode and
 /// render into the editor viewport when the editor launched the game, or
 /// into no window under `BESFA_HEADLESS`.
 pub fn default_plugins() -> PluginGroupBuilder {
-    // Saved changes to placed models' parts apply in play as well.
-    let mut plugins = DefaultPlugins
-        .build()
-        .add(scene::ScenePlugin)
-        .add(part_changes::PartChangesPlugin)
-        .add(terrain::TerrainPlugin)
-        .add(sky::SkyPlugin)
-        .add(lens_flare::LensFlarePlugin)
-        .add(animation::AnimationStateMachinePlugin);
+    let mut plugins = besfa_components::default_plugins();
     if std::env::var_os("BESFA_EDIT_MODE").is_some() {
         plugins = plugins
             .add(edit_mode::EditModePlugin)
+            .add(terrain::TerrainBrushPlugin)
             .add(inspect::InspectPlugin)
             .add(scene_view::SceneViewPlugin)
             .add(preview::PreviewPlugin)

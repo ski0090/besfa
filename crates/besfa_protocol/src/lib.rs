@@ -41,6 +41,35 @@ use serde_json::Value;
 /// 10. The sky: [`SpawnKind::Sky`] and [`EntityInfo::sky`].
 pub const VERSION: u32 = 10;
 
+/// The game's cargo feature that brings in `besfa_editor_plugin`, in games
+/// that depend on `besfa_components` and leave the editor out of release
+/// builds.
+pub const EDITOR_FEATURE: &str = "besfa_editor";
+
+/// The features to run the game at `manifest` (its `Cargo.toml`) with in
+/// the editor: Bevy's dynamic linking, which makes rebuilds much faster and
+/// which a plain `cargo build` leaves out, and [`EDITOR_FEATURE`] when the
+/// game declares it. A game from before it depends on the editor plugin
+/// always, and cargo refuses a feature a game does not declare.
+pub fn run_features(manifest: &str) -> String {
+    let mut in_features = false;
+    let declared = manifest.lines().map(str::trim).any(|line| {
+        if line.starts_with('[') {
+            in_features = line == "[features]";
+            return false;
+        }
+        in_features
+            && line
+                .strip_prefix(EDITOR_FEATURE)
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+    });
+    if declared {
+        format!("bevy/dynamic_linking,{EDITOR_FEATURE}")
+    } else {
+        "bevy/dynamic_linking".into()
+    }
+}
+
 /// Starts every report line.
 pub const REPORT_PREFIX: &str = "@besfa ";
 
@@ -1051,6 +1080,16 @@ mod tests {
             systems: vec![],
         };
         assert!(systems.line().contains(r#""crate":"game""#));
+    }
+
+    #[test]
+    fn runs_the_editor_feature_only_where_the_game_declares_it() {
+        let old = "[dependencies]\nbesfa_editor_plugin = { git = \"x\" }\n";
+        assert_eq!(run_features(old), "bevy/dynamic_linking");
+        let new = "[dependencies]\nbesfa_components = { git = \"x\" }\n\n[features]\nbesfa_editor = [\"dep:besfa_editor_plugin\"]\n";
+        assert_eq!(run_features(new), "bevy/dynamic_linking,besfa_editor");
+        let elsewhere = "[package.metadata]\nbesfa_editor = 1\n";
+        assert_eq!(run_features(elsewhere), "bevy/dynamic_linking");
     }
 
     #[test]

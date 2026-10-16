@@ -12,6 +12,8 @@ bevy = { version = "0.20.0", features = ["debug"] }
 wgpu = "30"
 # Commands from the editor and reports to it are JSON lines.
 besfa_protocol = { path = "../besfa_protocol" }
+# The game's components and their plugins, which edit mode builds on.
+besfa_components = { path = "../besfa_components" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

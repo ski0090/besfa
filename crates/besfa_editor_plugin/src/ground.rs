@@ -14,6 +14,8 @@ use bevy::{
 };
 use serde_json::Value;
 
+pub use besfa_components::ground::{ScatterGroup, Scattered};
+
 use crate::{
     edit::{self, in_world, is_scene_entity, relative, subtree},
     inspect::send_report,
@@ -28,17 +30,6 @@ const MAX_SCATTER: u32 = 10_000;
 
 /// Where a ray looking for the ground below a scattered thing starts.
 const SKY: f32 = 10_000.0;
-
-/// A thing scatter placed, which erasing may take away again; things
-/// placed by hand have none.
-#[derive(Component, Reflect, Clone, Copy, Debug, Default)]
-#[reflect(Component, Default)]
-pub struct Scattered;
-
-/// The group scattered things go under, named Scatter.
-#[derive(Component, Reflect, Clone, Copy, Debug, Default)]
-#[reflect(Component, Default)]
-pub struct ScatterGroup;
 
 /// Finds the surface under points: terrain from its data, anything else by
 /// a ray straight down at the meshes not left out.

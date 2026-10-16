@@ -1,4 +1,5 @@
-//! Changes to the parts a placed glTF model spawns, kept with the scene.
+//! Noting the editor's changes to the parts a placed glTF model spawns;
+//! `besfa_components::part_changes` makes them again.
 //!
 //! The parts are not saved: the model spawns them anew from its file. So
 //! when the editor sets, adds or removes a component of a part, the change
@@ -6,70 +7,12 @@
 //! keeps, and made again whenever the model spawns: as the scene loads,
 //! and after the file is reimported.
 
-use bevy::{
-    prelude::*,
-    world_serialization::{WorldAssetRoot, WorldInstanceReady},
-};
+use bevy::prelude::*;
 use serde_json::Value;
 
-use crate::{
-    edit::{self, subtree},
-    scene::{SceneEntity, json},
-    scene_view::EditorOnly,
-};
+pub use besfa_components::part_changes::*;
 
-/// Changes made in the editor to the parts a placed glTF model spawns.
-/// Removing it spawns the parts again as the file has them.
-#[derive(Component, Reflect, Default, Clone, Debug, PartialEq)]
-#[reflect(Component, Default)]
-pub struct PartChanges {
-    pub parts: Vec<PartChange>,
-}
-
-/// The latest change to one component of one part.
-#[derive(Reflect, Default, Clone, Debug, PartialEq)]
-pub struct PartChange {
-    /// The part's names from the model's root down to it, joined by `/`.
-    pub part: String,
-    /// The component's type path.
-    pub component: String,
-    /// The component's whole value as JSON, the way the editor sends it;
-    /// none once it is removed.
-    pub value: Option<String>,
-}
-
-pub(crate) struct PartChangesPlugin;
-
-impl Plugin for PartChangesPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_observer(spawned).add_observer(cleared);
-    }
-}
-
-/// The placed glTF model `entity` is a part of, and its path in it.
-fn placement(world: &World, entity: Entity) -> Option<(Entity, String)> {
-    if world.get::<SceneEntity>(entity).is_some() {
-        return None;
-    }
-    let mut names = Vec::new();
-    let mut current = entity;
-    loop {
-        // The part's name, or the way Bevy prints an unnamed entity.
-        names.push(match world.get::<Name>(current) {
-            Some(name) => name.as_str().to_owned(),
-            None => current.to_string(),
-        });
-        current = world.get::<ChildOf>(current)?.parent();
-        if world.get::<WorldAssetRoot>(current).is_some() {
-            // The preview's model keeps its changes in the editor.
-            if world.get::<EditorOnly>(current).is_some() {
-                return None;
-            }
-            names.reverse();
-            return Some((current, names.join("/")));
-        }
-    }
-}
+use crate::scene::json;
 
 /// Notes on its model's root that the editor changed `component` of
 /// `entity`, if it is a part of a placed glTF model.
@@ -105,54 +48,6 @@ fn component_json(world: &World, entity: Entity, component: &str) -> Option<Valu
     json(value.as_partial_reflect(), &registry).ok()
 }
 
-/// Makes the changes again on the parts of `root` there are now.
-fn apply(world: &mut World, root: Entity) {
-    let Some(changes) = world.get::<PartChanges>(root).cloned() else {
-        return;
-    };
-    let parts: Vec<(Entity, String)> = subtree(world, root)[1..]
-        .iter()
-        .filter_map(|&part| Some((part, placement(world, part)?.1)))
-        .collect();
-    for change in changes.parts {
-        let Some(&(part, _)) = parts.iter().find(|(_, path)| *path == change.part) else {
-            continue;
-        };
-        let result = match &change.value {
-            Some(value) => serde_json::from_str(value)
-                .map_err(|error| error.to_string())
-                .and_then(|value: Value| edit::set(world, part, &change.component, &value)),
-            None => edit::remove(world, part, &change.component),
-        };
-        if let Err(error) = result {
-            warn!(
-                "Could not make the saved change to {} of {}: {error}",
-                change.component, change.part
-            );
-        }
-    }
-}
-
-/// The model spawned its parts: as the scene loaded, or anew.
-fn spawned(
-    ready: On<WorldInstanceReady>,
-    mut commands: Commands,
-    roots: Query<(), With<PartChanges>>,
-) {
-    let root = ready.entity;
-    if roots.contains(root) {
-        commands.queue(move |world: &mut World| apply(world, root));
-    }
-}
-
-/// The changes were taken back: the parts spawn again as the file has them.
-fn cleared(remove: On<Remove<PartChanges>>, mut commands: Commands, roots: Query<&WorldAssetRoot>) {
-    if let Ok(scene) = roots.get(remove.entity) {
-        let scene = scene.clone();
-        commands.entity(remove.entity).try_insert(scene);
-    }
-}
-
 /// After the editor changed `component` of `entity`: a part's change is
 /// noted on its model's root, and changes set on a root, as an undo does,
 /// are made at once.
@@ -166,7 +61,10 @@ pub(crate) fn edited(world: &mut World, entity: Entity, component: &str) {
 
 #[cfg(test)]
 mod tests {
+    use bevy::world_serialization::WorldAssetRoot;
+
     use super::*;
+    use crate::{EditorOnly, scene::SceneEntity};
 
     #[test]
     fn notes_part_changes_on_the_root_and_makes_them_again() {

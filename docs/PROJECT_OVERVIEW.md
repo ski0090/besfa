@@ -37,9 +37,13 @@ egui(eframe, wgpu DX12) 기반 Windows 데스크톱 에디터다. 프로젝트 �
 
 에디터와 게임의 `besfa_editor_plugin`이 함께 쓰는 메시지 타입이다. 에디터가 게임의 stdin에 쓰는 `Request`(`Command`와 답을 받을 `seq`)와 게임이 stdout에 쓰는 `Report`, 그리고 프로토콜 버전이 있다. 자세한 규칙은 [ARCHITECTURE.md](./ARCHITECTURE.md)를 참고한다.
 
+### `crates/besfa_components`
+
+게임이 릴리즈에 담는 컴포넌트와 그 플러그인이다([RUNTIME.md](./RUNTIME.md)). 게임은 `besfa_components::default_plugins()`를 `DefaultPlugins` 대신 쓰고, 이것이 씬 파일을 읽고 부품 변경, 지형, 하늘과 렌즈 플레어, 애니메이션 상태 기계를 돌린다. 의존성은 Bevy와 serde뿐이라 에디터 쪽 코드(프로토콜, 뷰포트 공유 텍스처, Bevy `debug` feature)를 끌어오지 않는다. 컴포넌트의 타입 경로는 옮기기 전과 같은 `besfa_editor_plugin::sky::Sky` 등이라 그 전에 저장한 씬도 그대로 읽는다.
+
 ### `crates/besfa_editor_plugin`
 
-게임 프로젝트가 의존하는 Bevy 플러그인이다. 씬 파일을 읽고, 에디터가 띄우면 편집 상태로 시작해 에디터의 명령을 받는다. 게임 코드가 쓰는 것으로 지형이 있다: 지형은 `Terrain`(크기와 겉면 색)과 `TerrainFile`(높이 파일 경로)로 씬에 저장되고, 게임 코드는 시스템 인자 `TerrainHeight`의 `at(x, z)`로 그 자리의 땅 높이를 묻는다(캐릭터와 좀비를 땅 위에 세울 때). 흩뿌리기로 놓은 물건에는 `Scattered` 표식이 있어 게임이 골라낼 수 있다. 씬의 하늘은 `Sky` 컴포넌트(그라데이션 색이나 큐브맵 이미지)이고, 게임 코드가 `Query<&mut Sky>`로 값을 바꾸면 플러그인이 모든 카메라의 하늘을 따라 바꾼다([SKY.md](./SKY.md)).
+에디터가 게임을 띄울 때 쓰는 Bevy 플러그인이다. `besfa_components`에 의존해 `default_plugins()`가 그 위에 편집 플러그인을 더하고, 에디터가 띄우면 편집 상태로 시작해 에디터의 명령을 받으며 씬을 저장한다. `besfa new`로 만든 게임은 이 크레이트를 `besfa_editor` feature로만 켜므로(에디터, `besfa_mcp`, 미리 빌드가 그 feature로 실행한다) 릴리즈 빌드에는 들어가지 않는다. 그 전에 만든 게임은 이 크레이트에 바로 의존하고, 이 크레이트가 `besfa_components`의 타입을 다시 내보내므로 그대로 빌드된다. 게임 코드가 쓰는 것으로 지형이 있다: 지형은 `Terrain`(크기와 겉면 색)과 `TerrainFile`(높이 파일 경로)로 씬에 저장되고, 게임 코드는 시스템 인자 `TerrainHeight`의 `at(x, z)`로 그 자리의 땅 높이를 묻는다(캐릭터와 좀비를 땅 위에 세울 때). 흩뿌리기로 놓은 물건에는 `Scattered` 표식이 있어 게임이 골라낼 수 있다. 씬의 하늘은 `Sky` 컴포넌트(그라데이션 색이나 큐브맵 이미지)이고, 게임 코드가 `Query<&mut Sky>`로 값을 바꾸면 플러그인이 모든 카메라의 하늘을 따라 바꾼다([SKY.md](./SKY.md)).
 
 ### `crates/besfa_mcp`
 
@@ -70,7 +74,8 @@ besfa/
 │  ├─ besfa_project/                # 프로젝트 생성, 검증, 템플릿 처리
 │  ├─ besfa_data/                   # .besfa 파일 포맷, 파싱, 검증, 마이그레이션
 │  ├─ besfa_protocol/               # 에디터와 게임 런타임 간 통신 규약
-│  ├─ besfa_editor_plugin/          # 게임 프로젝트에 추가하는 Bevy Plugin
+│  ├─ besfa_components/             # 게임이 릴리즈에 담는 컴포넌트와 플러그인
+│  ├─ besfa_editor_plugin/          # 에디터가 게임을 띄울 때 더하는 Bevy Plugin
 │  └─ besfa_viewport_windows/       # D3D 공유 텍스처 기반 Windows 뷰포트
 │
 ├─ templates/
@@ -91,7 +96,8 @@ besfa/
 | `besfa_cli` | 터미널과 CI에서 실행하는 명령 인터페이스 |
 | `besfa_project` | 프로젝트 생성과 파일 시스템 작업의 실제 규칙 |
 | `besfa_data` | 에디터 데이터 파일의 읽기, 쓰기, 검증 |
-| `besfa_editor_plugin` | `.besfa` 데이터와 Bevy ECS/Asset의 연결 |
+| `besfa_components` | 게임이 릴리즈에 담는 컴포넌트(씬 파일, 지형, 하늘, 애니메이션 상태 기계) |
+| `besfa_editor_plugin` | `.besfa` 데이터와 Bevy ECS/Asset의 연결, 편집 상태 |
 | `besfa_protocol` | 에디터와 실행 중 게임 사이의 메시지 타입 |
 | `besfa_viewport_windows` | Bevy 렌더 타깃과 에디터 뷰포트의 GPU 연결 |
 
@@ -102,4 +108,5 @@ besfa/
 - [CLI 계약](./CLI_CONTRACT.md)
 - [에디터 데이터 포맷](./DATA_FORMAT.md)
 - [하늘 편집](./SKY.md)
+- [컴포넌트 크레이트 분리](./RUNTIME.md)
 - [TODO](./TODO.md)

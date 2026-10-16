@@ -65,14 +65,14 @@ When the editor starts, it runs `besfa prebuild` in the background: it moves the
 
 ### The plugin in a game project
 
-A game depends on `besfa_editor_plugin` from GitHub, and its `Cargo.lock` pins one commit, so the game keeps that plugin until you update it. The icon at the right of the editor toolbar compares the project's commit with the one the Bevy prebuild uses:
+A game depends on `besfa_components` and `besfa_editor_plugin` from GitHub, and its `Cargo.lock` pins one commit, so the game keeps that plugin until you update it. A game made with `besfa new` turns the editor plugin on only with its `besfa_editor` feature, which the editor runs it with, so a release build (`cargo build --release`) ships `besfa_components` without the editor. The icon at the right of the editor toolbar compares the project's commit with the one the Bevy prebuild uses:
 
 - Green check: the same commit.
 - Amber warning: a different commit. Hover over it to see what clicking does.
 
 ![The amber icon in the toolbar, with its tooltip](docs/images/plugin-update-available.png)
 
-Click the icon to update. The editor runs `cargo update -p besfa_editor_plugin` in the project, which leaves every other dependency alone, then stops the game and rebuilds it with the new plugin. Cargo's output appears in the **Log** panel (`Process exited with code 1.` is the old game being stopped), and the icon turns green.
+Click the icon to update. The editor runs `cargo update -p besfa_editor_plugin` in the project, which also moves `besfa_components` from the same repository and leaves every other dependency alone, then stops the game and rebuilds it with the new plugin. Cargo's output appears in the **Log** panel (`Process exited with code 1.` is the old game being stopped), and the icon turns green.
 
 ![The green icon after the update, and cargo's output in the Log panel](docs/images/plugin-updated.png)
 
