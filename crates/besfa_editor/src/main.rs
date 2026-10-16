@@ -15,7 +15,6 @@ mod project;
 mod review;
 mod scatter;
 mod scene;
-mod sky;
 mod terrain;
 mod viewport;
 

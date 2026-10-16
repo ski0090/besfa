@@ -1,12 +1,12 @@
 # 하늘 편집 기획
 
-씬의 하늘을 에디터 전용 창에서 고치고 씬 파일에 저장한다. 하늘은 `besfa_editor_plugin`이 제공하는 Reflect 컴포넌트 하나로, 게임 코드가 실행 중에 값을 써도 화면이 따라간다(예: Duskhold의 하루 시계가 시각에 따라 하늘색을 바꾼다).
+씬의 하늘을 Inspector에서 고치고 씬 파일에 저장한다. 하늘은 `besfa_editor_plugin`이 제공하는 Reflect 컴포넌트 하나로, 게임 코드가 실행 중에 값을 써도 화면이 따라간다(예: Duskhold의 하루 시계가 시각에 따라 하늘색을 바꾼다).
 
 ## 목표
 
 - 하늘은 씬 엔티티의 컴포넌트 `besfa_editor_plugin::sky::Sky`다. 다른 컴포넌트처럼 `.scn.ron`에 저장되고, Inspector·되돌리기·`besfa_mcp`의 `set`이 그대로 통한다.
 - 게임 코드는 `Query<&mut Sky>`로 값을 바꾼다. 플러그인이 바뀐 값을 매 프레임 화면에 반영하므로 게임은 렌더링을 몰라도 된다. 편집 상태와 실행 상태, 에디터 없이 실행한 게임 모두 같다.
-- 에디터의 Window > Sky가 오른쪽 패널의 Sky 탭을 연다. 색이나 이미지를 고치면 편집 상태의 뷰포트에 바로 보이고, Save scene이 씬에 남긴다.
+- 하늘은 Inspector에서 고친다. 색이나 이미지를 고치면 편집 상태의 뷰포트에 바로 보이고, Save scene이 씬에 남긴다. 전용 Sky 탭은 두었다가 지웠다: 하늘을 게임이 정하는 경우(Duskhold의 하루 시계)에는 Inspector와 하는 일이 같았다.
 - Bevy 0.20 밖의 새 크레이트를 더하지 않는다.
 
 ## 핵심 결정: 그라데이션과 큐브맵 둘 다, 하나의 경로로
@@ -70,21 +70,13 @@ pub struct Moon {
 - `SkyPlugin`은 편집 모드와 상관없이 항상 들어간다(`default_plugins`).
 - `Sky`가 바뀌거나 카메라가 새로 생기면 모든 3D 카메라에 `Skybox`를 넣는다. 밝기는 `brightness ÷ 카메라 노출`이라 노출이 다른 편집용 카메라와 게임 카메라에서 같은 색으로 보인다. 플러그인이 쓰는 미리보기·썸네일 카메라와, 게임이 직접 `Skybox`를 붙인 카메라는 건드리지 않는다.
 - 플러그인이 넣은 `Skybox`는 표식(`SkyApplied`)과 함께 씬 파일에서 뺀다. `Sky`를 떼면 넣은 `Skybox`도 뗀다.
-- Hierarchy의 + 메뉴와 Sky 탭의 Add sky가 `spawn`의 `kind: sky`로 `Name("Sky")`와 기본 `Sky`를 가진 엔티티를 만든다.
+- Hierarchy의 + 메뉴의 Sky가 `spawn`의 `kind: sky`로 `Name("Sky")`와 기본 `Sky`를 가진 엔티티를 만든다.
 
 ## 프로토콜(버전 10)
 
 - `SpawnKind::Sky`.
-- `EntityInfo`에 `sky: bool`(기본 false, 거짓이면 쓰지 않는다): 에디터가 선택과 상관없이 하늘 엔티티를 찾는다.
+- `EntityInfo`에 `sky: bool`(기본 false, 거짓이면 쓰지 않는다): `besfa_mcp`의 `entities`가 하늘 엔티티를 알린다.
 - 값 고치기는 새 명령 없이 기존 `set`을 쓴다.
-
-## 에디터 Sky 탭
-
-- 오른쪽 패널에 Inspector, Scatter, Animation 옆의 Sky 탭. Window > Sky로도 연다.
-- 탭을 열면 씬의 하늘 엔티티를 선택해(그래야 게임이 값을 보고한다) 그 `Sky`를 보여 준다. 하늘이 없으면 Add sky 버튼, 플러그인이 버전 10보다 오래되면 갱신하라는 안내.
-- Gradient·Cubemap 고르기, 모드별로 Zenith·Horizon·Ground 색 버튼과 Blend 막대, 또는 이미지 경로 칸(Assets 탭에서 이미지를 끌어 놓을 수 있다). 공통으로 Brightness, Rotation.
-- 그라데이션 모드에서 Sun과 Moon 묶음: Show 체크 상자, 색 버튼, Size(도), Sun의 Lens flare(0~1), 방향은 Elevation(지평선 위 각도, -90~90)과 Azimuth(북쪽 -Z에서 동쪽 +X로 도는 각도, 0~360) 막대로 고친다. Moon에는 Phase 막대(0~1)와 그 위상의 이름(New, Waxing crescent, First quarter, Waxing gibbous, Full, Waning gibbous, Last quarter, Waning crescent)이 있다.
-- 바꿀 때마다 컴포넌트 전체를 `set`으로 보낸다. Inspector의 변경처럼 되돌리기와 저장하지 않은 변경 표시에 들어가고, 실행 상태에서 바꾼 것은 Stop하면 사라진다. 실행 상태에서는 게임이 바꾸는 값을 따라 보여 준다.
 
 ## 게임에서 쓰기
 
@@ -119,4 +111,3 @@ fn day_sky(
 
 - 플러그인: 렌즈 플레어가 하늘을 그리는 카메라마다 한 벌 생기고 하늘이 없어지면 사라지는지, 화면 가장자리에서 옅어지는지, 그라데이션 색 계산, 해 원반과 숨기기, 달 위상(삭·보름·상현), 회전해도 해가 월드 방향에 남는지, 큐브맵 이미지 생성, 카메라에 `Skybox`가 들어가고 값을 바꾸면 따라가며 `Sky`를 떼면 빠지는지, 씬 저장·읽기 왕복에서 `Sky`가 남고 `Skybox`는 빠지는지.
 - 프로토콜: `SpawnKind::Sky`, `EntityInfo.sky`의 직렬화와 옛 보고와의 호환.
-- 에디터: Sky 탭이 하늘이 없으면 Add sky를, 있으면 색을 보여 주고 바꾼 값을 `set`으로 내는지.

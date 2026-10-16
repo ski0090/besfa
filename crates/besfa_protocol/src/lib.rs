@@ -669,7 +669,7 @@ pub struct EntityInfo {
     /// The model, scene or prefab file a placed entity shows, which the game
     /// spawns under it; saving keeps only this path.
     pub asset: Option<String>,
-    /// Carries the scene's sky, which the editor's Sky tab edits.
+    /// Carries the scene's sky.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sky: bool,
 }
