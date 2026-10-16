@@ -510,17 +510,7 @@ pub(crate) fn stroke(
     strength: f32,
     layer: Option<usize>,
 ) -> Result<u64, String> {
-    let id = entity.to_bits();
-    let (terrain, file) = world
-        .get_entity(entity)
-        .ok()
-        .and_then(|entity| {
-            Some((
-                entity.get::<Terrain>()?.clone(),
-                entity.get::<TerrainHandle>()?.handle.id(),
-            ))
-        })
-        .ok_or_else(|| format!("{id} is not a terrain"))?;
+    let (terrain, file, before) = terrain_of(world, entity)?;
     if points.is_empty() {
         return Err("a stroke needs a point".into());
     }
@@ -539,21 +529,16 @@ pub(crate) fn stroke(
         .iter()
         .map(|&[x, z]| local(&transform, Vec3::new(x, 0.0, z)))
         .collect();
-    let mut files = world.resource_mut::<Assets<TerrainData>>();
-    let before = files
-        .get(file)
-        .ok_or_else(|| format!("the file of terrain {id} has not loaded"))?
-        .clone();
     let mut painting = Stroke::begin(before, terrain.size, brush, points[0]);
+    let mut files = world.resource_mut::<Assets<TerrainData>>();
     let mut data = files.get_mut(file).unwrap();
     for &point in &points {
         painting.to(&mut data, point);
     }
     let changed = painting.finish(&data);
     drop(data);
-    let number = world.resource_mut::<Strokes>().keep(entity, file, changed);
     world.entity_mut(entity).insert(Unsaved);
-    Ok(number)
+    Ok(world.resource_mut::<Strokes>().keep(entity, file, changed))
 }
 
 /// Brings all of terrain `entity` to `height`, meters in the world, and
@@ -565,17 +550,8 @@ pub(crate) fn fill(
     height: Option<f32>,
     layer: Option<usize>,
 ) -> Result<u64, String> {
-    let id = entity.to_bits();
-    let (layers, file) = world
-        .get_entity(entity)
-        .ok()
-        .and_then(|entity| {
-            Some((
-                entity.get::<Terrain>()?.layers.len().min(4),
-                entity.get::<TerrainHandle>()?.handle.id(),
-            ))
-        })
-        .ok_or_else(|| format!("{id} is not a terrain"))?;
+    let (terrain, file, before) = terrain_of(world, entity)?;
+    let layers = terrain.layers.len().min(4);
     if height.is_none() && layer.is_none() {
         return Err("fill needs a height, a layer or both".into());
     }
@@ -584,10 +560,6 @@ pub(crate) fn fill(
     }
     let transform = in_world(world, entity);
     let mut files = world.resource_mut::<Assets<TerrainData>>();
-    let before = files
-        .get(file)
-        .ok_or_else(|| format!("the file of terrain {id} has not loaded"))?
-        .clone();
     let mut data = files.get_mut(file).unwrap();
     if let Some(height) = height {
         let local = (height - transform.translation.y) / transform.scale.y;
@@ -604,11 +576,32 @@ pub(crate) fn fill(
         Region::take(&data, UVec2::ZERO, last),
     );
     drop(data);
-    let number = world
-        .resource_mut::<Strokes>()
-        .keep(entity, file, Some(changed));
     world.entity_mut(entity).insert(Unsaved);
-    Ok(number)
+    Ok(world
+        .resource_mut::<Strokes>()
+        .keep(entity, file, Some(changed)))
+}
+
+/// Terrain `entity`, its file, and what the file holds before a stroke
+/// changes it; or why there is none.
+fn terrain_of(
+    world: &World,
+    entity: Entity,
+) -> Result<(Terrain, AssetId<TerrainData>, TerrainData), String> {
+    let id = entity.to_bits();
+    let (terrain, file) = world
+        .get_entity(entity)
+        .ok()
+        .and_then(|entity| {
+            Some((
+                entity.get::<Terrain>()?.clone(),
+                entity.get::<TerrainHandle>()?.handle.id(),
+            ))
+        })
+        .ok_or_else(|| format!("{id} is not a terrain"))?;
+    let before = world.resource::<Assets<TerrainData>>().get(file).cloned();
+    let before = before.ok_or_else(|| format!("the file of terrain {id} has not loaded"))?;
+    Ok((terrain, file, before))
 }
 
 /// `point`, in the world, in the space of a terrain placed by `transform`,
