@@ -72,7 +72,8 @@ impl Plugin for InspectPlugin {
             .init_resource::<Changes>()
             .init_resource::<EntitiesChanged>()
             // Last: after Update and transform propagation, so values are current.
-            .add_systems(Last, (note_entity_changes, report).chain());
+            .add_systems(Last, (note_entity_changes, report).chain())
+            .add_observer(note_removal);
     }
 
     /// Every plugin has added its systems by now and no schedule is running,
@@ -129,8 +130,7 @@ impl Default for EntitiesChanged {
 }
 
 /// Notes a change to what the entities report shows: a name, a parent, a
-/// saved or placed mark, or an entity joining or leaving the list. A
-/// despawn removes every component, so the removals cover it.
+/// saved or placed mark, or an entity joining the list.
 #[allow(clippy::type_complexity, reason = "a system's parameters")]
 fn note_entity_changes(
     changed: Query<
@@ -149,32 +149,32 @@ fn note_entity_changes(
             Allow<Disabled>,
         ),
     >,
-    mut removed: (
-        RemovedComponents<Name>,
-        RemovedComponents<ChildOf>,
-        RemovedComponents<SceneEntity>,
-        RemovedComponents<DynamicWorldRoot>,
-        RemovedComponents<WorldAssetRoot>,
-        RemovedComponents<Transform>,
-        RemovedComponents<EditorOnly>,
-        RemovedComponents<Deleted>,
-    ),
     mut entities_changed: ResMut<EntitiesChanged>,
 ) {
-    // Every reader is read, so a removal counts once.
-    let removals = [
-        removed.0.read().count(),
-        removed.1.read().count(),
-        removed.2.read().count(),
-        removed.3.read().count(),
-        removed.4.read().count(),
-        removed.5.read().count(),
-        removed.6.read().count(),
-        removed.7.read().count(),
-    ];
-    if !changed.is_empty() || removals.iter().any(|&count| count > 0) {
+    if !changed.is_empty() {
         entities_changed.0 = true;
     }
+}
+
+/// Notes an entity losing what the entities report shows, or leaving the
+/// list: a despawn removes every component, so it is noted too.
+#[allow(clippy::type_complexity, reason = "the components the report shows")]
+fn note_removal(
+    _: On<
+        Remove<(
+            Name,
+            ChildOf,
+            SceneEntity,
+            DynamicWorldRoot,
+            WorldAssetRoot,
+            Transform,
+            EditorOnly,
+            Deleted,
+        )>,
+    >,
+    mut entities_changed: ResMut<EntitiesChanged>,
+) {
+    entities_changed.0 = true;
 }
 
 // ponytail: any change sends the whole list again, every frame for a game
@@ -482,7 +482,8 @@ mod tests {
         }
         let mut app = App::new();
         app.init_resource::<EntitiesChanged>()
-            .add_systems(Update, note_entity_changes);
+            .add_systems(Update, note_entity_changes)
+            .add_observer(note_removal);
         let cube = app
             .world_mut()
             .spawn((Name::new("Cube"), Transform::default()))
