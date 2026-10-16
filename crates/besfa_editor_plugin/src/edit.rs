@@ -481,6 +481,9 @@ mod tests {
             }),
         )
         .unwrap();
+        let first = world.get::<AnimationStateMachine>(character).unwrap();
+        let left_out = (first.states[1].speed, first.transitions[1].blend);
+        assert_eq!(left_out, (1.0, 0.2), "fields left out take their defaults");
         set(
             &mut world,
             character,

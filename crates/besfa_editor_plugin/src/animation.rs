@@ -34,26 +34,20 @@ impl Plugin for AnimationStateMachinePlugin {
 #[reflect(Component, Default)]
 #[require(AnimationParams)]
 pub struct AnimationStateMachine {
-    #[reflect(default)]
     pub states: Vec<AnimationState>,
-    #[reflect(default)]
     pub transitions: Vec<AnimationTransition>,
 }
 
-// Every field takes a default when left out: `set` panics on a list item
-// it cannot build from what it was given.
+// `#[reflect(Default)]` fills each field left out from `Default`: `set`
+// panics on a list item it cannot build from what it was given.
 #[derive(Reflect, Clone, Debug, PartialEq)]
 #[reflect(Default)]
 pub struct AnimationState {
-    #[reflect(default)]
     pub name: String,
     /// The model's named glTF animation.
-    #[reflect(default)]
     pub clip: String,
     /// Plays once and holds its last pose, instead of looping.
-    #[reflect(default)]
     pub once: bool,
-    #[reflect(default = "one")]
     pub speed: f32,
 }
 
@@ -68,28 +62,19 @@ impl Default for AnimationState {
     }
 }
 
-fn one() -> f32 {
-    1.0
-}
-
 /// Taken, first in the list first, when every condition holds and the
 /// exit time has passed.
 #[derive(Reflect, Clone, Debug, PartialEq)]
 #[reflect(Default)]
 pub struct AnimationTransition {
     /// A state's name, or `*` for any state but `to`.
-    #[reflect(default)]
     pub from: String,
-    #[reflect(default)]
     pub to: String,
-    #[reflect(default)]
     pub conditions: Vec<AnimationCondition>,
     /// Crossfade seconds.
-    #[reflect(default = "blend")]
     pub blend: f32,
     /// How much of `from`'s clip must have played first, 1 for once
     /// through; 0 for any time.
-    #[reflect(default)]
     pub exit_time: f32,
 }
 
@@ -99,25 +84,18 @@ impl Default for AnimationTransition {
             from: String::new(),
             to: String::new(),
             conditions: Vec::new(),
-            blend: blend(),
+            blend: 0.2,
             exit_time: 0.0,
         }
     }
 }
 
-fn blend() -> f32 {
-    0.2
-}
-
 #[derive(Reflect, Clone, Debug, Default, PartialEq)]
 #[reflect(Default)]
 pub struct AnimationCondition {
-    #[reflect(default)]
     pub param: String,
-    #[reflect(default)]
     pub test: ConditionTest,
     /// What `Greater` and `Less` compare with.
-    #[reflect(default)]
     pub value: f32,
 }
 
@@ -140,16 +118,12 @@ pub enum ConditionTest {
 #[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
 #[reflect(Component, Default)]
 pub struct AnimationParams {
-    #[reflect(default)]
     pub floats: BTreeMap<String, f32>,
-    #[reflect(default)]
     pub bools: BTreeMap<String, bool>,
     /// Pulled until a transition that tests them is taken.
-    #[reflect(default)]
     pub triggers: Vec<String>,
     /// The state playing, which the machine writes; write a state's name
     /// to go there at once.
-    #[reflect(default)]
     pub state: String,
 }
 
