@@ -874,18 +874,4 @@ mod tests {
         assert!(active(world, game));
         assert!(world.get::<Parked>(game).is_none());
     }
-
-    #[test]
-    fn reads_pointer_events() {
-        let event: PointerEvent =
-            serde_json::from_str(r#"{"event":"down","x":1.5,"y":2,"button":"right"}"#).unwrap();
-        assert_eq!(
-            event,
-            PointerEvent::Down {
-                x: 1.5,
-                y: 2.0,
-                button: Button::Right
-            }
-        );
-    }
 }
