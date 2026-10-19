@@ -16,7 +16,12 @@ use bevy::{
             CascadesVisibleEntities, CubemapVisibleEntities, VisibilityClass, VisibleEntities,
         },
     },
-    ecs::component::{ComponentId, ComponentInfo},
+    ecs::{
+        component::{ComponentId, ComponentInfo},
+        entity::{EntityHashMap, EntityHashSet},
+        entity_disabling::Disabled,
+        query::Allow,
+    },
     light::Cascades,
     prelude::*,
     reflect::{PartialReflect, TypeRegistry, serde::TypedReflectSerializer},
@@ -38,22 +43,72 @@ use bevy::{
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 pub use besfa_components::scene::{
-    Loading, MeshColor, MeshShape, SCENE_PATH, SceneEntity, asset_file, project_file,
+    FileEntity, Loading, MeshColor, MeshShape, SCENE_PATH, SceneEntity, asset_file, project_file,
 };
 #[cfg(test)]
 use besfa_components::scene::{
     adopt_loaded_children, build_materials, build_meshes, drop_material, drop_mesh,
 };
 
-/// Writes the scene entities to `path` in the scene file format.
+/// Writes the scene entities to `path` in the scene file format, each under
+/// its id in the file. Entities new to the file get new ids and keep them.
 pub(crate) fn save(world: &mut World, path: &Path) -> Result<(), String> {
-    let mut entities: Vec<Entity> = world
-        .query_filtered::<Entity, With<SceneEntity>>()
+    let mut entities: Vec<(Entity, Option<Entity>)> = world
+        .query_filtered::<(Entity, Option<&FileEntity>), With<SceneEntity>>()
         .iter(world)
+        .map(|(entity, file)| (entity, file.map(|file| file.0)))
         .collect();
-    // Spawn order, so the file does not shuffle between saves.
-    entities.sort_unstable_by_key(|entity| (entity.index_u32(), entity.generation().to_bits()));
-    write(world, &entities, &[], false, path)
+    // New entities take their ids in spawn order, past every id in the
+    // file, deleted entities' too: undoing the delete brings theirs back.
+    entities.sort_unstable_by_key(|(entity, _)| order(*entity));
+    let next = world
+        .query_filtered::<&FileEntity, Allow<Disabled>>()
+        .iter(world)
+        .map(|file| file.0.index_u32() + 1)
+        .max()
+        .unwrap_or(0);
+    let ids = file_ids(&entities, next);
+    let mut entities: Vec<Entity> = entities.into_iter().map(|(entity, _)| entity).collect();
+    // The file's order, so the file does not shuffle between saves.
+    entities.sort_unstable_by_key(|entity| order(ids[entity]));
+    write(world, &entities, &ids, &[], false, path)?;
+    for (&entity, &id) in &ids {
+        world.entity_mut(entity).insert(FileEntity(id));
+    }
+    Ok(())
+}
+
+fn order(entity: Entity) -> (u32, u32) {
+    (entity.index_u32(), entity.generation().to_bits())
+}
+
+/// The id in the file of each of `entities`, given with the one it was
+/// loaded under, if any: that one, or for an entity new to the file, the
+/// next from index `next` up.
+fn file_ids(entities: &[(Entity, Option<Entity>)], mut next: u32) -> EntityHashMap<Entity> {
+    let mut taken = EntityHashSet::default();
+    entities
+        .iter()
+        .map(|&(entity, file)| {
+            // Two entities loaded under one id would overwrite each other.
+            let id = file.filter(|&file| taken.insert(file)).unwrap_or_else(|| {
+                next += 1;
+                // Past every index in the file, so free whatever the generation.
+                Entity::from_raw_u32(next - 1).expect("fewer entities than u32::MAX")
+            });
+            (entity, id)
+        })
+        .collect()
+}
+
+/// `entities` numbered in order, for files that keep no ids of their own.
+// ponytail: prefab entities forget their ids in the file, so a prefab's ids
+// follow its order; keep a FileEntity per instance if prefab diffs grow.
+fn numbered(entities: &[Entity]) -> EntityHashMap<Entity> {
+    (0..)
+        .zip(entities)
+        .map(|(index, &entity)| (entity, Entity::from_raw_u32(index).unwrap()))
+        .collect()
 }
 
 /// Writes `root` and the scene entities under it to `path` as a prefab.
@@ -61,7 +116,7 @@ pub(crate) fn save(world: &mut World, path: &Path) -> Result<(), String> {
 /// prefab is placed decides where it shows.
 pub(crate) fn save_prefab(world: &mut World, root: Entity, path: &Path) -> Result<(), String> {
     let entities = walk(vec![root], |entity| kept_children(world, entity, true));
-    write(world, &entities, &[root], true, path)
+    write(world, &entities, &numbered(&entities), &[root], true, path)
 }
 
 /// `entity`'s children that are not deleted and are scene entities, or
@@ -118,14 +173,15 @@ pub(crate) fn save_instance(world: &mut World, root: Entity, path: &Path) -> Res
             kept_children(world, entity, false)
         }
     });
-    write(world, &entities, &tops, false, path)
+    write(world, &entities, &numbered(&entities), &tops, false, path)
 }
 
-/// Writes `entities` to `path`. `roots` lose their parent, and with
-/// `at_origin` their place too.
+/// Writes `entities` to `path` under their `ids`, which references to them
+/// follow. `roots` lose their parent, and with `at_origin` their place too.
 fn write(
     world: &World,
     entities: &[Entity],
+    ids: &EntityHashMap<Entity>,
     roots: &[Entity],
     at_origin: bool,
     path: &Path,
@@ -170,6 +226,22 @@ fn write(
         for component in &mut saved.components {
             if root && at_origin && component.represents::<Transform>() {
                 *component = Box::new(Transform::default());
+            }
+        }
+    }
+    // ponytail: a reference to an entity the file does not hold keeps its
+    // live bits and could name a saved one on load; no saved component holds
+    // one today. Map those to Entity::PLACEHOLDER if one does.
+    let mut mapper = ids.clone();
+    for saved in &mut scene.entities {
+        saved.entity = ids[&saved.entity];
+        // References to other saved entities, like a child's parent.
+        for component in &mut saved.components {
+            let mapping = component
+                .get_represented_type_info()
+                .and_then(|info| registry.get_type_data::<ReflectComponent>(info.type_id()));
+            if let (Some(mapping), Some(value)) = (mapping, component.try_as_reflect_mut()) {
+                mapping.map_entities(value, &mut mapper);
             }
         }
     }
@@ -377,6 +449,7 @@ fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn Partial
 pub(crate) fn left_out(type_id: TypeId) -> bool {
     [
         TypeId::of::<SceneEntity>(),
+        TypeId::of::<FileEntity>(),
         TypeId::of::<crate::AnimationClips>(),
         TypeId::of::<crate::scene_view::Parked>(),
         // The plugin gives cameras the scene's `Sky` as a skybox.
@@ -569,15 +642,14 @@ mod tests {
         }
         .deserialize(&mut ron::de::Deserializer::from_str(ron).unwrap())
         .expect("the scene should deserialize");
-        let mut map = EntityHashMap::default();
-        scene
-            .write_to_world(app.world_mut(), &mut map)
+        besfa_components::scene::spawn_scene(app.world_mut(), &scene)
             .expect("the scene should spawn");
-        let mut entities: Vec<Entity> = map.values().copied().collect();
+        let mut entities: Vec<Entity> = app
+            .world_mut()
+            .query_filtered::<Entity, With<SceneEntity>>()
+            .iter(app.world())
+            .collect();
         entities.sort_unstable_by_key(|entity| entity.index_u32());
-        for &entity in &entities {
-            app.world_mut().entity_mut(entity).insert(SceneEntity);
-        }
         // Applies the observers' commands.
         app.update();
         entities
@@ -613,6 +685,66 @@ mod tests {
             world.get::<Transform>(entities[2]).unwrap().translation,
             Vec3::new(-2.5, 4.5, 9.0)
         );
+    }
+
+    #[test]
+    fn saves_each_entity_under_its_id_in_the_file() {
+        let id = |index| Entity::from_raw_u32(index).unwrap();
+        // A child before its parent, under ids the app spawns nothing as.
+        let ron = format!(
+            r#"(
+  resources: {{}},
+  entities: {{
+    {oak}: (components: {{
+      "bevy_ecs::hierarchy::ChildOf": ({forest}),
+      "bevy_ecs::name::Name": "Oak",
+    }}),
+    {forest}: (components: {{
+      "bevy_ecs::name::Name": "Forest",
+    }}),
+  }},
+)"#,
+            oak = id(5).to_bits(),
+            forest = id(6).to_bits()
+        );
+        let mut app = test_app();
+        let entities = spawn(&mut app, &ron);
+        // New to the file: a copy, and an entity made after loading.
+        let copy = app.world_mut().entity_mut(entities[0]).clone_and_spawn();
+        app.world_mut()
+            .entity_mut(copy)
+            .insert((Name::new("Copy"), SceneEntity));
+        app.world_mut().spawn((Name::new("Rock"), SceneEntity));
+        let dir = std::env::temp_dir().join(format!("besfa-ids-{}", std::process::id()));
+        let path = dir.join(SCENE_PATH);
+        let mut saved = || {
+            save(app.world_mut(), &path).expect("the scene should save");
+            std::fs::read_to_string(&path).unwrap()
+        };
+        let ron = saved();
+        assert_eq!(saved(), ron, "saving again changes nothing");
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let mut reloaded = test_app();
+        spawn(&mut reloaded, &ron);
+        let world = reloaded.world_mut();
+        let mut query = world.query::<(&Name, &FileEntity, Option<&ChildOf>)>();
+        let mut found = |name: &str| {
+            let (_, file, parent) = query
+                .iter(world)
+                .find(|(found, ..)| found.as_str() == name)
+                .unwrap();
+            let parent = parent.map(|parent| world.get::<FileEntity>(parent.parent()).unwrap().0);
+            (file.0, parent)
+        };
+        assert_eq!(found("Oak"), (id(5), Some(id(6))));
+        assert_eq!(found("Forest"), (id(6), None));
+        assert_eq!(
+            found("Copy"),
+            (id(7), Some(id(6))),
+            "the copy is new to the file"
+        );
+        assert_eq!(found("Rock"), (id(8), None));
     }
 
     #[test]

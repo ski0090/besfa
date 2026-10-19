@@ -8,12 +8,12 @@
 use std::path::PathBuf;
 
 use bevy::{
-    asset::{AssetLoadFailedEvent, io::file::FileAssetReader},
+    asset::{LoadState, io::file::FileAssetReader},
     camera::visibility::VisibilitySystems,
-    ecs::{entity_disabling::Disabled, name::NameOrEntity, query::Allow},
+    ecs::{entity::EntityHashMap, entity_disabling::Disabled, name::NameOrEntity, query::Allow},
     prelude::*,
     transform::TransformSystems,
-    world_serialization::{DynamicWorld, InstanceId, WorldInstanceSpawner},
+    world_serialization::{DynamicWorld, WorldInstanceSpawnError},
 };
 
 /// The scene file, relative to the game's `assets` directory.
@@ -22,6 +22,13 @@ pub const SCENE_PATH: &str = "scenes/main.scn.ron";
 /// Marks the entities that came from the scene file; saving writes them back.
 #[derive(Component)]
 pub struct SceneEntity;
+
+/// The id an entity has in the scene file, which saving writes it back
+/// under, so a save changes only the lines of what changed. A copy does not
+/// take it: it is new to the file.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[component(clone_behavior = Ignore)]
+pub struct FileEntity(pub Entity);
 
 /// A mesh the plugin builds from a primitive shape, and rebuilds when the
 /// shape changes.
@@ -68,7 +75,7 @@ pub struct ScenePlugin;
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load)
-            .add_systems(PreUpdate, mark_loaded)
+            .add_systems(PreUpdate, spawn_loaded)
             // After SpawnScene, so a loaded scene gets its meshes this frame.
             .add_systems(PostUpdate, (build_meshes, build_materials))
             .add_systems(
@@ -82,45 +89,53 @@ impl Plugin for ScenePlugin {
     }
 }
 
-/// The scene instance until it has spawned.
+/// The scene file until it has spawned.
 #[derive(Resource)]
 #[doc(hidden)]
-pub struct Loading(pub InstanceId);
+pub struct Loading(pub Handle<DynamicWorld>);
 
-fn load(
-    mut commands: Commands,
-    assets: Res<AssetServer>,
-    mut spawner: ResMut<WorldInstanceSpawner>,
-) {
-    let instance = spawner.spawn_dynamic(assets.load::<DynamicWorld>(SCENE_PATH));
-    commands.insert_resource(Loading(instance));
+fn load(mut commands: Commands, assets: Res<AssetServer>) {
+    commands.insert_resource(Loading(assets.load(SCENE_PATH)));
 }
 
-/// Tags the scene's entities once they exist. A load failure is only
-/// logged, so a game that builds its scene in code keeps working.
-fn mark_loaded(
-    mut commands: Commands,
-    loading: Option<Res<Loading>>,
-    spawner: Res<WorldInstanceSpawner>,
-    mut failures: MessageReader<AssetLoadFailedEvent<DynamicWorld>>,
-) {
-    let Some(loading) = loading else {
+/// Spawns the scene once its file has loaded. Bevy's spawner would keep
+/// the entities' ids in the file to itself. A load failure is only logged,
+/// so a game that builds its scene in code keeps working.
+fn spawn_loaded(world: &mut World) {
+    let Some(handle) = world
+        .get_resource::<Loading>()
+        .map(|loading| loading.0.clone())
+    else {
         return;
     };
-    if let Some(failure) = failures.read().next() {
-        error!("Could not load {SCENE_PATH}: {}", failure.error);
-        commands.remove_resource::<Loading>();
+    if let LoadState::Failed(error) = world.resource::<AssetServer>().load_state(&handle) {
+        error!("Could not load {SCENE_PATH}: {error}");
+        world.remove_resource::<Loading>();
         return;
     }
-    if !spawner.instance_is_ready(loading.0) {
-        return;
+    let spawned = world.resource_scope(|world, scenes: Mut<Assets<DynamicWorld>>| {
+        scenes.get(&handle).map(|scene| spawn_scene(world, scene))
+    });
+    match spawned {
+        None => return,
+        Some(Ok(())) => info!("Loaded {SCENE_PATH}"),
+        Some(Err(error)) => error!("Could not load {SCENE_PATH}: {error}"),
     }
-    for entity in spawner.iter_instance_entities(loading.0) {
+    world.remove_resource::<Loading>();
+}
+
+/// Spawns `scene` into `world` and tags its entities with their ids in it.
+#[doc(hidden)]
+pub fn spawn_scene(world: &mut World, scene: &DynamicWorld) -> Result<(), WorldInstanceSpawnError> {
+    let mut map = EntityHashMap::default();
+    scene.write_to_world(world, &mut map)?;
+    for (file, entity) in map {
         // A parent the file names but does not hold leaves a dead id here.
-        commands.entity(entity).try_insert(SceneEntity);
+        if let Ok(mut entity) = world.get_entity_mut(entity) {
+            entity.insert((SceneEntity, FileEntity(file)));
+        }
     }
-    commands.remove_resource::<Loading>();
-    info!("Loaded {SCENE_PATH}");
+    Ok(())
 }
 
 /// Puts children loaded from a scene or prefab file into their parents'
