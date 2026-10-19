@@ -2,7 +2,7 @@
 name = "besfa_components"
 version = "0.1.0"
 edition = "2024"
-description = "The components a Besfa game ships with: the scene file, terrain, sky and animation state machines"
+description = "The components a Besfa game ships with: the scene file, terrain and its foliage, sky and animation state machines"
 
 [dependencies]
 bevy = "0.20.0"

@@ -43,7 +43,7 @@ egui(eframe, wgpu DX12) 기반 Windows 데스크톱 에디터다. 프로젝트 �
 
 ### `crates/besfa_editor_plugin`
 
-에디터가 게임을 띄울 때 쓰는 Bevy 플러그인이다. `besfa_components`에 의존해 `default_plugins()`가 그 위에 편집 플러그인을 더하고, 에디터가 띄우면 편집 상태로 시작해 에디터의 명령을 받으며 씬을 저장한다. `besfa new`로 만든 게임은 이 크레이트를 `besfa_editor` feature로만 켜므로(에디터, `besfa_mcp`, 미리 빌드가 그 feature로 실행한다) 릴리즈 빌드에는 들어가지 않는다. 그 전에 만든 게임은 이 크레이트에 바로 의존하고, 이 크레이트가 `besfa_components`의 타입을 다시 내보내므로 그대로 빌드된다. 게임 코드가 쓰는 것으로 지형이 있다: 지형은 `Terrain`(크기와 겉면 색)과 `TerrainFile`(높이 파일 경로)로 씬에 저장되고, 게임 코드는 시스템 인자 `TerrainHeight`의 `at(x, z)`로 그 자리의 땅 높이를 묻는다(캐릭터와 좀비를 땅 위에 세울 때). 흩뿌리기로 놓은 물건에는 `Scattered` 표식이 있어 게임이 골라낼 수 있다. 씬의 하늘은 `Sky` 컴포넌트(그라데이션 색이나 큐브맵 이미지)이고, 게임 코드가 `Query<&mut Sky>`로 값을 바꾸면 플러그인이 모든 카메라의 하늘을 따라 바꾼다([SKY.md](./SKY.md)).
+에디터가 게임을 띄울 때 쓰는 Bevy 플러그인이다. `besfa_components`에 의존해 `default_plugins()`가 그 위에 편집 플러그인을 더하고, 에디터가 띄우면 편집 상태로 시작해 에디터의 명령을 받으며 씬을 저장한다. `besfa new`로 만든 게임은 이 크레이트를 `besfa_editor` feature로만 켜므로(에디터, `besfa_mcp`, 미리 빌드가 그 feature로 실행한다) 릴리즈 빌드에는 들어가지 않는다. 그 전에 만든 게임은 이 크레이트에 바로 의존하고, 이 크레이트가 `besfa_components`의 타입을 다시 내보내므로 그대로 빌드된다. 게임 코드가 쓰는 것으로 지형이 있다: 지형은 `Terrain`(크기와 겉면 색)과 `TerrainFile`(높이 파일 경로)로 씬에 저장되고, 게임 코드는 시스템 인자 `TerrainHeight`의 `at(x, z)`로 그 자리의 땅 높이를 묻는다(캐릭터와 좀비를 땅 위에 세울 때). 흩뿌리기로 놓은 물건에는 `Scattered` 표식이 있어 게임이 골라낼 수 있다. 씬의 하늘은 `Sky` 컴포넌트(그라데이션 색이나 큐브맵 이미지)이고, 게임 코드가 `Query<&mut Sky>`로 값을 바꾸면 플러그인이 모든 카메라의 하늘을 따라 바꾼다([SKY.md](./SKY.md)). 지형이나 그 아래 엔티티의 `Foliage`는 지형의 겉면 레이어 하나가 덮은 만큼 풀 같은 식물을 카메라 가까이에만 기른다([FOLIAGE.md](./FOLIAGE.md)).
 
 ### `crates/besfa_mcp`
 
@@ -108,5 +108,6 @@ besfa/
 - [CLI 계약](./CLI_CONTRACT.md)
 - [에디터 데이터 포맷](./DATA_FORMAT.md)
 - [하늘 편집](./SKY.md)
+- [폴리지](./FOLIAGE.md)
 - [컴포넌트 크레이트 분리](./RUNTIME.md)
 - [TODO](./TODO.md)

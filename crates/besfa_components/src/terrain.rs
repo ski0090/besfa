@@ -194,6 +194,23 @@ impl TerrainData {
     /// The height at `point`, X and Z in the space of a terrain `size`
     /// wide, between the samples around it; none off the terrain.
     pub fn height(&self, size: f32, point: Vec2) -> Option<f32> {
+        self.between(size, point, |index| self.heights[index])
+    }
+
+    /// How much surface `layer` covers the ground at `point`, 0 to 1, X
+    /// and Z in the space of a terrain `size` wide; none off the terrain or
+    /// past the fourth layer.
+    pub fn cover(&self, size: f32, point: Vec2, layer: usize) -> Option<f32> {
+        if layer >= 4 {
+            return None;
+        }
+        self.between(size, point, |index| {
+            self.weights[index][layer] as f32 / 255.0
+        })
+    }
+
+    /// `value` of the samples around `point`, blended by how near each is.
+    fn between(&self, size: f32, point: Vec2, value: impl Fn(usize) -> f32) -> Option<f32> {
         let grid = (point + size / 2.0) / self.step(size);
         let last = (self.resolution - 1) as f32;
         if !(0.0..=last).contains(&grid.x) || !(0.0..=last).contains(&grid.y) {
@@ -202,9 +219,9 @@ impl TerrainData {
         let x = (grid.x as u32).min(self.resolution - 2);
         let z = (grid.y as u32).min(self.resolution - 2);
         let (across, down) = (grid.x - x as f32, grid.y - z as f32);
-        let height = |x, z| self.heights[self.index(x, z)];
-        let back = height(x, z).lerp(height(x + 1, z), across);
-        let front = height(x, z + 1).lerp(height(x + 1, z + 1), across);
+        let value = |x, z| value(self.index(x, z));
+        let back = value(x, z).lerp(value(x + 1, z), across);
+        let front = value(x, z + 1).lerp(value(x + 1, z + 1), across);
         Some(back.lerp(front, down))
     }
 

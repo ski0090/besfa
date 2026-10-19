@@ -1,17 +1,19 @@
 //! The components a Besfa game ships with, and the plugins that make them
-//! work: the scene file, changes to placed models' parts, terrain, the sky
-//! and its lens flare, and animation state machines.
+//! work: the scene file, changes to placed models' parts, terrain and the
+//! foliage on it, the sky and its lens flare, and animation state machines.
 //!
 //! Games use [`default_plugins`] in place of `DefaultPlugins`, or
 //! `besfa_editor_plugin::default_plugins` while the Besfa editor runs them,
 //! which adds the editor's side on top of these.
 //!
 //! Each reflected type keeps the path it had in `besfa_editor_plugin`
-//! (`besfa_editor_plugin::sky::Sky`), which scene files name it by.
+//! (`besfa_editor_plugin::sky::Sky`), which scene files name it by; newer
+//! ones are named the same way (`besfa_editor_plugin::foliage::Foliage`).
 
 use bevy::{app::PluginGroupBuilder, prelude::*};
 
 pub mod animation;
+pub mod foliage;
 pub mod ground;
 pub mod lens_flare;
 pub mod part_changes;
@@ -25,6 +27,7 @@ pub use animation::{
     AnimationClips, AnimationCondition, AnimationParams, AnimationState, AnimationStateMachine,
     AnimationStateMachinePlugin, AnimationTransition, ConditionTest,
 };
+pub use foliage::{Foliage, FoliagePlugin};
 pub use ground::{ScatterGroup, Scattered};
 pub use part_changes::{PartChange, PartChanges};
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
@@ -40,6 +43,7 @@ pub fn default_plugins() -> PluginGroupBuilder {
         // Saved changes to placed models' parts apply in play as well.
         .add(part_changes::PartChangesPlugin)
         .add(terrain::TerrainPlugin)
+        .add(foliage::FoliagePlugin)
         .add(sky::SkyPlugin)
         .add(lens_flare::LensFlarePlugin)
         .add(animation::AnimationStateMachinePlugin)
@@ -70,6 +74,7 @@ mod tests {
             (Sky::type_path(), "sky::Sky"),
             (Sun::type_path(), "sky::Sun"),
             (Terrain::type_path(), "terrain::Terrain"),
+            (Foliage::type_path(), "foliage::Foliage"),
             (TerrainFile::type_path(), "terrain::TerrainFile"),
             (MeshShape::type_path(), "scene::MeshShape"),
             (MeshColor::type_path(), "scene::MeshColor"),
