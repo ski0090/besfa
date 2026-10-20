@@ -5,16 +5,21 @@
 //! Plants are not saved: each grows in its own cell of a grid as fine as
 //! the density, so they grow the same every time. Only the squares of
 //! plants near a camera exist, each plant an entity per mesh of its model,
-//! which Bevy draws instanced.
+//! which Bevy draws instanced. Plants sway in the wind, the tips more
+//! than the root.
 
 use std::{f32::consts::TAU, hash::BuildHasher};
 
 use bevy::{
+    asset::embedded_asset,
     camera::visibility::VisibilityRange,
     gltf::{Gltf, GltfMesh, GltfNode},
     light::NotShadowCaster,
+    pbr::{ExtendedMaterial, MaterialExtension},
     platform::{collections::HashMap, hash::FixedHasher},
     prelude::*,
+    render::render_resource::AsBindGroup,
+    shader::ShaderRef,
 };
 
 use crate::{
@@ -34,7 +39,33 @@ pub struct FoliagePlugin;
 
 impl Plugin for FoliagePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (load, grow).chain());
+        embedded_asset!(app, "foliage.wesl");
+        app.add_plugins(MaterialPlugin::<WindMaterial>::default())
+            .add_systems(Update, (load, grow).chain());
+    }
+}
+
+/// A plant mesh's material from its model, swaying in the wind.
+type WindMaterial = ExtendedMaterial<StandardMaterial, Wind>;
+
+#[derive(Asset, AsBindGroup, Reflect, Clone, Debug)]
+struct Wind {
+    /// [`Foliage::wind`].
+    #[uniform(100)]
+    strength: f32,
+}
+
+// ponytail: only the main pass sways; shadows (`Foliage::shadows`) stay
+// still, and a depth prepass leaves plants out. A prepass vertex shader
+// against `bevy_pbr::prepass::io` when either shows.
+impl MaterialExtension for Wind {
+    fn vertex_shader() -> ShaderRef {
+        "embedded://besfa_components/foliage.wesl".into()
+    }
+
+    /// The prepass would draw the plants standing still.
+    fn enable_prepass() -> bool {
+        false
     }
 }
 
@@ -57,6 +88,9 @@ pub struct Foliage {
     /// the last fifth.
     pub distance: f32,
     pub shadows: bool,
+    /// How far, in meters, a point a meter above a plant's root sways in
+    /// the wind; higher points sway more, the root not at all.
+    pub wind: f32,
 }
 
 impl Default for Foliage {
@@ -68,13 +102,18 @@ impl Default for Foliage {
             scale: Vec2::new(0.8, 1.2),
             distance: 60.0,
             shadows: false,
+            wind: 0.2,
         }
     }
 }
 
-/// The model a [`Foliage`] shows, loading or loaded.
+/// The model a [`Foliage`] shows, loading or loaded, and once plants grew
+/// its meshes, each with its material in the wind and where it is in the
+/// model: one material for all the plants, so Bevy instances them.
 #[derive(Component)]
-struct FoliageModel(Handle<Gltf>);
+struct FoliageModel(Handle<Gltf>, Option<Vec<Part>>);
+
+type Part = (Handle<Mesh>, Handle<WindMaterial>, Transform);
 
 /// One square of a foliage's plants, in its terrain's space; the plants
 /// are its children.
@@ -98,7 +137,7 @@ fn load(
         if path.is_empty() {
             entity.remove::<FoliageModel>();
         } else {
-            entity.insert(FoliageModel(server.load(path.to_owned())));
+            entity.insert(FoliageModel(server.load(path.to_owned()), None));
         }
     }
 }
@@ -113,14 +152,24 @@ fn load(
 )]
 fn grow(
     mut commands: Commands,
-    foliage: Query<(Entity, Ref<Foliage>, Option<&FoliageModel>, Option<&ChildOf>)>,
+    mut foliage: Query<(
+        Entity,
+        Ref<Foliage>,
+        Option<&mut FoliageModel>,
+        Option<&ChildOf>,
+    )>,
     terrains: Query<(Ref<Terrain>, Ref<TerrainHandle>, &GlobalTransform)>,
     mut chunks: Query<(Entity, &Chunk, &mut Transform)>,
     cameras: Query<&GlobalTransform, With<Camera>>,
     mut painted: MessageReader<AssetEvent<TerrainData>>,
     mut reloaded: MessageReader<AssetEvent<Gltf>>,
     files: Res<Assets<TerrainData>>,
-    models: (Res<Assets<Gltf>>, Res<Assets<GltfNode>>, Res<Assets<GltfMesh>>),
+    models: (
+        Res<Assets<Gltf>>,
+        Res<Assets<GltfNode>>,
+        Res<Assets<GltfMesh>>,
+    ),
+    mut materials: (Res<Assets<StandardMaterial>>, ResMut<Assets<WindMaterial>>),
     server: Res<AssetServer>,
 ) {
     let painted: Vec<_> = painted.read().map(event_id).collect();
@@ -130,7 +179,7 @@ fn grow(
         .iter()
         .map(|(entity, chunk, _)| ((chunk.foliage, chunk.at), entity))
         .collect();
-    for (entity, foliage, model, parent) in &foliage {
+    for (entity, foliage, model, parent) in &mut foliage {
         let Some((terrain, file, global)) = terrains
             .get(entity)
             .ok()
@@ -138,13 +187,16 @@ fn grow(
         else {
             continue;
         };
-        let (Some(data), Some(model)) = (files.get(&file.handle), model) else {
+        let (Some(data), Some(mut model)) = (files.get(&file.handle), model) else {
             continue;
         };
         let Some(gltf) = models.0.get(&model.0) else {
             continue;
         };
         let reload = reloaded.contains(&model.0.id());
+        if reload {
+            model.1 = None;
+        }
         let fresh = reload
             || foliage.is_changed()
             || terrain.is_changed()
@@ -152,7 +204,6 @@ fn grow(
             || painted.contains(&file.handle.id());
         let transform = global.compute_transform();
         let eyes: Vec<Vec2> = eyes.iter().map(|&eye| local(&transform, eye)).collect();
-        let mut parts = None;
         let side = (terrain.size / CHUNK).ceil() as i32;
         for at in (0..side).flat_map(|z| (0..side).map(move |x| IVec2::new(x, z))) {
             let min = at.as_vec2() * CHUNK - terrain.size / 2.0;
@@ -185,11 +236,34 @@ fn grow(
                 }
                 None => plants(&foliage, terrain.size, data, at),
             };
-            let parts = parts.get_or_insert_with(|| {
+            if model.1.is_none() {
                 let path = foliage.model.split('#').next().unwrap_or_default();
-                meshes(path, gltf, &models.1, &models.2, &server)
-            });
-            spawn(&mut commands, entity, at, &foliage, plants, parts, transform);
+                model.1 = meshes(path, gltf, &models.1, &models.2, &server)
+                    .into_iter()
+                    .map(|(mesh, material, part)| {
+                        let material = materials.1.add(WindMaterial {
+                            base: materials.0.get(&material)?.clone(),
+                            extension: Wind {
+                                strength: foliage.wind,
+                            },
+                        });
+                        Some((mesh, material, part))
+                    })
+                    .collect();
+            }
+            // A square whose materials have not loaded grows a frame later.
+            let Some(parts) = &model.1 else {
+                continue;
+            };
+            spawn(
+                &mut commands,
+                entity,
+                at,
+                &foliage,
+                plants,
+                parts,
+                transform,
+            );
         }
     }
     // Squares of foliage that is gone, hidden, or off its terrain.
@@ -217,7 +291,7 @@ fn spawn(
     at: IVec2,
     foliage: &Foliage,
     plants: Vec<Transform>,
-    parts: &[(Handle<Mesh>, Handle<StandardMaterial>, Transform)],
+    parts: &[Part],
     transform: Transform,
 ) {
     let range = VisibilityRange {
@@ -329,9 +403,7 @@ fn plants(foliage: &Foliage, size: f32, data: &TerrainData, at: IVec2) -> Vec<Tr
             plants.push(
                 Transform::from_xyz(point.x, height, point.y)
                     .with_rotation(Quat::from_rotation_y(turn * TAU))
-                    .with_scale(Vec3::splat(
-                        foliage.scale.x.lerp(foliage.scale.y, size_of),
-                    )),
+                    .with_scale(Vec3::splat(foliage.scale.x.lerp(foliage.scale.y, size_of))),
             );
         }
     }
