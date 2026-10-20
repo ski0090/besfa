@@ -317,6 +317,16 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             }
             Ok(())
         }
+        Command::Snap { grid, .. } if !(grid > 0.0 && grid.is_finite()) => {
+            Err(format!("a grid {grid} m apart is no grid"))
+        }
+        Command::Snap { grid, on } => {
+            if let Some(mut view) = world.get_resource_mut::<SceneView>() {
+                view.snap = scene_view::Snap { grid, on };
+            }
+            Ok(())
+        }
+        Command::Ghost { path, pointer } => ground::ghost(world, path.as_deref(), pointer.into()),
         // Frames the previewed model, or the selection in the scene view.
         Command::Focus => {
             if let Some(mut preview) = world.get_resource_mut::<ModelPreview>()
@@ -450,6 +460,9 @@ fn spawn_placed(
 ) -> Result<(), String> {
     let parent = place.parent.map(|id| edit::parent(world, id)).transpose()?;
     let entity = make(world)?;
+    if let (None, Some(pointer)) = (place.translation, place.pointer) {
+        ground::place_at(world, entity, pointer.into());
+    }
     edit::place(world, entity, place, parent);
     spawned(world, entity);
     Ok(())

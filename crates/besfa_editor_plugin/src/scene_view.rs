@@ -36,6 +36,7 @@ pub(crate) struct SceneView {
     /// Set once the game plays.
     pub(crate) stopped: bool,
     pub(crate) tool: Tool,
+    pub(crate) snap: Snap,
     /// Pointer events since the last frame.
     pub(crate) events: Vec<PointerEvent>,
     /// Frame the selected entity on the next frame.
@@ -61,6 +62,27 @@ pub(crate) struct SceneView {
     /// Scatters with the left button instead of selecting, while set.
     pub(crate) scatter: Option<ScatterBrush>,
 }
+
+/// The ground grid's spacing in meters, and whether dragged handles snap:
+/// moving to the grid, rotating by [`SNAP_ANGLE`], scaling by
+/// [`SNAP_SCALE`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Snap {
+    pub(crate) grid: f32,
+    pub(crate) on: bool,
+}
+
+impl Default for Snap {
+    fn default() -> Self {
+        Self {
+            grid: 1.0,
+            on: false,
+        }
+    }
+}
+
+const SNAP_ANGLE: f32 = std::f32::consts::PI / 12.0;
+const SNAP_SCALE: f32 = 0.1;
 
 /// A handle being dragged.
 struct Drag {
@@ -172,6 +194,7 @@ impl Plugin for SceneViewPlugin {
                 (
                     draw.after(TransformSystems::Propagate).run_if(shown),
                     park_game_cameras.run_if(|view: Res<SceneView>| !view.stopped),
+                    crate::ground::see_through,
                 ),
             );
     }
@@ -416,6 +439,7 @@ fn handle_pointer(
     };
     let view = &mut *view;
     let tool = view.tool;
+    let snap = view.snap.on.then_some(view.snap.grid);
     for event in std::mem::take(&mut view.events) {
         let pointer = match event {
             PointerEvent::Down { x, y, .. }
@@ -478,7 +502,7 @@ fn handle_pointer(
                     if let (Some(ray), Ok((mut transform, ..))) =
                         (ray, targets.get_mut(drag.entity))
                     {
-                        *transform = dragged(tool, drag, ray);
+                        *transform = dragged(tool, drag, ray, snap);
                     }
                 }
                 (None, Some((Button::Right, _))) if view.looking => camera.look(delta),
@@ -569,13 +593,20 @@ fn nearest_handle(
         .map(|(index, _)| index)
 }
 
-/// The dragged entity's transform with the pointer now on `ray`.
-fn dragged(tool: Tool, drag: &Drag, ray: Ray3d) -> Transform {
+/// The dragged entity's transform with the pointer now on `ray`, snapped to
+/// a grid `snap` meters apart if given.
+fn dragged(tool: Tool, drag: &Drag, ray: Ray3d, snap: Option<f32>) -> Transform {
     let mut transform = drag.start;
     match tool {
         Tool::Translate => {
             if let Some(param) = axis_param(drag.origin, drag.direction, ray) {
-                let world = drag.direction * (param - drag.grab.x);
+                let mut along = param - drag.grab.x;
+                // Moving handles are world axes: line the world position up.
+                if let Some(grid) = snap {
+                    let at = drag.origin.dot(drag.direction) + along;
+                    along += (at / grid).round() * grid - at;
+                }
+                let world = drag.direction * along;
                 transform.translation += drag.parent.map_or(world, |parent| {
                     parent.affine().inverse().transform_vector3(world)
                 });
@@ -583,7 +614,10 @@ fn dragged(tool: Tool, drag: &Drag, ray: Ray3d) -> Transform {
         }
         Tool::Rotate => {
             if let Some(point) = plane_point(drag.origin, drag.direction, ray) {
-                let angle = signed_angle(drag.grab, point - drag.origin, drag.direction);
+                let mut angle = signed_angle(drag.grab, point - drag.origin, drag.direction);
+                if snap.is_some() {
+                    angle = (angle / SNAP_ANGLE).round() * SNAP_ANGLE;
+                }
                 let parent = drag
                     .parent
                     .map_or(Quat::IDENTITY, |parent| parent.rotation());
@@ -596,7 +630,11 @@ fn dragged(tool: Tool, drag: &Drag, ray: Ray3d) -> Transform {
         Tool::Scale => {
             if let Some(param) = axis_param(drag.origin, drag.direction, ray) {
                 let factor = (1.0 + (param - drag.grab.x) / drag.length).max(0.01);
-                transform.scale[drag.axis] = drag.start.scale[drag.axis] * factor;
+                let mut scale = drag.start.scale[drag.axis] * factor;
+                if snap.is_some() {
+                    scale = ((scale / SNAP_SCALE).round() * SNAP_SCALE).max(SNAP_SCALE);
+                }
+                transform.scale[drag.axis] = scale;
             }
         }
     }
@@ -630,10 +668,14 @@ fn draw(
     mut gizmos: Gizmos<GridGizmos>,
     mut handles: Gizmos<HandleGizmos>,
 ) {
+    // About 40 meters across, in cells the snapping grid's size; an even
+    // count, so lines go through the origin where snapped things go.
+    let grid = view.snap.grid;
+    let cells = (20.0 / grid).round().clamp(5.0, 200.0) as u32 * 2;
     gizmos.grid(
         Isometry3d::from_rotation(Quat::from_rotation_x(FRAC_PI_2)),
-        UVec2::splat(40),
-        Vec2::ONE,
+        UVec2::splat(cells),
+        Vec2::splat(grid),
         Color::srgba(0.6, 0.6, 0.6, 0.35),
     );
     if let (Some(scatter), Some(at)) = (&view.scatter, view.brush_at) {
@@ -706,7 +748,7 @@ fn axis_param(origin: Vec3, direction: Vec3, ray: Ray3d) -> Option<f32> {
 
 /// Where `ray` crosses the plane through `origin` facing `normal`, unless it
 /// runs along the plane.
-fn plane_point(origin: Vec3, normal: Vec3, ray: Ray3d) -> Option<Vec3> {
+pub(crate) fn plane_point(origin: Vec3, normal: Vec3, ray: Ray3d) -> Option<Vec3> {
     let facing = normal.dot(*ray.direction);
     (facing.abs() > 1e-4)
         .then(|| ray.origin + *ray.direction * (normal.dot(origin - ray.origin) / facing))
@@ -759,37 +801,52 @@ mod tests {
         };
         let above = |x: f32| ray(Vec3::new(x, 5.0, 0.0), Vec3::NEG_Y);
 
-        let moved = dragged(Tool::Translate, &drag, above(4.0));
+        let moved = dragged(Tool::Translate, &drag, above(4.0), None);
         assert!(
             moved
                 .translation
                 .abs_diff_eq(Vec3::new(3.0, 1.0, 0.0), 1e-5)
         );
+        // Snapped, the world position lines up with the grid, even from
+        // off the grid.
+        drag.origin.x = 0.3;
+        drag.start.translation.x = 0.3;
+        let snapped = dragged(Tool::Translate, &drag, above(4.4), Some(0.5));
+        assert!((snapped.translation.x - 3.5).abs() < 1e-5, "{snapped:?}");
+        drag.origin.x = 0.0;
+        drag.start.translation.x = 0.0;
 
         // Grabbed one unit out, now three: one handle length farther.
-        let scaled = dragged(Tool::Scale, &drag, above(3.0));
+        let scaled = dragged(Tool::Scale, &drag, above(3.0), None);
         assert!((scaled.scale.x - 2.0).abs() < 1e-5);
         assert_eq!(scaled.scale.y, 1.0);
+        let snapped = dragged(Tool::Scale, &drag, above(3.13), Some(1.0));
+        assert!((snapped.scale.x - 2.1).abs() < 1e-5, "{snapped:?}");
 
         // A quarter turn about Y, from +X towards -Z.
         drag.direction = Vec3::Y;
         drag.grab = Vec3::X;
-        let rotated = dragged(
-            Tool::Rotate,
-            &drag,
-            ray(Vec3::new(0.0, 5.0, -2.0), Vec3::NEG_Y),
-        );
+        let toward = |x: f32, z: f32| ray(Vec3::new(x, 5.0, z), Vec3::NEG_Y);
+        let rotated = dragged(Tool::Rotate, &drag, toward(0.0, -2.0), None);
         assert!(
             rotated
                 .rotation
                 .abs_diff_eq(Quat::from_rotation_y(FRAC_PI_2), 1e-5)
+        );
+        // 20 degrees snaps to 15.
+        let (sin, cos) = 20f32.to_radians().sin_cos();
+        let snapped = dragged(Tool::Rotate, &drag, toward(cos, -sin), Some(1.0));
+        assert!(
+            snapped
+                .rotation
+                .abs_diff_eq(Quat::from_rotation_y(15f32.to_radians()), 1e-5)
         );
 
         // A parent scaled by two halves the local move.
         drag.direction = Vec3::X;
         drag.grab = Vec3::splat(1.0);
         drag.parent = Some(GlobalTransform::from_scale(Vec3::splat(2.0)));
-        let moved = dragged(Tool::Translate, &drag, above(4.0));
+        let moved = dragged(Tool::Translate, &drag, above(4.0), None);
         assert!(
             moved
                 .translation

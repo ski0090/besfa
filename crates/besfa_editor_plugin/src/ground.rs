@@ -1,11 +1,13 @@
-//! Putting things on the ground: dropping them onto the surface below
-//! them, and scattering many over an area, which can be erased again
-//! without touching what was placed by hand.
+//! Putting things on the ground: placing them where the scene view points,
+//! with a see-through ghost while an asset is dragged there, dropping them
+//! onto the surface below them, and scattering many over an area, which can
+//! be erased again without touching what was placed by hand.
 
 use std::collections::HashSet;
 
 use besfa_protocol::{Button, Move, PointerEvent, Report, ScatterBrush, ScatterModel};
 use bevy::{
+    camera::visibility::RenderLayers,
     ecs::{query::QueryFilter, system::SystemState},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
     prelude::*,
@@ -19,9 +21,9 @@ pub use besfa_components::ground::{ScatterGroup, Scattered};
 use crate::{
     edit::{self, in_world, is_scene_entity, relative, subtree},
     inspect::send_report,
-    preview::bounds,
-    scene::SceneEntity,
-    scene_view::{EditorCamera, EditorOnly, SceneView},
+    preview::{Isolated, bounds},
+    scene::{MeshShape, SceneEntity},
+    scene_view::{EditorCamera, EditorOnly, SceneView, plane_point},
     terrain::{self, Terrain},
 };
 
@@ -75,6 +77,116 @@ fn under<F: QueryFilter>(world: &mut World) -> HashSet<Entity> {
         .iter(world)
         .flat_map(|entity| subtree(world, entity))
         .collect()
+}
+
+/// Where the scene view shows a surface at `pointer`, in viewport pixels:
+/// the nearest mesh there, else the ground at height 0, else, looking above
+/// the horizon, the view's focus. None without the scene view.
+pub(crate) fn surface_at(world: &mut World, pointer: Vec2) -> Option<Vec3> {
+    let (camera, eye, focus) = world
+        .query::<(&Camera, &GlobalTransform, &EditorCamera)>()
+        .single(world)
+        .ok()
+        .map(|(camera, eye, view)| (camera.clone(), *eye, view.focus))?;
+    let ray = camera.viewport_to_world(&eye, pointer).ok()?;
+    let skip = under::<With<EditorOnly>>(world);
+    let keep = |entity: Entity| !skip.contains(&entity);
+    let settings = MeshRayCastSettings::default().with_filter(&keep);
+    let mut rays = SystemState::<MeshRayCast>::new(world);
+    let hit = rays
+        .get_mut(world)
+        .ok()?
+        .cast_ray(ray, &settings)
+        .first()
+        .map(|(_, hit)| hit.point);
+    let ground = plane_point(Vec3::ZERO, Vec3::Y, ray)
+        .filter(|point| (point - ray.origin).dot(*ray.direction) > 0.0);
+    Some(hit.or(ground).unwrap_or(focus))
+}
+
+/// Puts the new `entity` standing on the surface the scene view shows at
+/// `pointer`: a shape the plugin builds, which sits on its middle, rests
+/// on it, and anything else stands on its origin.
+pub(crate) fn place_at(world: &mut World, entity: Entity, pointer: Vec2) {
+    let Some(point) = surface_at(world, pointer) else {
+        return;
+    };
+    let lift = match world.get::<MeshShape>(entity) {
+        Some(MeshShape::Cuboid { size }) => size.y / 2.0,
+        Some(MeshShape::Sphere { radius }) => *radius,
+        _ => 0.0,
+    };
+    if let Some(mut transform) = world.get_mut::<Transform>(entity) {
+        transform.translation = point + Vec3::Y * lift;
+    }
+}
+
+/// The asset an `instantiate` with a pointer would place, shown see-through
+/// where it would go while the editor drags it over the scene view.
+#[derive(Component)]
+pub(crate) struct Ghost(String);
+
+/// A ghost's part whose material was made see-through.
+#[derive(Component)]
+pub(crate) struct SeeThrough;
+
+/// Shows the asset at `path` as the ghost at `pointer`, loading it unless it
+/// is the one shown; without a path the ghost goes.
+pub(crate) fn ghost(world: &mut World, path: Option<&str>, pointer: Vec2) -> Result<(), String> {
+    let shown = world
+        .query::<(Entity, &Ghost)>()
+        .iter(world)
+        .map(|(entity, ghost)| (entity, ghost.0.clone()))
+        .next();
+    let entity = match (shown, path) {
+        (Some((entity, shown)), Some(path)) if shown == path => entity,
+        (shown, path) => {
+            if let Some((entity, _)) = shown {
+                world.despawn(entity);
+            }
+            let Some(path) = path else {
+                return Ok(());
+            };
+            let entity = edit::show_asset(world, path)?;
+            world.entity_mut(entity).insert((
+                Ghost(path.into()),
+                EditorOnly,
+                // In the scene view, but out of the Hierarchy and the rays.
+                Isolated,
+                RenderLayers::default(),
+            ));
+            entity
+        }
+    };
+    if let Some(point) = surface_at(world, pointer) {
+        world.get_mut::<Transform>(entity).unwrap().translation = point;
+    }
+    Ok(())
+}
+
+/// Makes the ghost's parts see-through as they spawn. Only standard
+/// materials fade; a part with a material of the game's own shows solid.
+pub(crate) fn see_through(
+    mut commands: Commands,
+    ghosts: Query<Entity, With<Ghost>>,
+    children: Query<&Children>,
+    mut parts: Query<&mut MeshMaterial3d<StandardMaterial>, Without<SeeThrough>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for ghost in &ghosts {
+        for part in children.iter_descendants(ghost) {
+            let Ok(mut material) = parts.get_mut(part) else {
+                continue;
+            };
+            let Some(mut faded) = materials.get(&material.0).cloned() else {
+                continue;
+            };
+            faded.base_color = faded.base_color.with_alpha(faded.base_color.alpha() * 0.5);
+            faded.alpha_mode = AlphaMode::Blend;
+            material.0 = materials.add(faded);
+            commands.entity(part).insert(SeeThrough);
+        }
+    }
 }
 
 /// The highest terrain's height at world `x`, `z`, and its normal there.

@@ -13,7 +13,7 @@ use std::{
 };
 
 use besfa_protocol::{
-    Command, Placement, Report, Request, ScatterBrush, TerrainBrush, Tool, VERSION,
+    Command, Placement, Report, Request, ScatterBrush, SpawnKind, TerrainBrush, Tool, VERSION,
 };
 use eframe::{
     egui::{
@@ -21,6 +21,7 @@ use eframe::{
     },
     egui_wgpu::RenderState,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
@@ -46,6 +47,13 @@ const TERRAIN_PROTOCOL: u32 = 6;
 /// with the scene view's brush.
 const DROP_PROTOCOL: u32 = 7;
 const SCATTER_PROTOCOL: u32 = 8;
+
+/// The protocol whose plugins place things where the viewport points, show
+/// a dragged asset's ghost and snap handles.
+const PLACE_PROTOCOL: u32 = 11;
+
+/// Where a project keeps the scene view's snapping, in the project.
+const SNAP_FILE: &str = "besfa/snap.besfa";
 
 /// The log keeps the latest lines.
 const MAX_LOG_LINES: usize = 2000;
@@ -124,6 +132,13 @@ pub struct Editor {
     resize_at: Option<Instant>,
     input: ViewportInput,
     tool: Tool,
+    snapping: Snapping,
+    /// The snap last sent: the grid, and whether handles snap, from the
+    /// toolbar or with Ctrl held.
+    sent_snap: Option<(f32, bool)>,
+    /// The asset dragged over the viewport and where, whose ghost the game
+    /// shows, as last sent.
+    ghost: Option<(String, [f32; 2])>,
     /// Waiting for a game process: stopping one to launch the next, or
     /// updating the plugin first.
     starting: bool,
@@ -162,6 +177,7 @@ impl Editor {
         prebuild: &Prebuild,
         ctx: &egui::Context,
     ) -> Self {
+        let snapping = Snapping::read(&project.file(SNAP_FILE));
         let mut editor = Self {
             source: SourceWatch::new(project.file("src")),
             assets: AssetBrowser::new(project.file("assets")),
@@ -185,6 +201,9 @@ impl Editor {
             resize_at: None,
             input: ViewportInput::default(),
             tool: Tool::Translate,
+            snapping,
+            sent_snap: None,
+            ghost: None,
             starting: false,
             playing: false,
             relaunch: false,
@@ -268,7 +287,9 @@ impl Editor {
                     panels::log(ui, &self.logs);
                 } else {
                     match self.assets.ui(ui, !self.playing) {
-                        Some(AssetAction::Add(path)) => self.instantiate(path),
+                        Some(AssetAction::Add(path)) => {
+                            self.instantiate(path, self.viewport_middle())
+                        }
                         Some(AssetAction::Preview(path)) => self.open_preview(path),
                         None => {}
                     }
@@ -331,6 +352,7 @@ impl Editor {
         egui::CentralPanel::default().show(ui, |ui| self.viewport_ui(ui, &ctx));
         self.dialogs(&ctx);
         self.send_brushes(&ctx);
+        self.send_snap(&ctx);
 
         if std::mem::take(&mut self.save_after_ui) {
             self.save();
@@ -410,6 +432,8 @@ impl Editor {
         self.protocol = None;
         self.brush = None;
         self.scatter_brush = None;
+        self.sent_snap = None;
+        self.ghost = None;
         self.ensure_viewport();
         // The old game cannot answer them; the new one reads the files fresh.
         self.assets
@@ -836,13 +860,25 @@ impl Editor {
                 self.send(Command::Select { id });
             }
             // The game reports what it spawns, which records the undo.
-            HierarchyAction::Spawn(kind) => self.edit(
-                Command::Spawn {
+            // Lights and cameras keep their own height and aim.
+            HierarchyAction::Spawn(kind) => {
+                let pointer = matches!(
                     kind,
-                    place: Placement::default(),
-                },
-                vec![],
-            ),
+                    SpawnKind::Empty | SpawnKind::Cube | SpawnKind::Sphere | SpawnKind::Plane
+                )
+                .then(|| self.viewport_middle())
+                .flatten();
+                self.edit(
+                    Command::Spawn {
+                        kind,
+                        place: Placement {
+                            pointer,
+                            ..Placement::default()
+                        },
+                    },
+                    vec![],
+                )
+            }
             HierarchyAction::Duplicate => self.duplicate(),
             HierarchyAction::Delete => self.delete(),
             HierarchyAction::SavePrefab => {
@@ -869,15 +905,40 @@ impl Editor {
         }
     }
 
-    /// Puts the asset at `path` in the scene; the game reports it as spawned.
-    fn instantiate(&mut self, path: String) {
+    /// Puts the asset at `path` in the scene, on what the viewport shows at
+    /// `pointer`, in its pixels, or else at the origin; the game reports it
+    /// as spawned.
+    fn instantiate(&mut self, path: String, pointer: Option<[f32; 2]>) {
         self.edit(
             Command::Instantiate {
                 path,
-                place: Placement::default(),
+                place: Placement {
+                    pointer,
+                    ..Placement::default()
+                },
             },
             vec![],
         );
+    }
+
+    /// The middle of the viewport, in its pixels, where new things go.
+    fn viewport_middle(&self) -> Option<[f32; 2]> {
+        let viewport = self.viewport.as_ref()?;
+        Some([viewport.width as f32 / 2.0, viewport.height as f32 / 2.0])
+    }
+
+    /// Has the game show `ghost`, the asset dragged over the viewport at its
+    /// pointer, where it would land, or nothing, when that changed.
+    fn show_ghost(&mut self, ghost: Option<(String, [f32; 2])>) {
+        if ghost == self.ghost || self.protocol < Some(PLACE_PROTOCOL) || self.playing {
+            return;
+        }
+        let (path, pointer) = match ghost.clone() {
+            Some((path, pointer)) => (Some(path), pointer),
+            None => (None, [0.0; 2]),
+        };
+        self.send(Command::Ghost { path, pointer });
+        self.ghost = ghost;
     }
 
     /// Asks the game in edit mode to picture the models without an up to
@@ -991,6 +1052,23 @@ impl Editor {
         if scatter != self.scatter_brush && self.game.is_some() {
             self.scatter_brush = scatter.clone();
             self.send(Command::ScatterBrush { brush: scatter });
+        }
+    }
+
+    /// Tells the game the grid and whether handles snap, from the toolbar or
+    /// with Ctrl held, when that changed.
+    fn send_snap(&mut self, ctx: &egui::Context) {
+        let held = ctx.input(|i| i.modifiers.command);
+        let snap = (self.snapping.grid, self.snapping.on || held);
+        if self.sent_snap != Some(snap)
+            && self.game.is_some()
+            && self.protocol >= Some(PLACE_PROTOCOL)
+        {
+            self.sent_snap = Some(snap);
+            self.send(Command::Snap {
+                grid: snap.0,
+                on: snap.1,
+            });
         }
     }
 
@@ -1148,7 +1226,8 @@ impl Editor {
                         self.set_tool(tool);
                     }
                 }
-                let scatter = Button::selectable(self.scatter.on, "⁙");
+                self.snap_tools(ui);
+                let scatter = Button::selectable(self.scatter.on, "🌲");
                 if ui
                     .add_enabled(self.can_scatter(), scatter)
                     .on_hover_text("Scatter")
@@ -1167,6 +1246,31 @@ impl Editor {
                 });
             });
         });
+    }
+
+    /// The snap button and the grid's spacing, which the project keeps.
+    fn snap_tools(&mut self, ui: &mut Ui) {
+        let before = self.snapping;
+        let enabled = !self.playing && !self.previewing;
+        let snap = Button::selectable(self.snapping.on, "#");
+        if ui
+            .add_enabled(enabled, snap)
+            .on_hover_text("Snap (hold Ctrl)")
+            .clicked()
+        {
+            self.snapping.on = !self.snapping.on;
+        }
+        ui.add_enabled(enabled, egui::Label::new("Grid"));
+        let grid = egui::DragValue::new(&mut self.snapping.grid)
+            .range(0.01..=100.0)
+            .speed(0.05)
+            .suffix(" m");
+        ui.add_enabled(enabled, grid);
+        if self.snapping != before
+            && let Err(error) = self.snapping.write(&self.project.file(SNAP_FILE))
+        {
+            self.log(format!("Could not keep the snapping: {error}"));
+        }
     }
 
     /// Whether the project's `besfa_editor_plugin` matches the one the Bevy
@@ -1245,16 +1349,23 @@ impl Editor {
                 Color32::from_white_alpha(0x99),
             );
         }
-        // Assets dragged from the Assets tab land in the scene, when it shows.
+        // Assets dragged from the Assets tab show where they would land, and
+        // land there, when the scene shows.
         if self.previewing {
             return;
         }
-        if response.dnd_hover_payload::<String>().is_some() {
+        let pointer = ui
+            .input(|i| i.pointer.latest_pos())
+            .map(|pos| (pos - rect.min) * size / rect.size())
+            .map(|at| [at.x, at.y]);
+        let hovered = response.dnd_hover_payload::<String>();
+        if hovered.is_some() {
             ui.painter()
                 .rect_stroke(rect, 0.0, (2.0, ACCENT), egui::StrokeKind::Inside);
         }
+        self.show_ghost(hovered.map(|path| (*path).clone()).zip(pointer));
         if let Some(path) = response.dnd_release_payload::<String>() {
-            self.instantiate((*path).clone());
+            self.instantiate((*path).clone(), pointer);
         }
     }
 
@@ -1396,6 +1507,43 @@ impl Editor {
             }
             None => {}
         }
+    }
+}
+
+/// The scene view's snapping, which each project keeps.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(default)]
+struct Snapping {
+    on: bool,
+    /// Meters between the ground grid's lines, which moving snaps to.
+    grid: f32,
+}
+
+impl Default for Snapping {
+    fn default() -> Self {
+        Self {
+            on: false,
+            grid: 1.0,
+        }
+    }
+}
+
+impl Snapping {
+    /// What `file` keeps, or the defaults when it keeps nothing usable.
+    fn read(file: &Path) -> Self {
+        fs::read_to_string(file)
+            .ok()
+            .and_then(|text| ron::from_str::<Self>(&text).ok())
+            .filter(|snapping| snapping.grid > 0.0 && snapping.grid.is_finite())
+            .unwrap_or_default()
+    }
+
+    fn write(&self, file: &Path) -> Result<(), String> {
+        if let Some(folder) = file.parent() {
+            fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+        }
+        let text = ron::to_string(self).map_err(|error| error.to_string())?;
+        fs::write(file, text).map_err(|error| error.to_string())
     }
 }
 

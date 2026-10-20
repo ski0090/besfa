@@ -39,7 +39,9 @@ use serde_json::Value;
 /// 8. The scene view's scatter brush, [`Command::ScatterBrush`].
 /// 9. [`Command::TerrainFill`].
 /// 10. The sky: [`SpawnKind::Sky`] and [`EntityInfo::sky`].
-pub const VERSION: u32 = 10;
+/// 11. Placing where the scene view points, [`Placement::pointer`] and
+///     [`Command::Ghost`], and snapping handles, [`Command::Snap`].
+pub const VERSION: u32 = 11;
 
 /// The game's cargo feature that brings in `besfa_editor_plugin`, in games
 /// that depend on `besfa_components` and leave the editor out of release
@@ -173,6 +175,21 @@ pub enum Command {
     /// Picks the scene view's handle tool.
     Tool {
         tool: Tool,
+    },
+    /// Draws the ground grid `grid` meters apart and, while `on`, moves
+    /// dragged handles to it: moving lines up with the grid, rotating turns
+    /// in steps of 15 degrees and scaling goes in steps of 0.1.
+    Snap {
+        grid: f32,
+        on: bool,
+    },
+    /// Shows the asset at `path`, relative to the asset directory, see-through
+    /// where [`Placement::pointer`] at `pointer` would place it, while it is
+    /// dragged over the scene view. Without a path it goes.
+    Ghost {
+        path: Option<String>,
+        #[serde(default)]
+        pointer: [f32; 2],
     },
     /// Moves the scene view to the selected entity.
     Focus,
@@ -370,6 +387,11 @@ pub struct Placement {
     /// Where in the world, in meters, also under a parent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub translation: Option<[f32; 3]>,
+    /// Without `translation`, where the scene view shows it, in viewport
+    /// pixels: on the surface seen there, or on the ground at height 0,
+    /// standing upright either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pointer: Option<[f32; 2]>,
     /// Turned about the up axis, in degrees, counterclockwise seen from
     /// above: 90 turns its front, -Z, to -X.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -406,6 +428,7 @@ impl Command {
                 | Command::Key { .. }
                 | Command::FocusLost
                 | Command::Fly { .. }
+                | Command::Ghost { .. }
                 // Sent while the time slider is dragged.
                 | Command::PreviewAnimation { .. }
         )
@@ -879,6 +902,7 @@ mod tests {
                 scale: Some(1.5),
                 name: Some("Oak".into()),
                 parent: Some(7),
+                ..Placement::default()
             },
         };
         assert_eq!(
@@ -887,6 +911,37 @@ mod tests {
             )
             .command,
             placed
+        );
+        assert_eq!(
+            request(r#"{"command":"spawn","kind":"cube","pointer":[640,360]}"#).command,
+            Command::Spawn {
+                kind: SpawnKind::Cube,
+                place: Placement {
+                    pointer: Some([640.0, 360.0]),
+                    ..Placement::default()
+                },
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"ghost","path":"a.glb","pointer":[3,4]}"#).command,
+            Command::Ghost {
+                path: Some("a.glb".into()),
+                pointer: [3.0, 4.0],
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"ghost"}"#).command,
+            Command::Ghost {
+                path: None,
+                pointer: [0.0, 0.0],
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"snap","grid":0.5,"on":true}"#).command,
+            Command::Snap {
+                grid: 0.5,
+                on: true
+            }
         );
         let line = serde_json::to_string(&Request {
             seq: None,

@@ -269,6 +269,12 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 /// The protocol version a game must speak to run `command`.
 fn since(command: &Command) -> u32 {
     match command {
+        Command::Snap { .. } | Command::Ghost { .. } => 11,
+        Command::Spawn { place, .. } | Command::Instantiate { place, .. }
+            if place.pointer.is_some() =>
+        {
+            11
+        }
         Command::DropToSurface { .. } | Command::Scatter { .. } | Command::ScatterErase { .. } => 7,
         Command::Spawn {
             kind: SpawnKind::Sky,

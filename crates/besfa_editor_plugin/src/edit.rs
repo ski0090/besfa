@@ -168,6 +168,13 @@ pub(crate) fn despawn(world: &mut World, entity: Entity) -> Result<(), String> {
 /// file: a glTF model's first scene, or a scene or prefab file. The asset's
 /// entities become its children; saving keeps only the asset's path.
 pub(crate) fn instantiate(world: &mut World, path: &str) -> Result<Entity, String> {
+    let entity = show_asset(world, path)?;
+    world.entity_mut(entity).insert(SceneEntity);
+    Ok(entity)
+}
+
+/// [`instantiate`]'s entity, not yet in the scene.
+pub(crate) fn show_asset(world: &mut World, path: &str) -> Result<Entity, String> {
     let file = path.rsplit('/').next().unwrap_or(path);
     let name = file
         .strip_suffix(".scn.ron")
@@ -176,7 +183,7 @@ pub(crate) fn instantiate(world: &mut World, path: &str) -> Result<Entity, Strin
         .ok_or_else(|| format!("{path} is not a glTF model or a scene file"))?
         .to_string();
     let assets = world.resource::<AssetServer>().clone();
-    let mut entity = world.spawn((SceneEntity, Name::new(name), Transform::default()));
+    let mut entity = world.spawn((Name::new(name), Transform::default()));
     if path.ends_with(".scn.ron") {
         entity.insert(DynamicWorldRoot(assets.load(path.to_string())));
     } else {
@@ -452,6 +459,7 @@ mod tests {
             scale: Some(2.0),
             name: Some("Oak".into()),
             parent: Some(forest.to_bits()),
+            ..default()
         };
         let parent_of_tree = parent(&world, forest.to_bits()).unwrap();
         place(&mut world, tree, &place_tree, Some(parent_of_tree));
