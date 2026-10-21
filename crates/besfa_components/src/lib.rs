@@ -1,8 +1,8 @@
 //! The components a Besfa game ships with, and the plugins that make them
 //! work: the scene file, changes to placed models' parts, terrain and the
 //! foliage on it, the sky and its lens flare, animation state machines,
-//! inventories, health, and the editor's markers for what it cannot
-//! show otherwise.
+//! inventories, health, world saves, and the editor's markers for what
+//! it cannot show otherwise.
 //!
 //! Games use [`default_plugins`] in place of `DefaultPlugins`, or
 //! `besfa_editor_plugin::default_plugins` while the Besfa editor runs them,
@@ -24,6 +24,7 @@ pub mod marker;
 pub mod part_changes;
 #[doc(hidden)]
 pub mod reflect;
+pub mod save;
 pub mod scene;
 pub mod sky;
 pub mod terrain;
@@ -38,6 +39,7 @@ pub use health::{Damage, Died, Health, HealthPlugin};
 pub use inventory::{Inventory, ItemStack};
 pub use marker::{Marker, MarkerIcon};
 pub use part_changes::{PartChange, PartChanges};
+pub use save::{Persist, SaveFilter, SceneId, backup_path, load_world, save_world};
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
 pub use sky::{Moon, Sky, SkyMode, Sun};
 pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight};
@@ -93,6 +95,7 @@ mod tests {
             (Inventory::type_path(), "inventory::Inventory"),
             (Health::type_path(), "health::Health"),
             (Marker::type_path(), "marker::Marker"),
+            (Persist::type_path(), "save::Persist"),
             (ItemStack::type_path(), "inventory::ItemStack"),
             (
                 AnimationStateMachine::type_path(),
