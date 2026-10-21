@@ -1,6 +1,7 @@
 //! The components a Besfa game ships with, and the plugins that make them
 //! work: the scene file, changes to placed models' parts, terrain and the
-//! foliage on it, the sky and its lens flare, and animation state machines.
+//! foliage on it, the sky and its lens flare, animation state machines,
+//! and inventories.
 //!
 //! Games use [`default_plugins`] in place of `DefaultPlugins`, or
 //! `besfa_editor_plugin::default_plugins` while the Besfa editor runs them,
@@ -15,6 +16,7 @@ use bevy::{app::PluginGroupBuilder, prelude::*};
 pub mod animation;
 pub mod foliage;
 pub mod ground;
+pub mod inventory;
 pub mod lens_flare;
 pub mod part_changes;
 #[doc(hidden)]
@@ -29,6 +31,7 @@ pub use animation::{
 };
 pub use foliage::{Foliage, FoliagePlugin};
 pub use ground::{ScatterGroup, Scattered};
+pub use inventory::{Inventory, ItemStack};
 pub use part_changes::{PartChange, PartChanges};
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
 pub use sky::{Moon, Sky, SkyMode, Sun};
@@ -81,6 +84,8 @@ mod tests {
             (PartChanges::type_path(), "part_changes::PartChanges"),
             (Scattered::type_path(), "ground::Scattered"),
             (ScatterGroup::type_path(), "ground::ScatterGroup"),
+            (Inventory::type_path(), "inventory::Inventory"),
+            (ItemStack::type_path(), "inventory::ItemStack"),
             (
                 AnimationStateMachine::type_path(),
                 "animation::AnimationStateMachine",
