@@ -1,7 +1,7 @@
 //! The components a Besfa game ships with, and the plugins that make them
 //! work: the scene file, changes to placed models' parts, terrain and the
 //! foliage on it, the sky and its lens flare, animation state machines,
-//! and inventories.
+//! inventories and health.
 //!
 //! Games use [`default_plugins`] in place of `DefaultPlugins`, or
 //! `besfa_editor_plugin::default_plugins` while the Besfa editor runs them,
@@ -16,6 +16,7 @@ use bevy::{app::PluginGroupBuilder, prelude::*};
 pub mod animation;
 pub mod foliage;
 pub mod ground;
+pub mod health;
 pub mod inventory;
 pub mod lens_flare;
 pub mod part_changes;
@@ -31,6 +32,7 @@ pub use animation::{
 };
 pub use foliage::{Foliage, FoliagePlugin};
 pub use ground::{ScatterGroup, Scattered};
+pub use health::{Damage, Died, Health, HealthPlugin};
 pub use inventory::{Inventory, ItemStack};
 pub use part_changes::{PartChange, PartChanges};
 pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
@@ -50,6 +52,7 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .add(sky::SkyPlugin)
         .add(lens_flare::LensFlarePlugin)
         .add(animation::AnimationStateMachinePlugin)
+        .add(health::HealthPlugin)
 }
 
 /// Kept out of the editor's Hierarchy and the scene file.
@@ -85,6 +88,7 @@ mod tests {
             (Scattered::type_path(), "ground::Scattered"),
             (ScatterGroup::type_path(), "ground::ScatterGroup"),
             (Inventory::type_path(), "inventory::Inventory"),
+            (Health::type_path(), "health::Health"),
             (ItemStack::type_path(), "inventory::ItemStack"),
             (
                 AnimationStateMachine::type_path(),
