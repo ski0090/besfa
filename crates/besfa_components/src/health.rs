@@ -1,7 +1,8 @@
 //! Health that harm takes and rest fills. Trigger [`Damage`] on an entity
 //! with [`Health`] to harm it; once it reaches zero, [`Died`] is triggered
 //! on it once, and the game decides what dying means. It fills by itself
-//! after a while unharmed, and not while it is at zero.
+//! after a while unharmed, and not while it is at zero. While `immune`
+//! lasts, harm does not take from it.
 
 use bevy::prelude::*;
 
@@ -26,6 +27,8 @@ pub struct Health {
     pub rest: f32,
     /// Seconds since it was last harmed.
     pub unharmed: f32,
+    /// Seconds left that harm does not take from it, as while rolling.
+    pub immune: f32,
 }
 
 impl Default for Health {
@@ -43,6 +46,7 @@ impl Health {
             regen: 0.0,
             rest: 5.0,
             unharmed: 0.0,
+            immune: 0.0,
         }
     }
 
@@ -87,7 +91,7 @@ fn harm(damage: On<Damage>, mut commands: Commands, mut healths: Query<&mut Heal
     let Ok(mut health) = healths.get_mut(damage.entity) else {
         return;
     };
-    if health.dead() || damage.amount <= 0.0 {
+    if health.dead() || damage.amount <= 0.0 || health.immune > 0.0 {
         return;
     }
     health.value = (health.value - damage.amount).max(0.0);
@@ -109,6 +113,7 @@ fn regenerate(time: Res<Time>, mut healths: Query<&mut Health>) {
         // Only on change, so a full one does not tell the Inspector.
         let mut next = *health;
         next.unharmed += delta;
+        next.immune = (next.immune - delta).max(0.0);
         if next.unharmed >= next.rest {
             next.heal(next.regen * delta);
         }
@@ -116,7 +121,9 @@ fn regenerate(time: Res<Time>, mut healths: Query<&mut Health>) {
         if next.value != health.value {
             *health = next;
         } else {
-            health.bypass_change_detection().unharmed = next.unharmed;
+            let quiet = health.bypass_change_detection();
+            quiet.unharmed = next.unharmed;
+            quiet.immune = next.immune;
         }
     }
 }
@@ -170,6 +177,12 @@ mod tests {
         step(&mut app, 0.5);
         assert!(health(&app).value > 30.0, "{:?}", health(&app));
 
+        // Immune for a moment: harm then takes nothing.
+        app.world_mut().get_mut::<Health>(entity).unwrap().immune = 0.4;
+        let before = health(&app).value;
+        hit(&mut app, 5.0);
+        assert_eq!(health(&app).value, before);
+        step(&mut app, 0.5);
         hit(&mut app, 100.0);
         hit(&mut app, 10.0);
         assert!(health(&app).dead());
