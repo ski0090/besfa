@@ -29,6 +29,7 @@ use crate::{
 };
 
 pub use besfa_components::EditorOnly;
+use besfa_components::Marker;
 
 /// The scene view's state, fed by the editor's commands.
 #[derive(Resource, Default)]
@@ -128,6 +129,8 @@ pub(crate) struct Parked {
 /// and may move between press and release and still click.
 const GRAB_PIXELS: f32 = 8.0;
 const CLICK_PIXELS: f32 = 4.0;
+/// Pixels from a marker's icon that a click still picks it.
+const MARKER_PIXELS: f32 = 18.0;
 
 pub(crate) const AXIS_COLORS: [Color; 3] = [
     Color::srgb(0.93, 0.3, 0.3),
@@ -429,6 +432,7 @@ fn handle_pointer(
     globals: Query<&GlobalTransform>,
     editor_only: Query<(), With<EditorOnly>>,
     scene_entities: Query<(), With<SceneEntity>>,
+    markers: Query<(Entity, &GlobalTransform), With<Marker>>,
     parents: Query<&ChildOf>,
     mut ray_cast: MeshRayCast,
     registry: Res<AppTypeRegistry>,
@@ -526,16 +530,25 @@ fn handle_pointer(
                     let settings = MeshRayCastSettings::default().with_filter(&filter);
                     // A model's or prefab's insides select the scene entity
                     // that holds them.
-                    let hit = ray_cast
-                        .cast_ray(ray, &settings)
-                        .first()
-                        .map(|(entity, _)| {
-                            std::iter::successors(Some(*entity), |&entity| {
+                    let mesh = ray_cast.cast_ray(ray, &settings).first().cloned();
+                    // A marker's icon in front of the mesh hit, or with none.
+                    let icons = markers.iter().filter_map(|(entity, global)| {
+                        let at = Marker::center(global.translation());
+                        let pixel = render.world_to_viewport(camera_global, at).ok()?;
+                        Some((entity, pixel, camera_global.translation().distance(at)))
+                    });
+                    let marked = marker_under(pointer, icons)
+                        .filter(|(_, depth)| mesh.as_ref().is_none_or(|(_, hit)| *depth < hit.distance))
+                        .map(|(entity, _)| entity);
+                    let hit = marked.or_else(|| {
+                        mesh.map(|(entity, _)| {
+                            std::iter::successors(Some(entity), |&entity| {
                                 parents.get(entity).ok().map(ChildOf::parent)
                             })
                             .find(|&entity| scene_entities.contains(entity))
-                            .unwrap_or(*entity)
-                        });
+                            .unwrap_or(entity)
+                        })
+                    });
                     if hit != selected.0 {
                         selected.0 = hit;
                         report_selection(hit);
@@ -663,6 +676,7 @@ fn report_edited(
 fn draw(
     view: Res<SceneView>,
     selected: Res<Selected>,
+    markers: Query<(Entity, &Marker, &GlobalTransform)>,
     targets: Query<(&GlobalTransform, Option<&Aabb>), Without<EditorCamera>>,
     camera: Query<&GlobalTransform, With<EditorCamera>>,
     mut gizmos: Gizmos<GridGizmos>,
@@ -686,6 +700,22 @@ fn draw(
             ACTIVE_COLOR
         };
         handles.circle(Isometry3d::new(at, flat), scatter.radius, color);
+    }
+    // What has no mesh to show it: its icon, and its ring on the ground.
+    for (entity, marker, global) in &markers {
+        let at = global.translation();
+        let color = if selected.0 == Some(entity) {
+            ACTIVE_COLOR
+        } else {
+            marker.color
+        };
+        for (from, to) in marker.lines(at) {
+            handles.line(from, to, color);
+        }
+        if marker.radius > 0.0 {
+            let flat = Quat::from_rotation_arc(Vec3::Z, Vec3::Y);
+            handles.circle(Isometry3d::new(at + Vec3::Y * 0.05, flat), marker.radius, color.with_alpha(0.6));
+        }
     }
     let (Some((global, aabb)), Ok(camera), None, None) = (
         selected.0.and_then(|entity| targets.get(entity).ok()),
@@ -732,6 +762,19 @@ fn draw(
     }
 }
 
+/// The marker whose icon is within `MARKER_PIXELS` of `pointer`, nearest the
+/// camera of those, from each marker's entity, icon pixel and distance from
+/// the camera. Returns it and its distance.
+fn marker_under(
+    pointer: Vec2,
+    icons: impl Iterator<Item = (Entity, Vec2, f32)>,
+) -> Option<(Entity, f32)> {
+    icons
+        .filter(|(_, pixel, _)| pixel.distance(pointer) <= MARKER_PIXELS)
+        .min_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(entity, _, depth)| (entity, depth))
+}
+
 /// How far along the line `origin + t * direction` the point nearest to
 /// `ray` is, or none when they are parallel.
 fn axis_param(origin: Vec3, direction: Vec3, ray: Ray3d) -> Option<f32> {
@@ -773,6 +816,19 @@ mod tests {
 
     fn ray(origin: Vec3, direction: Vec3) -> Ray3d {
         Ray3d::new(origin, Dir3::new(direction).unwrap())
+    }
+
+    #[test]
+    fn a_click_picks_the_nearest_marker_icon_under_it() {
+        let (near, far, aside) = (Entity::from_raw_u32(1).unwrap(), Entity::from_raw_u32(2).unwrap(), Entity::from_raw_u32(3).unwrap());
+        let icons = [
+            (far, Vec2::new(100.0, 100.0), 30.0),
+            (near, Vec2::new(110.0, 104.0), 10.0),
+            (aside, Vec2::new(300.0, 100.0), 1.0),
+        ];
+        let picked = marker_under(Vec2::new(105.0, 100.0), icons.into_iter());
+        assert_eq!(picked, Some((near, 10.0)));
+        assert_eq!(marker_under(Vec2::new(200.0, 200.0), icons.into_iter()), None);
     }
 
     #[test]
