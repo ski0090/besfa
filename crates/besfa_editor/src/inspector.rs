@@ -433,8 +433,12 @@ struct Fields<'a> {
 
 impl Fields<'_> {
     fn node(&mut self, ui: &mut Ui, node: &Value, path: &mut Vec<String>, label: Option<&str>) {
-        let Value::Object(map) = node else {
-            return row(ui, label, |ui| self.leaf(ui, node, path));
+        let map = match node {
+            Value::Object(map) => map,
+            Value::Array(items) if !is_vector(items) => {
+                return self.list(ui, items, path, label.unwrap_or("items"));
+            }
+            _ => return row(ui, label, |ui| self.leaf(ui, node, path)),
         };
         let mut children = |ui: &mut Ui| {
             for (key, value) in map {
@@ -451,6 +455,56 @@ impl Fields<'_> {
                 row(ui, Some(label), |_| {});
                 ui.indent(label, children);
             }
+        }
+    }
+
+    /// A list: each item under its number with a 🗙 that takes it out, and a
+    /// ➕ that adds a copy of the last item at the end, or an empty one,
+    /// which the game fills with the item type's defaults.
+    fn list(&mut self, ui: &mut Ui, items: &[Value], path: &mut Vec<String>, label: &str) {
+        let mut changed = None;
+        row(ui, Some(label), |ui| {
+            if ui.small_button("➕").on_hover_text("Add an item").clicked() {
+                let mut grown = items.to_vec();
+                grown.push(items.last().cloned().unwrap_or_else(|| json!({})));
+                changed = Some(grown);
+            }
+        });
+        ui.indent((label, path.len()), |ui| {
+            for (index, item) in items.iter().enumerate() {
+                path.push(index.to_string());
+                let name = format!("#{index}");
+                let mut remove = false;
+                let mut remove_button = |ui: &mut Ui| {
+                    remove = ui
+                        .small_button("🗙")
+                        .on_hover_text("Remove this item")
+                        .clicked();
+                };
+                match item {
+                    Value::Object(_) => {
+                        row(ui, Some(&name), remove_button);
+                        ui.indent(&name, |ui| self.node(ui, item, path, None));
+                    }
+                    Value::Array(inner) if !is_vector(inner) => {
+                        row(ui, Some(&name), remove_button);
+                        ui.indent(&name, |ui| self.node(ui, item, path, Some("items")));
+                    }
+                    _ => row(ui, Some(&name), |ui| {
+                        self.leaf(ui, item, path);
+                        remove_button(ui);
+                    }),
+                }
+                if remove {
+                    let mut shrunk = items.to_vec();
+                    shrunk.remove(index);
+                    changed = Some(shrunk);
+                }
+                path.pop();
+            }
+        });
+        if let Some(list) = changed {
+            self.change = Some((path.clone(), Value::Array(list)));
         }
     }
 
@@ -607,13 +661,20 @@ fn row(ui: &mut Ui, label: Option<&str>, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// A copy of `node` with the value at `path`, keys of nested objects,
-/// replaced by `leaf`.
+/// Two to four numbers, which edit as one vector's fields rather than as a
+/// list.
+fn is_vector(items: &[Value]) -> bool {
+    (2..=4).contains(&items.len()) && items.iter().all(Value::is_number)
+}
+
+/// A copy of `node` with the value at `path`, keys of nested objects and
+/// indices of lists, replaced by `leaf`.
 fn replace(node: &Value, path: &[String], leaf: Value) -> Value {
     let mut copy = node.clone();
-    *path
-        .iter()
-        .fold(&mut copy, |node, key| &mut node[key.as_str()]) = leaf;
+    *path.iter().fold(&mut copy, |node, key| match node {
+        Value::Array(items) => &mut items[key.parse::<usize>().expect("a list index")],
+        _ => &mut node[key.as_str()],
+    }) = leaf;
     copy
 }
 
@@ -657,7 +718,47 @@ pub fn euler_to_quat(degrees: [f64; 3]) -> [f64; 4] {
 
 #[cfg(test)]
 mod tests {
+    use egui_kittest::{Harness, kittest::Queryable};
+
     use super::*;
+
+    #[test]
+    fn adds_copies_and_removes_the_items_of_a_list() {
+        let recipes = json!({"secs": 1.0, "recipes": [
+            {"item": "axe", "needs": [{"item": "twig", "count": 3}]},
+            {"item": "hammer", "needs": []},
+        ]});
+        let editor = |value: Value| {
+            Harness::builder().build_ui_state(
+                move |ui, changed: &mut Option<Value>| {
+                    if let Some(value) = value_editor(ui, Id::new("recipes"), &value, false, &[]) {
+                        *changed = Some(value);
+                    }
+                },
+                None,
+            )
+        };
+        let mut harness = editor(recipes.clone());
+        harness.run();
+        // The recipes' ➕ comes first, then the first recipe's needs'.
+        harness.get_all_by_label("➕").next().unwrap().click();
+        harness.run();
+        let grown = harness.state().clone().unwrap();
+        assert_eq!(grown["recipes"].as_array().unwrap().len(), 3);
+        assert_eq!(grown["recipes"][2]["item"], "hammer", "a copy of the last");
+
+        let mut harness = editor(recipes.clone());
+        harness.run();
+        harness.get_all_by_label("🗙").next().unwrap().click();
+        harness.run();
+        let shrunk = harness.state().clone().unwrap();
+        assert_eq!(shrunk["recipes"], json!([{"item": "hammer", "needs": []}]));
+
+        // An item's field edits in place.
+        let changed = replace(&recipes, &["recipes".into(), "0".into(), "needs".into(), "0".into(), "count".into()], json!(5));
+        assert_eq!(changed["recipes"][0]["needs"][0]["count"], 5);
+        assert_eq!(changed["recipes"][1], recipes["recipes"][1]);
+    }
 
     fn close(a: &[f64], b: &[f64], epsilon: f64) -> bool {
         a.iter().zip(b).all(|(a, b)| (a - b).abs() < epsilon)
