@@ -3,24 +3,31 @@
 //! the editor sends them as commands and they become Bevy's input messages:
 //! `ButtonInput<KeyCode>`, `ButtonInput<Key>`, `ButtonInput<MouseButton>`,
 //! `AccumulatedMouseMotion` and `AccumulatedMouseScroll` work as they do
-//! with a window.
+//! with a window. The pointer also drives Bevy's picking on the viewport,
+//! so UI nodes get `PointerClick`, `PointerOver` and the rest.
 // ponytail: no window entity, so `Window::cursor_position` stays empty;
 // `CursorMoved` carries the viewport position. Give the game a headless
 // window if games need the cursor from it.
+// ponytail: bevy_ui's `Interaction` follows window cameras only, so it stays
+// `None` here; mirror the picking hover into it if games need it.
 
 use bevy::{
+    camera::NormalizedRenderTarget,
     input::{
         ButtonState,
         keyboard::{Key, KeyboardFocusLost, KeyboardInput, NativeKey},
         mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel},
         touch::TouchPhase,
     },
+    picking::pointer::{Location, PointerAction, PointerButton, PointerId, PointerInput},
     prelude::*,
     reflect::enums::{DynamicEnum, DynamicVariant},
     window::CursorMoved,
 };
 
 use besfa_protocol::{Button, PointerEvent};
+
+use crate::viewport::VIEWPORT_HANDLE;
 
 /// The messages name a window; there is none.
 const NO_WINDOW: Entity = Entity::PLACEHOLDER;
@@ -44,11 +51,13 @@ pub(crate) fn pointer(world: &mut World, event: PointerEvent) {
         PointerEvent::Down { x, y, button: down } => {
             moved(world, Vec2::new(x, y));
             world.write_message(button(down, ButtonState::Pressed));
+            picked(world, Vec2::new(x, y), PointerAction::Press(picking(down)));
         }
         PointerEvent::Move { x, y } => moved(world, Vec2::new(x, y)),
         PointerEvent::Up { x, y, button: up } => {
             moved(world, Vec2::new(x, y));
             world.write_message(button(up, ButtonState::Released));
+            picked(world, Vec2::new(x, y), PointerAction::Release(picking(up)));
         }
         // The editor's scroll is positive downwards, Bevy's upwards.
         PointerEvent::Scroll { delta } => {
@@ -77,6 +86,26 @@ fn moved(world: &mut World, position: Vec2) {
         position,
         delta,
     });
+    let delta = delta.unwrap_or_default();
+    picked(world, position, PointerAction::Move { delta });
+}
+
+/// The mouse pointer's `action` at `position` on the viewport, which game
+/// cameras render into, for picking.
+fn picked(world: &mut World, position: Vec2, action: PointerAction) {
+    let location = Location {
+        target: NormalizedRenderTarget::TextureView(VIEWPORT_HANDLE),
+        position,
+    };
+    world.write_message(PointerInput::new(PointerId::Mouse, location, action));
+}
+
+fn picking(button: Button) -> PointerButton {
+    match button {
+        Button::Left => PointerButton::Primary,
+        Button::Middle => PointerButton::Middle,
+        Button::Right => PointerButton::Secondary,
+    }
 }
 
 /// A key pressed or released in the viewport. `code` is the W3C name of
@@ -121,9 +150,17 @@ fn unit_variant<T: FromReflect>(name: &str) -> Option<T> {
 
 #[cfg(test)]
 mod tests {
-    use bevy::input::{
-        InputPlugin,
-        mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+    use bevy::{
+        input::{
+            InputPlugin,
+            mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+        },
+        picking::{
+            PickingPlugin,
+            input::PointerInputPlugin,
+            pointer::{PointerLocation, PointerPressState},
+        },
+        window::WindowEvent,
     };
 
     use super::*;
@@ -181,5 +218,35 @@ mod tests {
         app.update();
         let keys = app.world().resource::<ButtonInput<KeyCode>>();
         assert!(!keys.pressed(KeyCode::KeyW), "focus loss lets keys go");
+    }
+
+    #[test]
+    fn points_picking_at_the_viewport() {
+        let mut app = App::new();
+        app.add_plugins((InputPlugin, PointerInputPlugin, PickingPlugin))
+            .add_message::<CursorMoved>()
+            .add_message::<WindowEvent>();
+        // Spawns the mouse pointer.
+        app.update();
+        let down = PointerEvent::Down {
+            x: 10.0,
+            y: 20.0,
+            button: Button::Left,
+        };
+        pointer(app.world_mut(), down);
+        app.update();
+
+        let world = app.world_mut();
+        let mut pointers = world.query::<(&PointerId, &PointerLocation, &PointerPressState)>();
+        let (id, location, press) = pointers.single(world).unwrap();
+        assert_eq!(*id, PointerId::Mouse);
+        assert_eq!(
+            location.location(),
+            Some(&Location {
+                target: NormalizedRenderTarget::TextureView(VIEWPORT_HANDLE),
+                position: Vec2::new(10.0, 20.0),
+            })
+        );
+        assert!(press.is_primary_pressed());
     }
 }

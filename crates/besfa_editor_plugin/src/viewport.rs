@@ -16,7 +16,7 @@ use bevy::{
     window::WindowRef,
 };
 
-const VIEWPORT_HANDLE: ManualTextureViewHandle = ManualTextureViewHandle(0xBE5FA);
+pub(crate) const VIEWPORT_HANDLE: ManualTextureViewHandle = ManualTextureViewHandle(0xBE5FA);
 
 /// The game writes linear-to-sRGB encoded BGRA, which the editor shows as is.
 const VIEWPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
