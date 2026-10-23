@@ -343,7 +343,8 @@ fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
 /// What a type says of its fields, by their path in its JSON value, keys
 /// joined by `/` and list items as `*`: the enums of plain variants with the
 /// variants the editor offers, the Options with what one that is None starts
-/// as, and the lists with what a new item starts as.
+/// as, the lists with what a new item starts as, and the arrays, whose length
+/// is fixed.
 fn shapes(registry: &TypeRegistry, type_id: TypeId) -> Shapes {
     let mut found = Shapes::default();
     walk(registry, type_id, &mut Vec::new(), &mut found);
@@ -387,7 +388,10 @@ fn walk(
             }
             inside("*", info.item_ty().id(), found)
         }
-        TypeInfo::Array(info) => inside("*", info.item_ty().id(), found),
+        TypeInfo::Array(info) => {
+            found.fixed.insert(here);
+            inside("*", info.item_ty().id(), found)
+        }
         // A newtype shows as what it holds.
         TypeInfo::TupleStruct(info) if info.field_len() == 1 => {
             if let Some(field) = info.field_at(0) {
@@ -509,6 +513,7 @@ mod tests {
         best: Option<Kind>,
         color: Color,
         names: Vec<String>,
+        dyes: [Option<Kind>; 2],
     }
 
     #[test]
@@ -524,11 +529,14 @@ mod tests {
             Some(&serde_json::json!({"kind": "Axe", "damage": 0.0}))
         );
         assert_eq!(told.items.get("names"), Some(&serde_json::json!("")));
+        assert!(told.fixed.contains("dyes"), "an array's length is fixed");
+        assert!(!told.fixed.contains("names"));
+        assert_eq!(told.options.get("dyes/*"), Some(&serde_json::json!("Axe")));
         let found = told.choices;
         let axe_or_bow = vec!["Axe".to_string(), "Bow".to_string()];
         assert_eq!(found.get("tools/*/kind"), Some(&axe_or_bow));
         assert_eq!(found.get("best"), Some(&axe_or_bow), "an Option as what it holds");
-        assert_eq!(found.len(), 2, "a color's variants hold values: {found:?}");
+        assert_eq!(found.len(), 3, "a color's variants hold values: {found:?}");
         let shown = shapes(&registry, TypeId::of::<Visibility>()).choices;
         assert_eq!(shown[""], ["Inherited", "Hidden", "Visible"]);
     }

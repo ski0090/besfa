@@ -746,6 +746,9 @@ pub struct Shapes {
     /// Lists, with the value a new item starts as.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub items: std::collections::BTreeMap<String, Value>,
+    /// Arrays of a fixed length, which take no items in or out.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub fixed: std::collections::BTreeSet<String>,
 }
 
 impl ComponentData {

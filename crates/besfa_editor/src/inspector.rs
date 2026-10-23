@@ -519,12 +519,15 @@ impl Fields<'_> {
 
     /// A list: each item under its number with a 🗙 that takes it out, and a
     /// ➕ that adds a copy of the last item at the end, or an empty one,
-    /// which the game fills with the item type's defaults.
+    /// which the game fills with the item type's defaults. An array of a
+    /// fixed length has neither. An Option item takes or loses its value as
+    /// an Option field does.
     fn list(&mut self, ui: &mut Ui, items: &[Value], path: &mut Vec<String>, label: &str) {
         let shapes = self.shapes;
+        let fixed = shapes.fixed.contains(&shape(path));
         let mut changed = None;
         row(ui, Some(label), |ui| {
-            if ui.small_button("➕").on_hover_text("Add an item").clicked() {
+            if !fixed && ui.small_button("➕").on_hover_text("Add an item").clicked() {
                 let mut grown = items.to_vec();
                 // A copy of the last, or what the type starts one as.
                 let item = items
@@ -541,13 +544,20 @@ impl Fields<'_> {
                 path.push(index.to_string());
                 let name = format!("#{index}");
                 let mut remove = false;
+                let option = shapes.options.contains_key(&shape(path));
                 let mut remove_button = |ui: &mut Ui| {
-                    remove = ui
-                        .small_button("🗙")
-                        .on_hover_text("Remove this item")
-                        .clicked();
+                    remove = !fixed
+                        && ui
+                            .small_button("🗙")
+                            .on_hover_text("Remove this item")
+                            .clicked();
                 };
                 match item {
+                    _ if option && fixed => self.node(ui, item, path, Some(&name)),
+                    _ if option => {
+                        row(ui, Some(&name), remove_button);
+                        ui.indent(&name, |ui| self.node(ui, item, path, None));
+                    }
                     Value::Object(_) => {
                         row(ui, Some(&name), remove_button);
                         ui.indent(&name, |ui| self.node(ui, item, path, None));
@@ -929,6 +939,32 @@ mod tests {
         harness.get_by_label("🗙").click();
         harness.run();
         assert_eq!(harness.state().clone().unwrap()["worn"], Value::Null);
+    }
+
+    #[test]
+    fn keeps_an_arrays_length_and_gives_its_option_items_values() {
+        let red = json!({"Srgba": {"red": 1.0, "green": 0.0, "blue": 0.0, "alpha": 1.0}});
+        let shapes = Shapes {
+            options: BTreeMap::from([("dyes/*".to_owned(), red.clone())]),
+            fixed: ["dyes".to_owned()].into(),
+            ..Default::default()
+        };
+        let value = json!({"dyes": [null, red.clone(), null]});
+        let mut harness = Harness::builder().build_ui_state(
+            move |ui, changed: &mut Option<Value>| {
+                if let Some(value) = value_editor_with(ui, Id::new("look"), &value, false, &[], &shapes) {
+                    *changed = Some(value);
+                }
+            },
+            None,
+        );
+        harness.run();
+        assert!(harness.query_by_label("Remove this item").is_none());
+        // No ➕ for the array itself: the two are its None items'.
+        assert_eq!(harness.get_all_by_label("➕").count(), 2);
+        harness.get_all_by_label("➕").next().unwrap().click();
+        harness.run();
+        assert_eq!(harness.state().clone().unwrap()["dyes"], json!([red, red, null]));
     }
 
     #[test]
