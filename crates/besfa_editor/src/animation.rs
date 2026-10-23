@@ -408,6 +408,7 @@ mod tests {
             required_by: None,
             saved: true,
             value: Some(value),
+            choices: Default::default(),
         }
     }
 

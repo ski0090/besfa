@@ -723,6 +723,11 @@ pub struct ComponentData {
     /// The reflected value; None for types without `Reflect`.
     #[serde(default)]
     pub value: Option<Value>,
+    /// Fields that are enums of plain variants, by their path in `value`
+    /// (keys joined by `/`, list items as `*`, the whole value as ``), with
+    /// the variants to choose from. Absent from early plugins.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub choices: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl ComponentData {

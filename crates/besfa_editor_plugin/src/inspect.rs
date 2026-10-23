@@ -7,7 +7,7 @@
 //! once, before the game runs. The game also reports a selection it made
 //! itself and the outcome of a save.
 
-use std::io::Write;
+use std::{any::TypeId, collections::BTreeMap, io::Write};
 
 use besfa_protocol::{ComponentData, ComponentType, EntityInfo, Report, SystemInfo};
 use bevy::{
@@ -19,6 +19,7 @@ use bevy::{
         schedule::Schedules,
     },
     prelude::*,
+    reflect::{TypeInfo, TypeRegistry, enums::VariantInfo},
     world_serialization::{DynamicWorldRoot, WorldAssetRoot},
 };
 use serde_json::Value;
@@ -328,10 +329,71 @@ fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
                 // Computed from other components; the scene file leaves it out.
                 saved: info.type_id().is_some_and(|id| !left_out(id)),
                 value,
+                choices: info
+                    .type_id()
+                    .map(|id| choices(&registry, id))
+                    .unwrap_or_default(),
             }
         })
         .collect();
     Some(components)
+}
+
+/// The fields of a type that are enums of plain variants, by their path in
+/// its JSON value, keys joined by `/` and list items as `*`, with the variants
+/// the editor offers to choose from.
+fn choices(registry: &TypeRegistry, type_id: TypeId) -> BTreeMap<String, Vec<String>> {
+    let mut found = BTreeMap::new();
+    walk(registry, type_id, &mut Vec::new(), &mut found);
+    found
+}
+
+fn walk(
+    registry: &TypeRegistry,
+    type_id: TypeId,
+    path: &mut Vec<String>,
+    found: &mut BTreeMap<String, Vec<String>>,
+) {
+    // Deep enough for any component; a type that holds itself stops here.
+    if path.len() > 8 {
+        return;
+    }
+    let Some(info) = registry.get_type_info(type_id) else {
+        return;
+    };
+    let mut inside = |key: &str, type_id: TypeId, found: &mut BTreeMap<String, Vec<String>>| {
+        path.push(key.to_owned());
+        walk(registry, type_id, path, found);
+        path.pop();
+    };
+    match info {
+        TypeInfo::Struct(info) => {
+            for field in info.iter() {
+                inside(field.name(), field.type_id(), found);
+            }
+        }
+        TypeInfo::List(info) => inside("*", info.item_ty().id(), found),
+        TypeInfo::Array(info) => inside("*", info.item_ty().id(), found),
+        // A newtype shows as what it holds.
+        TypeInfo::TupleStruct(info) if info.field_len() == 1 => {
+            if let Some(field) = info.field_at(0) {
+                walk(registry, field.type_id(), path, found);
+            }
+        }
+        TypeInfo::Enum(info) if info.iter().all(|variant| matches!(variant, VariantInfo::Unit(_))) => {
+            let names = info.variant_names().iter().map(|name| (*name).to_owned()).collect();
+            found.insert(path.join("/"), names);
+        }
+        // An Option shows as what it holds, or null.
+        TypeInfo::Enum(info) if info.type_path().starts_with("core::option::Option") => {
+            if let Some(VariantInfo::Tuple(some)) = info.variant("Some")
+                && let Some(field) = some.field_at(0)
+            {
+                walk(registry, field.type_id(), path, found);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Every system of every schedule, with the game's crate name so the editor
@@ -408,6 +470,40 @@ mod tests {
 
     #[derive(Component)]
     struct Plain;
+
+    #[derive(Reflect, Default)]
+    enum Kind {
+        #[default]
+        Axe,
+        Bow,
+    }
+
+    #[derive(Reflect, Default)]
+    struct Tool {
+        kind: Kind,
+        damage: f32,
+    }
+
+    #[derive(Component, Reflect, Default)]
+    struct Tools {
+        tools: Vec<Tool>,
+        best: Option<Kind>,
+        color: Color,
+    }
+
+    #[test]
+    fn offers_the_variants_of_plain_enums_by_their_path() {
+        let mut registry = TypeRegistry::default();
+        registry.register::<Tools>();
+        registry.register::<Visibility>();
+        let found = choices(&registry, TypeId::of::<Tools>());
+        let axe_or_bow = vec!["Axe".to_string(), "Bow".to_string()];
+        assert_eq!(found.get("tools/*/kind"), Some(&axe_or_bow));
+        assert_eq!(found.get("best"), Some(&axe_or_bow), "an Option as what it holds");
+        assert_eq!(found.len(), 2, "a color's variants hold values: {found:?}");
+        let shown = choices(&registry, TypeId::of::<Visibility>());
+        assert_eq!(shown[""], ["Inherited", "Hidden", "Visible"]);
+    }
 
     fn find<'a>(components: &'a [ComponentData], name: &str) -> &'a ComponentData {
         components

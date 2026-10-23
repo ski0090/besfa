@@ -385,7 +385,9 @@ fn component_tile(
             .map_or(&[][..], |(_, fields)| fields);
         // A new selection starts with fresh fields.
         let id = Id::new((selected, &component.path));
-        if let Some(value) = value_editor(ui, id, value, component.path == TRANSFORM, hidden) {
+        if let Some(value) =
+            value_editor_with(ui, id, value, component.path == TRANSFORM, hidden, &component.choices)
+        {
             action = Some(Action::Set(component.path.clone(), value));
         }
     } else {
@@ -412,10 +414,24 @@ pub fn value_editor(
     euler_rotation: bool,
     hidden: &[&str],
 ) -> Option<Value> {
+    value_editor_with(ui, id, value, euler_rotation, hidden, &BTreeMap::new())
+}
+
+/// [`value_editor`], with `choices`: the variants to pick from for the
+/// text fields at those paths, keys joined by `/` and list items as `*`.
+pub fn value_editor_with(
+    ui: &mut Ui,
+    id: Id,
+    value: &Value,
+    euler_rotation: bool,
+    hidden: &[&str],
+    choices: &BTreeMap<String, Vec<String>>,
+) -> Option<Value> {
     let mut fields = Fields {
         id,
         euler_rotation,
         hidden,
+        choices,
         change: None,
     };
     fields.node(ui, value, &mut Vec::new(), None);
@@ -426,6 +442,8 @@ pub fn value_editor(
 struct Fields<'a> {
     id: Id,
     euler_rotation: bool,
+    /// The variants of the plain enums, by their paths.
+    choices: &'a BTreeMap<String, Vec<String>>,
     hidden: &'a [&'a str],
     /// The field that committed: its path and new value.
     change: Option<(Vec<String>, Value)>,
@@ -525,7 +543,24 @@ impl Fields<'_> {
                 }
             }
             Value::String(text) => {
-                if let Some(text) = commit_field(ui, id, text, None) {
+                // An enum of plain variants picks one from a list.
+                let shape: Vec<&str> = path
+                    .iter()
+                    .map(|key| if key.parse::<usize>().is_ok() { "*" } else { key.as_str() })
+                    .collect();
+                if let Some(variants) = self.choices.get(&shape.join("/")) {
+                    let mut picked = text.clone();
+                    egui::ComboBox::from_id_salt(id)
+                        .selected_text(text.as_str())
+                        .show_ui(ui, |ui| {
+                            for variant in variants {
+                                ui.selectable_value(&mut picked, variant.clone(), variant);
+                            }
+                        });
+                    if picked != *text {
+                        change(json!(picked));
+                    }
+                } else if let Some(text) = commit_field(ui, id, text, None) {
                     change(json!(text));
                 }
             }
@@ -758,6 +793,27 @@ mod tests {
         let changed = replace(&recipes, &["recipes".into(), "0".into(), "needs".into(), "0".into(), "count".into()], json!(5));
         assert_eq!(changed["recipes"][0]["needs"][0]["count"], 5);
         assert_eq!(changed["recipes"][1], recipes["recipes"][1]);
+    }
+
+    #[test]
+    fn picks_an_enum_variant_from_its_list() {
+        let tools = json!({"tools": [{"kind": "Axe"}, {"kind": "Axe"}]});
+        let choices = BTreeMap::from([("tools/*/kind".to_owned(), vec!["Axe".to_owned(), "Bow".to_owned()])]);
+        let mut harness = Harness::builder().build_ui_state(
+            move |ui, changed: &mut Option<Value>| {
+                if let Some(value) = value_editor_with(ui, Id::new("tools"), &tools, false, &[], &choices) {
+                    *changed = Some(value);
+                }
+            },
+            None,
+        );
+        harness.run();
+        harness.get_all_by_role(egui::accesskit::Role::ComboBox).nth(1).unwrap().click();
+        harness.run();
+        harness.get_by_label("Bow").click();
+        harness.run();
+        let picked = harness.state().clone().unwrap();
+        assert_eq!(picked, json!({"tools": [{"kind": "Axe"}, {"kind": "Bow"}]}));
     }
 
     fn close(a: &[f64], b: &[f64], epsilon: f64) -> bool {
