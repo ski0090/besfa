@@ -451,6 +451,21 @@ struct Fields<'a> {
 
 impl Fields<'_> {
     fn node(&mut self, ui: &mut Ui, node: &Value, path: &mut Vec<String>, label: Option<&str>) {
+        // A Bevy color picks from a color button.
+        if let Some((space, channels)) = color_of(node) {
+            return row(ui, label, |ui| {
+                let srgb = space == "Srgba";
+                let mut linear = channels;
+                if srgb {
+                    for channel in &mut linear[..3] {
+                        *channel = egui::ecolor::linear_from_gamma(*channel);
+                    }
+                }
+                if ui.color_edit_button_rgba_unmultiplied(&mut linear).changed() {
+                    self.change = Some((path.clone(), color_value(space, linear, srgb)));
+                }
+            });
+        }
         let map = match node {
             Value::Object(map) => map,
             Value::Array(items) if !is_vector(items) => {
@@ -696,6 +711,32 @@ fn row(ui: &mut Ui, label: Option<&str>, add: impl FnOnce(&mut Ui)) {
     });
 }
 
+/// A Bevy color, `{"Srgba": {"red": 1.0, "green": …, "blue": …, "alpha": …}}`
+/// or the same in `LinearRgba`: its space and channels.
+fn color_of(node: &Value) -> Option<(&str, [f32; 4])> {
+    let map = node.as_object().filter(|map| map.len() == 1)?;
+    let (space, channels) = map.iter().next()?;
+    if !matches!(space.as_str(), "Srgba" | "LinearRgba") {
+        return None;
+    }
+    let channel = |name: &str| channels.get(name)?.as_f64().map(|value| value as f32);
+    Some((
+        space,
+        [channel("red")?, channel("green")?, channel("blue")?, channel("alpha")?],
+    ))
+}
+
+/// The color `linear` picked, back in `space`, gamma encoded when `srgb`.
+fn color_value(space: &str, mut linear: [f32; 4], srgb: bool) -> Value {
+    if srgb {
+        for channel in &mut linear[..3] {
+            *channel = egui::ecolor::gamma_from_linear(*channel);
+        }
+    }
+    let [red, green, blue, alpha] = linear;
+    json!({ space: { "red": red, "green": green, "blue": blue, "alpha": alpha } })
+}
+
 /// Two to four numbers, which edit as one vector's fields rather than as a
 /// list.
 fn is_vector(items: &[Value]) -> bool {
@@ -793,6 +834,26 @@ mod tests {
         let changed = replace(&recipes, &["recipes".into(), "0".into(), "needs".into(), "0".into(), "count".into()], json!(5));
         assert_eq!(changed["recipes"][0]["needs"][0]["count"], 5);
         assert_eq!(changed["recipes"][1], recipes["recipes"][1]);
+    }
+
+    #[test]
+    fn shows_bevy_colors_as_a_color_button() {
+        let look = json!({"tint": {"Srgba": {"red": 0.5, "green": 0.25, "blue": 1.0, "alpha": 1.0}}, "size": 2.0});
+        let mut harness = Harness::builder().build_ui(move |ui| {
+            value_editor(ui, Id::new("look"), &look, false, &[]);
+        });
+        harness.run();
+        assert!(harness.query_by_label("red").is_none(), "no channel fields");
+        assert!(harness.query_by_label("tint").is_some());
+
+        // Through the picker's linear color and back.
+        let color = json!({"Srgba": {"red": 0.5, "green": 0.25, "blue": 1.0, "alpha": 0.8}});
+        let (space, channels) = color_of(&color).unwrap();
+        let linear = channels.map(egui::ecolor::linear_from_gamma);
+        let back = color_value(space, [linear[0], linear[1], linear[2], 0.8], true);
+        let red = back["Srgba"]["red"].as_f64().unwrap();
+        assert!((red - 0.5).abs() < 1e-4, "{back}");
+        assert!(color_of(&json!({"Hsla": {"hue": 1.0}})).is_none());
     }
 
     #[test]
