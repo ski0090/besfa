@@ -2,7 +2,7 @@
 //! with [`Health`] to harm it; once it reaches zero, [`Died`] is triggered
 //! on it once, and the game decides what dying means. It fills by itself
 //! after a while unharmed, and not while it is at zero. While `immune`
-//! lasts, harm does not take from it.
+//! lasts, harm does not take from it; `armor` keeps off its part of harm.
 
 use bevy::prelude::*;
 
@@ -29,6 +29,9 @@ pub struct Health {
     pub unharmed: f32,
     /// Seconds left that harm does not take from it, as while rolling.
     pub immune: f32,
+    /// The part of each harm kept off, 0 to 1, as worn armor keeps it.
+    #[reflect(default)]
+    pub armor: f32,
 }
 
 impl Default for Health {
@@ -47,6 +50,7 @@ impl Health {
             rest: 5.0,
             unharmed: 0.0,
             immune: 0.0,
+            armor: 0.0,
         }
     }
 
@@ -94,7 +98,8 @@ fn harm(damage: On<Damage>, mut commands: Commands, mut healths: Query<&mut Heal
     if health.dead() || damage.amount <= 0.0 || health.immune > 0.0 {
         return;
     }
-    health.value = (health.value - damage.amount).max(0.0);
+    let taken = damage.amount * (1.0 - health.armor.clamp(0.0, 1.0));
+    health.value = (health.value - taken).max(0.0);
     health.unharmed = 0.0;
     if health.dead() {
         commands.trigger(Died {
@@ -182,6 +187,11 @@ mod tests {
         let before = health(&app).value;
         hit(&mut app, 5.0);
         assert_eq!(health(&app).value, before);
+        // Armor keeps off its part.
+        let mut worn = app.world_mut().get_mut::<Health>(entity).unwrap();
+        (worn.immune, worn.armor) = (0.0, 0.5);
+        hit(&mut app, 10.0);
+        assert_eq!(health(&app).value, before - 5.0);
         step(&mut app, 0.5);
         hit(&mut app, 100.0);
         hit(&mut app, 10.0);
@@ -189,5 +199,22 @@ mod tests {
         assert_eq!(app.world().resource::<Deaths>().0, 1);
         step(&mut app, 5.0);
         assert!(health(&app).dead(), "the dead do not fill");
+    }
+
+    #[test]
+    fn reads_health_saved_before_it_had_armor() {
+        use bevy::reflect::{FromReflect, TypeRegistry, serde::TypedReflectDeserializer};
+        use serde::de::DeserializeSeed;
+
+        let mut registry = TypeRegistry::default();
+        registry.register::<Health>();
+        let registration = registry.get(std::any::TypeId::of::<Health>()).unwrap();
+        let saved = "(value: 5.0, max: 10.0, regen: 0.0, rest: 5.0, unharmed: 0.0, immune: 0.0)";
+        let mut ron = ron::Deserializer::from_str(saved).unwrap();
+        let read = TypedReflectDeserializer::new(registration, &registry)
+            .deserialize(&mut ron)
+            .unwrap();
+        let health = Health::from_reflect(read.as_partial_reflect()).unwrap();
+        assert_eq!((health.value, health.armor), (5.0, 0.0));
     }
 }
