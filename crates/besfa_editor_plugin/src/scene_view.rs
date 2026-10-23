@@ -689,6 +689,7 @@ fn report_edited(
     });
 }
 
+#[allow(clippy::too_many_arguments, reason = "a system's parameters")]
 fn draw(
     view: Res<SceneView>,
     selected: Res<Selected>,
