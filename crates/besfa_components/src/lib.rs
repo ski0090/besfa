@@ -40,7 +40,7 @@ pub use inventory::{EquipSlot, Equipment, Inventory, ItemStack};
 pub use marker::{Marker, MarkerIcon};
 pub use part_changes::{PartChange, PartChanges};
 pub use save::{Persist, SaveFilter, SceneId, backup_path, load_world, save_world};
-pub use scene::{MeshColor, MeshShape, SCENE_PATH, SceneEntity};
+pub use scene::{MeshColor, MeshShape, RuntimeOnly, SCENE_PATH, SceneEntity};
 pub use sky::{Moon, Sky, SkyMode, Sun};
 pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight};
 

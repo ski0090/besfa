@@ -5,7 +5,7 @@
 //! handles, which cannot go in a file, so the file holds a [`MeshShape`] and
 //! a [`MeshColor`] instead and the plugin builds the assets when it loads.
 
-use std::path::PathBuf;
+use std::{any::TypeId, collections::HashSet, path::PathBuf};
 
 use bevy::{
     asset::{LoadState, io::file::FileAssetReader},
@@ -18,6 +18,25 @@ use bevy::{
 
 /// The scene file, relative to the game's `assets` directory.
 pub const SCENE_PATH: &str = "scenes/main.scn.ron";
+
+/// Components a running game puts on scene entities by itself, as a fog it
+/// sets on its camera from the time of day: a scene saved from the editor
+/// leaves them out, since the game puts them back.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct RuntimeOnly(HashSet<TypeId>);
+
+impl RuntimeOnly {
+    /// Leaves `T` out of saved scenes.
+    pub fn add<T: Component>(&mut self) -> &mut Self {
+        self.0.insert(TypeId::of::<T>());
+        self
+    }
+
+    /// Whether components of type `id` are left out.
+    pub fn contains(&self, id: TypeId) -> bool {
+        self.0.contains(&id)
+    }
+}
 
 /// Marks the entities that came from the scene file; saving writes them back.
 #[derive(Component)]

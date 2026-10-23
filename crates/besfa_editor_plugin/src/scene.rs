@@ -43,7 +43,7 @@ use bevy::{
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 pub use besfa_components::scene::{
-    FileEntity, Loading, MeshColor, MeshShape, SCENE_PATH, SceneEntity, asset_file, project_file,
+    FileEntity, Loading, MeshColor, MeshShape, RuntimeOnly, SCENE_PATH, SceneEntity, asset_file, project_file,
 };
 #[cfg(test)]
 use besfa_components::scene::{
@@ -369,7 +369,7 @@ fn saved_components(
         .into_iter()
         .flatten()
         .filter_map(|(id, info)| {
-            let type_id = info.type_id().filter(|id| !left_out(*id))?;
+            let type_id = info.type_id().filter(|id| !unsaved(world, *id))?;
             let value = registry
                 .get_type_data::<ReflectComponent>(type_id)?
                 .reflect(entity_ref)?;
@@ -446,6 +446,12 @@ fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn Partial
 /// serializable, the render target, which the editor points at its viewport
 /// after the camera spawns, and the plugin's note of a camera it switched off.
 // ponytail: what the template's entities carry; grow it as files show more.
+/// Whether a scene save leaves out components of type `id`: computed ones,
+/// and those the game puts on by itself.
+pub(crate) fn unsaved(world: &World, id: TypeId) -> bool {
+    left_out(id) || world.get_resource::<RuntimeOnly>().is_some_and(|runtime| runtime.contains(id))
+}
+
 pub(crate) fn left_out(type_id: TypeId) -> bool {
     [
         TypeId::of::<SceneEntity>(),
@@ -823,6 +829,29 @@ mod tests {
                 .is_some()
         );
         assert!(world.get::<Camera3d>(entities[1]).is_some());
+    }
+
+    #[test]
+    fn leaves_out_what_the_game_puts_on_by_itself() {
+        let mut app = test_app();
+        let mut runtime = RuntimeOnly::default();
+        runtime.add::<PointLight>();
+        app.insert_resource(runtime);
+        app.world_mut().spawn((
+            Name::new("Lamp"),
+            Transform::from_xyz(1.0, 2.0, 3.0),
+            PointLight::default(),
+            SceneEntity,
+        ));
+        let dir = std::env::temp_dir().join(format!("besfa-runtime-{}", std::process::id()));
+        let path = dir.join(SCENE_PATH);
+
+        save(app.world_mut(), &path).expect("the scene should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(ron.contains("Lamp"), "{ron}");
+        assert!(!ron.contains("PointLight"), "{ron}");
     }
 
     #[test]

@@ -27,7 +27,7 @@ use serde_json::Value;
 use crate::{
     edit::Deleted,
     preview::ModelPreview,
-    scene::{SceneEntity, json, left_out},
+    scene::{SceneEntity, json, left_out, unsaved},
     scene_view::{EditorOnly, Parked},
     sky::Sky,
 };
@@ -326,8 +326,9 @@ fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
                 path,
                 mutable: info.mutable(),
                 required_by: required_by(id),
-                // Computed from other components; the scene file leaves it out.
-                saved: info.type_id().is_some_and(|id| !left_out(id)),
+                // Computed from other components, or put on by the game
+                // itself: the scene file leaves it out.
+                saved: info.type_id().is_some_and(|id| !unsaved(world, id)),
                 value,
                 shapes: info
                     .type_id()
