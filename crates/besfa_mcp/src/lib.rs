@@ -100,7 +100,7 @@ fn tools() -> Value {
                 "{\"command\":\"insert\",\"id\":ID,\"component\":PATH} / {\"command\":\"remove\",...}\n",
                 "{\"command\":\"duplicate\",\"id\":ID} / {\"command\":\"delete\",\"id\":ID} hides it until {\"command\":\"restore\",\"id\":ID}\n",
                 "{\"command\":\"save\"} writes the scene file; {\"command\":\"save_prefab\",\"id\":ID,\"path\":\"prefabs/x.scn.ron\"}\n",
-                "{\"command\":\"screenshot\",\"file\":\"shots/map.png\",\"target\":[0,0,0],\"eye\":[40,30,40]} or with \"top\":200 instead of eye, a view straight down over a square that many meters wide, north (-Z) up; renders the scene without editor overlays to a PNG relative to the project, once its models have loaded; read the file to see it\n",
+                "{\"command\":\"screenshot\",\"file\":\"shots/map.png\",\"target\":[0,0,0],\"eye\":[40,30,40]} or with \"top\":200 instead of eye, a view straight down over a square that many meters wide, north (-Z) up; renders the scene without editor overlays to a PNG relative to the project, once its models have loaded, and with \"markers\":true also the icons and rings of what has no mesh to show it, as spawn points; read the file to see it\n",
                 "{\"command\":\"thumbnail\",\"path\":\"models/x.glb\",\"file\":\"thumb.png\"} renders one model on its own\n",
                 "Terrain: {\"command\":\"spawn\",\"kind\":\"terrain\",\"name\":\"Ground\"} makes flat ground 256 m a side centered on it, covered by its first layer; resize it by setting its besfa_editor_plugin::terrain::Terrain component to {\"size\":200}, which also takes \"layers\", up to four colors (by default grass, dirt, stone, sand); its heights go to a .terrain file of their own when the scene is saved\n",
                 "Sky: {\"command\":\"spawn\",\"kind\":\"sky\"} adds the scene's sky, which every camera draws behind everything; set its besfa_editor_plugin::sky::Sky to {\"mode\":\"Gradient\",\"zenith\":{\"Srgba\":{\"red\":0.2,\"green\":0.42,\"blue\":0.78,\"alpha\":1.0}},\"horizon\":...,\"ground\":...,\"blend\":0.5,\"brightness\":1.0,\"rotation\":0.0,\"sun\":{\"show\":true,\"direction\":[0.4,0.6,-0.5],\"size\":3.0,\"color\":...,\"flare\":0.5},\"moon\":{\"show\":true,\"direction\":[-0.4,0.5,0.5],\"size\":4.0,\"color\":...,\"phase\":0.5}} (sun and moon are world directions toward them, size in degrees across, flare 0 to 1 a lens flare while the sun is in sight, phase 0 new, 0.25 first quarter, 0.5 full; drawn on the gradient only) or {\"mode\":\"Cubemap\",\"cubemap\":\"skies/night.png\"} (a .ktx2/.dds cubemap or six faces +X,-X,+Y,-Y,+Z,-Z stacked top to bottom)\n",
@@ -269,6 +269,10 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 /// The protocol version a game must speak to run `command`.
 fn since(command: &Command) -> u32 {
     match command {
+        Command::Screenshot {
+            markers: Some(true),
+            ..
+        } => 12,
         Command::Snap { .. } | Command::Ghost { .. } => 11,
         Command::Spawn { place, .. } | Command::Instantiate { place, .. }
             if place.pointer.is_some() =>

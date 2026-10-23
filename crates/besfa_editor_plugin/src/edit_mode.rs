@@ -421,11 +421,12 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             top,
             width,
             height,
+            markers,
         } => {
             if !(inside(&file) && file.ends_with(".png")) {
                 Err(format!("{file} is not a .png path inside the project"))
             } else {
-                Shot::new(target.into(), eye.map(Vec3::from), top, width, height)
+                Shot::new(target.into(), eye.map(Vec3::from), top, width, height, markers.unwrap_or(false))
                     .map(|view| shot::request(world, file.clone(), project_file(&file), view))
             }
         }

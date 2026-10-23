@@ -147,6 +147,10 @@ pub(crate) struct HandleGizmos;
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct GridGizmos;
 
+/// The icons and rings of what has no mesh to show it, over everything.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct MarkerGizmos;
+
 /// The editor camera's picture in pixels when the game has no window or
 /// viewport, which `pointer` commands point into.
 const HEADLESS_VIEW: UVec2 = UVec2::new(1280, 720);
@@ -159,6 +163,10 @@ fn overlay() -> RenderLayers {
     RenderLayers::layer(OVERLAY_LAYER)
 }
 
+/// The markers' render layer, which the editor camera draws and pictures
+/// of the scene draw when asked.
+pub(crate) const MARKER_LAYER: usize = 28;
+
 pub(crate) struct SceneViewPlugin;
 
 impl Plugin for SceneViewPlugin {
@@ -169,6 +177,14 @@ impl Plugin for SceneViewPlugin {
                 GizmoConfig {
                     depth_bias: -1.0,
                     render_layers: overlay(),
+                    ..default()
+                },
+            )
+            .insert_gizmo_config(
+                MarkerGizmos,
+                GizmoConfig {
+                    depth_bias: -1.0,
+                    render_layers: RenderLayers::layer(MARKER_LAYER),
                     ..default()
                 },
             )
@@ -358,8 +374,8 @@ fn spawn_editor_camera(mut commands: Commands, mut images: ResMut<Assets<Image>>
             order: EDITOR_CAMERA_ORDER,
             ..default()
         },
-        // The scene and the grid and handles over it.
-        RenderLayers::default().with(OVERLAY_LAYER),
+        // The scene, and the grid, handles and markers over it.
+        RenderLayers::default().with(OVERLAY_LAYER).with(MARKER_LAYER),
     ));
     // Without a window or viewport, a picture of its own gives `pointer`
     // commands a view to point into.
@@ -681,6 +697,7 @@ fn draw(
     camera: Query<&GlobalTransform, With<EditorCamera>>,
     mut gizmos: Gizmos<GridGizmos>,
     mut handles: Gizmos<HandleGizmos>,
+    mut marked: Gizmos<MarkerGizmos>,
 ) {
     // About 40 meters across, in cells the snapping grid's size; an even
     // count, so lines go through the origin where snapped things go.
@@ -710,11 +727,11 @@ fn draw(
             marker.color
         };
         for (from, to) in marker.lines(at) {
-            handles.line(from, to, color);
+            marked.line(from, to, color);
         }
         if marker.radius > 0.0 {
             let flat = Quat::from_rotation_arc(Vec3::Z, Vec3::Y);
-            handles.circle(Isometry3d::new(at + Vec3::Y * 0.05, flat), marker.radius, color.with_alpha(0.6));
+            marked.circle(Isometry3d::new(at + Vec3::Y * 0.05, flat), marker.radius, color.with_alpha(0.6));
         }
     }
     let (Some((global, aabb)), Ok(camera), None, None) = (

@@ -1,14 +1,15 @@
 //! Pictures of the scene for an agent, which has no other way to see it. A
 //! camera of its own renders the scene off screen the way the scene view
-//! shows it, without the grid and handles, and the picture goes to a PNG
-//! file; one picture at a time, once the scene's models have loaded.
+//! shows it, without the grid and handles and, unless asked, the markers,
+//! and the picture goes to a PNG file; one picture at a time, once the
+//! scene's models have loaded.
 
 use std::{collections::VecDeque, path::PathBuf, sync::atomic::Ordering};
 
 use besfa_protocol::Report;
 use bevy::{
     asset::{LoadState, UntypedAssetId},
-    camera::{RenderTarget, ScalingMode},
+    camera::{RenderTarget, ScalingMode, visibility::RenderLayers},
     prelude::*,
     render::{
         render_resource::TextureFormat,
@@ -19,7 +20,7 @@ use bevy::{
 
 use crate::{
     inspect::send_report,
-    scene_view::EditorOnly,
+    scene_view::{EditorOnly, MARKER_LAYER},
     thumbnail::{Compiling, IDLE_FRAMES, LOAD_FRAMES, RENDER_FRAMES, save},
 };
 
@@ -44,17 +45,21 @@ pub(crate) struct Shot {
     transform: Transform,
     projection: Projection,
     size: UVec2,
+    /// Whether it draws the markers too.
+    markers: bool,
 }
 
 impl Shot {
     /// Looking from `eye` at `target`, or with `top`, straight down on
-    /// `target` over a square `top` meters wide, north (-Z) up.
+    /// `target` over a square `top` meters wide, north (-Z) up; with
+    /// `markers`, the markers drawn as the scene view draws them.
     pub(crate) fn new(
         target: Vec3,
         eye: Option<Vec3>,
         top: Option<f32>,
         width: Option<u32>,
         height: Option<u32>,
+        markers: bool,
     ) -> Result<Self, String> {
         let (transform, projection) = match (top, eye) {
             (Some(top), _) if top > 0.0 && top.is_finite() => (
@@ -98,6 +103,7 @@ impl Shot {
             transform,
             projection,
             size: UVec2::new(width, height),
+            markers,
         })
     }
 }
@@ -158,6 +164,11 @@ fn work(world: &mut World) {
                 shot.transform,
             ))
             .id();
+        if shot.markers {
+            world
+                .entity_mut(camera)
+                .insert(RenderLayers::default().with(MARKER_LAYER));
+        }
         world.resource_mut::<Shots>().job = Some(Job {
             path,
             file,
@@ -230,7 +241,7 @@ mod tests {
 
     #[test]
     fn looks_down_with_north_up_from_above() {
-        let shot = Shot::new(Vec3::new(10.0, 0.0, -5.0), None, Some(200.0), None, None).unwrap();
+        let shot = Shot::new(Vec3::new(10.0, 0.0, -5.0), None, Some(200.0), None, None, false).unwrap();
         assert_eq!(shot.size, UVec2::splat(1024));
         assert!(shot.transform.forward().abs_diff_eq(Vec3::NEG_Y, 1e-5));
         assert!(shot.transform.up().abs_diff_eq(Vec3::NEG_Z, 1e-5));
@@ -255,7 +266,7 @@ mod tests {
     #[test]
     fn looks_from_the_eye_at_the_target() {
         let eye = Vec3::new(0.0, 30.0, 40.0);
-        let shot = Shot::new(Vec3::ZERO, Some(eye), None, None, None).unwrap();
+        let shot = Shot::new(Vec3::ZERO, Some(eye), None, None, None, false).unwrap();
         assert_eq!(shot.size, UVec2::new(1024, 768));
         assert!(
             shot.transform
@@ -263,13 +274,13 @@ mod tests {
                 .abs_diff_eq((-eye).normalize(), 1e-5)
         );
         // Straight down still makes a picture.
-        let down = Shot::new(Vec3::ZERO, Some(Vec3::Y * 50.0), None, Some(64), Some(32)).unwrap();
+        let down = Shot::new(Vec3::ZERO, Some(Vec3::Y * 50.0), None, Some(64), Some(32), false).unwrap();
         assert!(down.transform.up().abs_diff_eq(Vec3::NEG_Z, 1e-5));
         assert_eq!(down.size, UVec2::new(64, 32));
 
-        assert!(Shot::new(Vec3::ZERO, None, None, None, None).is_err());
-        assert!(Shot::new(Vec3::ZERO, Some(Vec3::ZERO), None, None, None).is_err());
-        assert!(Shot::new(Vec3::ZERO, None, Some(0.0), None, None).is_err());
-        assert!(Shot::new(Vec3::ZERO, Some(eye), None, Some(5000), None).is_err());
+        assert!(Shot::new(Vec3::ZERO, None, None, None, None, false).is_err());
+        assert!(Shot::new(Vec3::ZERO, Some(Vec3::ZERO), None, None, None, false).is_err());
+        assert!(Shot::new(Vec3::ZERO, None, Some(0.0), None, None, false).is_err());
+        assert!(Shot::new(Vec3::ZERO, Some(eye), None, Some(5000), None, false).is_err());
     }
 }

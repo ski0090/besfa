@@ -41,7 +41,8 @@ use serde_json::Value;
 /// 10. The sky: [`SpawnKind::Sky`] and [`EntityInfo::sky`].
 /// 11. Placing where the scene view points, [`Placement::pointer`] and
 ///     [`Command::Ghost`], and snapping handles, [`Command::Snap`].
-pub const VERSION: u32 = 11;
+/// 12. Markers in pictures of the scene, [`Command::Screenshot`]'s `markers`.
+pub const VERSION: u32 = 12;
 
 /// The game's cargo feature that brings in `besfa_editor_plugin`, in games
 /// that depend on `besfa_components` and leave the editor out of release
@@ -375,6 +376,9 @@ pub enum Command {
         /// with `top`.
         width: Option<u32>,
         height: Option<u32>,
+        /// Also the icons and rings the scene view draws for what has no
+        /// mesh to show it, as spawn points; since protocol 12.
+        markers: Option<bool>,
     },
 }
 
@@ -1036,6 +1040,7 @@ mod tests {
                 top: Some(200.0),
                 width: None,
                 height: None,
+                markers: None,
             }
         );
     }
