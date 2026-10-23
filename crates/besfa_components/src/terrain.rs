@@ -76,6 +76,52 @@ impl Default for Terrain {
     }
 }
 
+/// Tints the ground of every terrain round it: within `radius` meters of
+/// it the ground's color turns toward `color` by `strength`, 0 to 1, in full
+/// over the inner half and fading out to the edge. As a blight round a
+/// nest, or snow round a peak; taking it away gives the ground its colors
+/// back.
+#[derive(Component, Reflect, Clone, Debug, PartialEq)]
+#[type_path = "besfa_editor_plugin::terrain"]
+#[reflect(Component, Default)]
+pub struct TerrainTint {
+    pub radius: f32,
+    pub color: Color,
+    pub strength: f32,
+}
+
+impl Default for TerrainTint {
+    fn default() -> Self {
+        Self {
+            radius: 10.0,
+            color: Color::srgb(0.45, 0.45, 0.45),
+            strength: 0.8,
+        }
+    }
+}
+
+/// A tint where a terrain's mesh is built: its middle in the terrain's own
+/// X and Z, and its numbers.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalTint {
+    pub at: Vec2,
+    pub radius: f32,
+    pub color: LinearRgba,
+    pub strength: f32,
+}
+
+impl LocalTint {
+    /// How much of its color shows at `point`, 0 to 1.
+    fn share(&self, point: Vec2) -> f32 {
+        if self.radius <= 0.0 {
+            return 0.0;
+        }
+        let near = 1.0 - point.distance(self.at) / self.radius;
+        (near * 2.0).clamp(0.0, 1.0) * self.strength.clamp(0.0, 1.0)
+    }
+}
+
 /// The `.terrain` file with a terrain's heights and where each layer
 /// shows, relative to the asset folder.
 #[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
@@ -226,11 +272,11 @@ impl TerrainData {
     }
 
     /// The ground as a mesh, each vertex colored by the layers that show
-    /// there.
+    /// there and turned toward the colors of the `tints` round it.
     // ponytail: one mesh rebuilt whole after every change, fine up to the
     // largest resolution; split it into chunks if painting big ones lags.
     #[doc(hidden)]
-    pub fn mesh(&self, terrain: &Terrain) -> Mesh {
+    pub fn mesh(&self, terrain: &Terrain, tints: &[LocalTint]) -> Mesh {
         let n = self.resolution;
         let step = self.step(terrain.size);
         let colors: Vec<LinearRgba> = (0..4)
@@ -244,7 +290,7 @@ impl TerrainData {
             .collect();
         let height = |x: u32, z: u32| self.heights[self.index(x.min(n - 1), z.min(n - 1))];
         let count = (n * n) as usize;
-        let (mut positions, mut normals, mut tints, mut uvs) = (
+        let (mut positions, mut normals, mut tints_out, mut uvs) = (
             Vec::with_capacity(count),
             Vec::with_capacity(count),
             Vec::with_capacity(count),
@@ -266,7 +312,10 @@ impl TerrainData {
                     tint + Vec3::new(color.red, color.green, color.blue) * weights[layer] as f32
                         / 255.0
                 });
-                tints.push([tint.x, tint.y, tint.z, 1.0]);
+                let tint = tints.iter().fold(tint, |tint, over| {
+                    tint.lerp(Vec3::new(over.color.red, over.color.green, over.color.blue), over.share(at))
+                });
+                tints_out.push([tint.x, tint.y, tint.z, 1.0]);
                 uvs.push([x as f32 / (n - 1) as f32, z as f32 / (n - 1) as f32]);
             }
         }
@@ -286,7 +335,7 @@ impl TerrainData {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, tints)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, tints_out)
         .with_inserted_indices(Indices::U32(indices))
     }
 }
@@ -337,8 +386,9 @@ fn load(
 /// Builds each terrain's mesh from its file once the file has loaded, and
 /// again whenever the terrain or its file changes; and its material once.
 #[allow(
+    clippy::too_many_arguments,
     clippy::type_complexity,
-    reason = "a system's query: terrains and what they were given"
+    reason = "a system's parameters: terrains, what they were given and the tints"
 )]
 fn build(
     mut commands: Commands,
@@ -346,9 +396,12 @@ fn build(
         Entity,
         Ref<Terrain>,
         Ref<TerrainHandle>,
+        &Transform,
         Has<Mesh3d>,
         Has<MeshMaterial3d<StandardMaterial>>,
     )>,
+    tinting: Query<(&TerrainTint, &GlobalTransform)>,
+    mut tinted: Local<Vec<(TerrainTint, Vec3)>>,
     mut events: MessageReader<AssetEvent<TerrainData>>,
     files: Res<Assets<TerrainData>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -363,9 +416,20 @@ fn build(
             _ => None,
         })
         .collect();
-    for (entity, terrain, file, meshed, painted) in &terrains {
-        let fresh =
-            terrain.is_changed() || file.is_changed() || changed.contains(&file.handle.id());
+    // Tints that came, went, moved or changed rebuild every terrain.
+    let tints: Vec<(TerrainTint, Vec3)> = tinting
+        .iter()
+        .map(|(tint, at)| (tint.clone(), at.translation()))
+        .collect();
+    let retint = *tinted != tints;
+    if retint {
+        *tinted = tints.clone();
+    }
+    for (entity, terrain, file, place, meshed, painted) in &terrains {
+        let fresh = terrain.is_changed()
+            || file.is_changed()
+            || changed.contains(&file.handle.id())
+            || retint;
         if meshed && !fresh {
             continue;
         }
@@ -373,7 +437,16 @@ fn build(
             continue;
         };
         let mut entity = commands.entity(entity);
-        entity.insert(Mesh3d(meshes.add(data.mesh(&terrain))));
+        let local: Vec<LocalTint> = tints
+            .iter()
+            .map(|(tint, at)| LocalTint {
+                at: self::local(place, *at),
+                radius: tint.radius / place.scale.x.max(f32::EPSILON),
+                color: tint.color.to_linear(),
+                strength: tint.strength,
+            })
+            .collect();
+        entity.insert(Mesh3d(meshes.add(data.mesh(&terrain, &local))));
         if !painted {
             // The vertices carry the layers' colors.
             entity.insert(MeshMaterial3d(materials.add(StandardMaterial {
@@ -475,7 +548,7 @@ mod tests {
     #[test]
     fn builds_a_mesh_facing_up_with_the_layer_colors() {
         let terrain = Terrain::default();
-        let mesh = TerrainData::flat(3).mesh(&terrain);
+        let mesh = TerrainData::flat(3).mesh(&terrain, &[]);
         assert_eq!(mesh.count_vertices(), 9);
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)) =
             mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
@@ -490,5 +563,19 @@ mod tests {
             panic!("colors");
         };
         assert_eq!(colors[0], [grass.red, grass.green, grass.blue, 1.0]);
+        // A tint over one corner turns it, and not the far one.
+        let black = LocalTint {
+            at: Vec2::new(-128.0, -128.0),
+            radius: 50.0,
+            color: LinearRgba::BLACK,
+            strength: 1.0,
+        };
+        let tinted = TerrainData::flat(3).mesh(&terrain, &[black]);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) = tinted.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("colors");
+        };
+        assert_eq!(colors[0], [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(colors[8], [grass.red, grass.green, grass.blue, 1.0]);
     }
 }

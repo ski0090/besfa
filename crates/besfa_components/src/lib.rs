@@ -42,7 +42,7 @@ pub use part_changes::{PartChange, PartChanges};
 pub use save::{Persist, SaveFilter, SceneId, backup_path, load_world, save_world};
 pub use scene::{MeshColor, MeshShape, RuntimeOnly, SCENE_PATH, SceneEntity};
 pub use sky::{Moon, Sky, SkyMode, Sun};
-pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight};
+pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight, TerrainTint};
 
 /// `DefaultPlugins` that load the scene from `assets/scenes/main.scn.ron`
 /// and run the components in it.

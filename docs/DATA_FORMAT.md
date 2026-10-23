@@ -25,7 +25,7 @@
 
 ## 지형 파일
 
-지형은 씬 파일에 두 컴포넌트로 저장한다. `besfa_editor_plugin::terrain::Terrain`은 크기(`size`, X와 Z로 각각 몇 m인지, 엔티티를 가운데로 둔다)와 겉면 색(`layers`, 네 개까지, 기본값은 풀·흙·돌·모래)이고, `besfa_editor_plugin::terrain::TerrainFile`은 높이와 겉면이 든 파일의 에셋 폴더 기준 경로다. 새 지형은 평평하고 첫 겉면으로 덮인 땅을 메모리에 두었다가 씬을 저장할 때 `assets/terrain/terrain-<번호>.terrain`(디스크에도, 씬의 다른 지형에도 없는 첫 번호)에 쓰므로, 저장하지 않은 지형은 파일을 남기지 않는다.
+지형은 씬 파일에 두 컴포넌트로 저장한다. `besfa_editor_plugin::terrain::Terrain`은 크기(`size`, X와 Z로 각각 몇 m인지, 엔티티를 가운데로 둔다)와 겉면 색(`layers`, 네 개까지, 기본값은 풀·흙·돌·모래)이고, `besfa_editor_plugin::terrain::TerrainFile`은 높이와 겉면이 든 파일의 에셋 폴더 기준 경로다. 새 지형은 평평하고 첫 겉면으로 덮인 땅을 메모리에 두었다가 씬을 저장할 때 `assets/terrain/terrain-<번호>.terrain`(디스크에도, 씬의 다른 지형에도 없는 첫 번호)에 쓰므로, 저장하지 않은 지형은 파일을 남기지 않는다. 땅의 색을 그 자리에서만 바꾸려면 아무 엔티티에 `besfa_editor_plugin::terrain::TerrainTint`(반지름 `radius` m, 색 `color`, 0~1 세기 `strength`)를 붙인다. 그 엔티티 둘레의 지형 정점 색이 안쪽 절반에서는 세기만큼, 가장자리로 갈수록 옅게 그 색 쪽으로 바뀌고, 떼면 원래 색으로 돌아온다. 높이와 겉면 파일은 바꾸지 않는다.
 
 `.terrain` 파일은 리틀 엔디언 바이너리다.
 
