@@ -98,8 +98,10 @@ pub fn save_world(world: &mut World, path: &Path) -> Result<(), String> {
     }
     let fresh = path.with_extension("tmp");
     fs::write(&fresh, written).map_err(|error| error.to_string())?;
+    // Copied, not moved: the save stays whole until the new one replaces
+    // it at once, so a game cut off at any point leaves one to open.
     if path.exists() {
-        fs::rename(path, backup_path(path)).map_err(|error| error.to_string())?;
+        fs::copy(path, backup_path(path)).map_err(|error| error.to_string())?;
     }
     fs::rename(&fresh, path).map_err(|error| error.to_string())
 }
@@ -202,6 +204,9 @@ mod tests {
         world.despawn(walls[0]);
         world.spawn((Persist, Wall(10.0)));
 
+        // A save cut off while writing leaves its half behind; the save
+        // before it is still whole.
+        fs::write(path.with_extension("tmp"), "(entities: {").unwrap();
         load_world(world, &path).unwrap();
         assert_eq!(world.get::<Day>(clock), Some(&Day(3)));
         let walls: Vec<(Wall, Transform, bool)> = world
