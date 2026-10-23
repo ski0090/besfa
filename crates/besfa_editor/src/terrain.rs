@@ -191,7 +191,7 @@ mod tests {
             required_by: None,
             saved: true,
             value: Some(json!({"size": 200.0, "layers": vec![layer; layers]})),
-            choices: Default::default(),
+            shapes: Default::default(),
         }
     }
 

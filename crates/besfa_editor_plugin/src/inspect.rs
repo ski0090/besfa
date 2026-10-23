@@ -7,9 +7,9 @@
 //! once, before the game runs. The game also reports a selection it made
 //! itself and the outcome of a save.
 
-use std::{any::TypeId, collections::BTreeMap, io::Write};
+use std::{any::TypeId, io::Write};
 
-use besfa_protocol::{ComponentData, ComponentType, EntityInfo, Report, SystemInfo};
+use besfa_protocol::{ComponentData, ComponentType, EntityInfo, Report, Shapes, SystemInfo};
 use bevy::{
     ecs::{
         component::{ComponentId, ComponentInfo},
@@ -329,9 +329,9 @@ fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
                 // Computed from other components; the scene file leaves it out.
                 saved: info.type_id().is_some_and(|id| !left_out(id)),
                 value,
-                choices: info
+                shapes: info
                     .type_id()
-                    .map(|id| choices(&registry, id))
+                    .map(|id| shapes(&registry, id))
                     .unwrap_or_default(),
             }
         })
@@ -339,20 +339,27 @@ fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
     Some(components)
 }
 
-/// The fields of a type that are enums of plain variants, by their path in
-/// its JSON value, keys joined by `/` and list items as `*`, with the variants
-/// the editor offers to choose from.
-fn choices(registry: &TypeRegistry, type_id: TypeId) -> BTreeMap<String, Vec<String>> {
-    let mut found = BTreeMap::new();
+/// What a type says of its fields, by their path in its JSON value, keys
+/// joined by `/` and list items as `*`: the enums of plain variants with the
+/// variants the editor offers, the Options with what one that is None starts
+/// as, and the lists with what a new item starts as.
+fn shapes(registry: &TypeRegistry, type_id: TypeId) -> Shapes {
+    let mut found = Shapes::default();
     walk(registry, type_id, &mut Vec::new(), &mut found);
     found
+}
+
+/// The default value of `type_id` as JSON, when it has one.
+fn default_json(registry: &TypeRegistry, type_id: TypeId) -> Option<Value> {
+    let value = registry.get_type_data::<ReflectDefault>(type_id)?.default();
+    json(value.as_partial_reflect(), registry).ok()
 }
 
 fn walk(
     registry: &TypeRegistry,
     type_id: TypeId,
     path: &mut Vec<String>,
-    found: &mut BTreeMap<String, Vec<String>>,
+    found: &mut Shapes,
 ) {
     // Deep enough for any component; a type that holds itself stops here.
     if path.len() > 8 {
@@ -361,7 +368,8 @@ fn walk(
     let Some(info) = registry.get_type_info(type_id) else {
         return;
     };
-    let mut inside = |key: &str, type_id: TypeId, found: &mut BTreeMap<String, Vec<String>>| {
+    let here = path.join("/");
+    let mut inside = |key: &str, type_id: TypeId, found: &mut Shapes| {
         path.push(key.to_owned());
         walk(registry, type_id, path, found);
         path.pop();
@@ -372,7 +380,12 @@ fn walk(
                 inside(field.name(), field.type_id(), found);
             }
         }
-        TypeInfo::List(info) => inside("*", info.item_ty().id(), found),
+        TypeInfo::List(info) => {
+            if let Some(item) = default_json(registry, info.item_ty().id()) {
+                found.items.insert(here, item);
+            }
+            inside("*", info.item_ty().id(), found)
+        }
         TypeInfo::Array(info) => inside("*", info.item_ty().id(), found),
         // A newtype shows as what it holds.
         TypeInfo::TupleStruct(info) if info.field_len() == 1 => {
@@ -382,13 +395,16 @@ fn walk(
         }
         TypeInfo::Enum(info) if info.iter().all(|variant| matches!(variant, VariantInfo::Unit(_))) => {
             let names = info.variant_names().iter().map(|name| (*name).to_owned()).collect();
-            found.insert(path.join("/"), names);
+            found.choices.insert(here, names);
         }
         // An Option shows as what it holds, or null.
         TypeInfo::Enum(info) if info.type_path().starts_with("core::option::Option") => {
             if let Some(VariantInfo::Tuple(some)) = info.variant("Some")
                 && let Some(field) = some.field_at(0)
             {
+                if let Some(start) = default_json(registry, field.type_id()) {
+                    found.options.insert(here, start);
+                }
                 walk(registry, field.type_id(), path, found);
             }
         }
@@ -472,6 +488,7 @@ mod tests {
     struct Plain;
 
     #[derive(Reflect, Default)]
+    #[reflect(Default)]
     enum Kind {
         #[default]
         Axe,
@@ -479,6 +496,7 @@ mod tests {
     }
 
     #[derive(Reflect, Default)]
+    #[reflect(Default)]
     struct Tool {
         kind: Kind,
         damage: f32,
@@ -489,19 +507,28 @@ mod tests {
         tools: Vec<Tool>,
         best: Option<Kind>,
         color: Color,
+        names: Vec<String>,
     }
 
     #[test]
-    fn offers_the_variants_of_plain_enums_by_their_path() {
+    fn tells_the_shapes_of_a_types_fields_by_their_path() {
         let mut registry = TypeRegistry::default();
         registry.register::<Tools>();
         registry.register::<Visibility>();
-        let found = choices(&registry, TypeId::of::<Tools>());
+        let told = shapes(&registry, TypeId::of::<Tools>());
+        // What a None and a new item start as.
+        assert_eq!(told.options.get("best"), Some(&serde_json::json!("Axe")));
+        assert_eq!(
+            told.items.get("tools"),
+            Some(&serde_json::json!({"kind": "Axe", "damage": 0.0}))
+        );
+        assert_eq!(told.items.get("names"), Some(&serde_json::json!("")));
+        let found = told.choices;
         let axe_or_bow = vec!["Axe".to_string(), "Bow".to_string()];
         assert_eq!(found.get("tools/*/kind"), Some(&axe_or_bow));
         assert_eq!(found.get("best"), Some(&axe_or_bow), "an Option as what it holds");
         assert_eq!(found.len(), 2, "a color's variants hold values: {found:?}");
-        let shown = choices(&registry, TypeId::of::<Visibility>());
+        let shown = shapes(&registry, TypeId::of::<Visibility>()).choices;
         assert_eq!(shown[""], ["Inherited", "Hidden", "Visible"]);
     }
 

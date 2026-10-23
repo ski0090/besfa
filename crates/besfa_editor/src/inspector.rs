@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use besfa_protocol::{ComponentData, ComponentType, EntityInfo, SystemInfo, crate_of};
+use besfa_protocol::{ComponentData, ComponentType, EntityInfo, Shapes, SystemInfo, crate_of};
 use eframe::egui::{self, Id, Label, RichText, ScrollArea, TextEdit, Ui};
 use serde_json::{Value, json};
 
@@ -386,7 +386,7 @@ fn component_tile(
         // A new selection starts with fresh fields.
         let id = Id::new((selected, &component.path));
         if let Some(value) =
-            value_editor_with(ui, id, value, component.path == TRANSFORM, hidden, &component.choices)
+            value_editor_with(ui, id, value, component.path == TRANSFORM, hidden, &component.shapes)
         {
             action = Some(Action::Set(component.path.clone(), value));
         }
@@ -414,24 +414,25 @@ pub fn value_editor(
     euler_rotation: bool,
     hidden: &[&str],
 ) -> Option<Value> {
-    value_editor_with(ui, id, value, euler_rotation, hidden, &BTreeMap::new())
+    value_editor_with(ui, id, value, euler_rotation, hidden, &Shapes::default())
 }
 
-/// [`value_editor`], with `choices`: the variants to pick from for the
-/// text fields at those paths, keys joined by `/` and list items as `*`.
+/// [`value_editor`], with what the value's type says of its fields: the
+/// variants to pick text fields from, what an Option that is None and a new
+/// list item start as.
 pub fn value_editor_with(
     ui: &mut Ui,
     id: Id,
     value: &Value,
     euler_rotation: bool,
     hidden: &[&str],
-    choices: &BTreeMap<String, Vec<String>>,
+    shapes: &Shapes,
 ) -> Option<Value> {
     let mut fields = Fields {
         id,
         euler_rotation,
         hidden,
-        choices,
+        shapes,
         change: None,
     };
     fields.node(ui, value, &mut Vec::new(), None);
@@ -442,8 +443,8 @@ pub fn value_editor_with(
 struct Fields<'a> {
     id: Id,
     euler_rotation: bool,
-    /// The variants of the plain enums, by their paths.
-    choices: &'a BTreeMap<String, Vec<String>>,
+    /// What the value's type says of its fields, by their paths.
+    shapes: &'a Shapes,
     hidden: &'a [&'a str],
     /// The field that committed: its path and new value.
     change: Option<(Vec<String>, Value)>,
@@ -451,6 +452,31 @@ struct Fields<'a> {
 
 impl Fields<'_> {
     fn node(&mut self, ui: &mut Ui, node: &Value, path: &mut Vec<String>, label: Option<&str>) {
+        // An Option: None offers ➕ to give it a value, a value 🗙 to take it.
+        let shapes = self.shapes;
+        if let Some(start) = shapes.options.get(&shape(path)) {
+            if node.is_null() {
+                return row(ui, label, |ui| {
+                    read_only(ui, "None", MUTED);
+                    if ui.small_button("➕").on_hover_text("Give it a value").clicked() {
+                        self.change = Some((path.clone(), start.clone()));
+                    }
+                });
+            }
+            let mut clear = false;
+            row(ui, label, |ui| {
+                clear = ui.small_button("🗙").on_hover_text("Make it None").clicked();
+            });
+            ui.indent((label, path.len()), |ui| self.content(ui, node, path, None));
+            if clear {
+                self.change = Some((path.clone(), Value::Null));
+            }
+            return;
+        }
+        self.content(ui, node, path, label);
+    }
+
+    fn content(&mut self, ui: &mut Ui, node: &Value, path: &mut Vec<String>, label: Option<&str>) {
         // A Bevy color picks from a color button.
         if let Some((space, channels)) = color_of(node) {
             return row(ui, label, |ui| {
@@ -495,11 +521,18 @@ impl Fields<'_> {
     /// ➕ that adds a copy of the last item at the end, or an empty one,
     /// which the game fills with the item type's defaults.
     fn list(&mut self, ui: &mut Ui, items: &[Value], path: &mut Vec<String>, label: &str) {
+        let shapes = self.shapes;
         let mut changed = None;
         row(ui, Some(label), |ui| {
             if ui.small_button("➕").on_hover_text("Add an item").clicked() {
                 let mut grown = items.to_vec();
-                grown.push(items.last().cloned().unwrap_or_else(|| json!({})));
+                // A copy of the last, or what the type starts one as.
+                let item = items
+                    .last()
+                    .or_else(|| shapes.items.get(&shape(path)))
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                grown.push(item);
                 changed = Some(grown);
             }
         });
@@ -559,11 +592,7 @@ impl Fields<'_> {
             }
             Value::String(text) => {
                 // An enum of plain variants picks one from a list.
-                let shape: Vec<&str> = path
-                    .iter()
-                    .map(|key| if key.parse::<usize>().is_ok() { "*" } else { key.as_str() })
-                    .collect();
-                if let Some(variants) = self.choices.get(&shape.join("/")) {
+                if let Some(variants) = self.shapes.choices.get(&shape(path)) {
                     let mut picked = text.clone();
                     egui::ComboBox::from_id_salt(id)
                         .selected_text(text.as_str())
@@ -709,6 +738,15 @@ fn row(ui: &mut Ui, label: Option<&str>, add: impl FnOnce(&mut Ui)) {
         );
         add(ui);
     });
+}
+
+/// The path of a field in its type, list items as `*`: what [`Shapes`] keys by.
+fn shape(path: &[String]) -> String {
+    let keys: Vec<&str> = path
+        .iter()
+        .map(|key| if key.parse::<usize>().is_ok() { "*" } else { key.as_str() })
+        .collect();
+    keys.join("/")
 }
 
 /// A Bevy color, `{"Srgba": {"red": 1.0, "green": …, "blue": …, "alpha": …}}`
@@ -857,12 +895,52 @@ mod tests {
     }
 
     #[test]
+    fn gives_an_option_a_value_or_takes_it_and_starts_new_items_by_their_type() {
+        let shapes = Shapes {
+            options: BTreeMap::from([("worn".to_owned(), json!({"item": "", "count": 1}))]),
+            items: BTreeMap::from([("runes".to_owned(), json!(""))]),
+            ..Default::default()
+        };
+        let editor = |value: Value, shapes: Shapes| {
+            Harness::builder().build_ui_state(
+                move |ui, changed: &mut Option<Value>| {
+                    if let Some(value) = value_editor_with(ui, Id::new("slot"), &value, false, &[], &shapes) {
+                        *changed = Some(value);
+                    }
+                },
+                None,
+            )
+        };
+        let mut harness = editor(json!({"worn": null, "runes": []}), shapes.clone());
+        harness.run();
+        // The worn slot's ➕ comes before the runes'.
+        harness.get_all_by_label("➕").next().unwrap().click();
+        harness.run();
+        assert_eq!(harness.state().clone().unwrap()["worn"], json!({"item": "", "count": 1}));
+
+        let mut harness = editor(json!({"worn": null, "runes": []}), shapes.clone());
+        harness.run();
+        harness.get_all_by_label("➕").nth(1).unwrap().click();
+        harness.run();
+        assert_eq!(harness.state().clone().unwrap()["runes"], json!([""]), "a text, not an object");
+
+        let mut harness = editor(json!({"worn": {"item": "cloth", "count": 1}, "runes": []}), shapes);
+        harness.run();
+        harness.get_by_label("🗙").click();
+        harness.run();
+        assert_eq!(harness.state().clone().unwrap()["worn"], Value::Null);
+    }
+
+    #[test]
     fn picks_an_enum_variant_from_its_list() {
         let tools = json!({"tools": [{"kind": "Axe"}, {"kind": "Axe"}]});
-        let choices = BTreeMap::from([("tools/*/kind".to_owned(), vec!["Axe".to_owned(), "Bow".to_owned()])]);
+        let shapes = Shapes {
+            choices: BTreeMap::from([("tools/*/kind".to_owned(), vec!["Axe".to_owned(), "Bow".to_owned()])]),
+            ..Default::default()
+        };
         let mut harness = Harness::builder().build_ui_state(
             move |ui, changed: &mut Option<Value>| {
-                if let Some(value) = value_editor_with(ui, Id::new("tools"), &tools, false, &[], &choices) {
+                if let Some(value) = value_editor_with(ui, Id::new("tools"), &tools, false, &[], &shapes) {
                     *changed = Some(value);
                 }
             },
