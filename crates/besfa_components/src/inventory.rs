@@ -23,8 +23,8 @@ impl Default for Inventory {
     }
 }
 
-/// Some of one item. A worn one, a tool used for a while, stays in a stack
-/// of its own.
+/// Some of one item. A worn one, a tool used for a while, and one with
+/// something fitted to it stay in stacks of their own.
 #[derive(Reflect, Clone, Debug, Default, PartialEq)]
 #[type_path = "besfa_editor_plugin::inventory"]
 #[reflect(Default)]
@@ -33,6 +33,9 @@ pub struct ItemStack {
     pub count: u32,
     /// How much it has been used, for things that wear out.
     pub wear: u32,
+    /// What is fitted to it, as runes or gems in a weapon's sockets, by name.
+    #[reflect(default)]
+    pub attached: Vec<String>,
 }
 
 impl ItemStack {
@@ -41,6 +44,7 @@ impl ItemStack {
             item: item.to_owned(),
             count,
             wear: 0,
+            attached: Vec::new(),
         }
     }
 }
@@ -60,15 +64,16 @@ impl Inventory {
         self.put(ItemStack::new(item, count), limit);
     }
 
-    /// Puts a stack in as [`Inventory::add`] does; a worn one keeps a stack
-    /// of its own.
+    /// Puts a stack in as [`Inventory::add`] does; a worn one, or one with
+    /// something fitted, keeps a stack of its own.
     pub fn put(&mut self, mut stack: ItemStack, limit: u32) {
         let limit = limit.max(1);
-        if stack.wear == 0 {
+        let plain = |stack: &ItemStack| stack.wear == 0 && stack.attached.is_empty();
+        if plain(&stack) {
             for slot in self
                 .stacks
                 .iter_mut()
-                .filter(|slot| slot.item == stack.item && slot.wear == 0)
+                .filter(|slot| slot.item == stack.item && plain(slot))
             {
                 let taken = stack.count.min(limit.saturating_sub(slot.count));
                 slot.count += taken;
@@ -241,5 +246,16 @@ mod tests {
         // Limits of 1 never merge, worn or not.
         bag.add("axe", 1, 1);
         assert_eq!(bag.stacks.len(), 4);
+        // Nor does one with something fitted.
+        let mut gems = Inventory::new(4);
+        gems.add("sword", 1, 5);
+        gems.put(
+            ItemStack {
+                attached: vec!["ruby".into()],
+                ..ItemStack::new("sword", 1)
+            },
+            5,
+        );
+        assert_eq!(gems.stacks.len(), 2);
     }
 }
