@@ -2,7 +2,8 @@
 //! with [`Health`] to harm it; once it reaches zero, [`Died`] is triggered
 //! on it once, and the game decides what dying means. It fills by itself
 //! after a while unharmed, and not while it is at zero. While `immune`
-//! lasts, harm does not take from it; `armor` keeps off its part of harm.
+//! lasts, harm does not take from it; `armor` keeps off its part of harm,
+//! or below zero adds to it.
 
 use bevy::prelude::*;
 
@@ -29,7 +30,8 @@ pub struct Health {
     pub unharmed: f32,
     /// Seconds left that harm does not take from it, as while rolling.
     pub immune: f32,
-    /// The part of each harm kept off, 0 to 1, as worn armor keeps it.
+    /// The part of each harm kept off, 0 to 1, as worn armor keeps it; below
+    /// 0 it takes more, down to -1 for twice, as a staggered foe.
     #[reflect(default)]
     pub armor: f32,
 }
@@ -98,7 +100,7 @@ fn harm(damage: On<Damage>, mut commands: Commands, mut healths: Query<&mut Heal
     if health.dead() || damage.amount <= 0.0 || health.immune > 0.0 {
         return;
     }
-    let taken = damage.amount * (1.0 - health.armor.clamp(0.0, 1.0));
+    let taken = damage.amount * (1.0 - health.armor.clamp(-1.0, 1.0));
     health.value = (health.value - taken).max(0.0);
     health.unharmed = 0.0;
     if health.dead() {
@@ -192,6 +194,10 @@ mod tests {
         (worn.immune, worn.armor) = (0.0, 0.5);
         hit(&mut app, 10.0);
         assert_eq!(health(&app).value, before - 5.0);
+        // Below zero it takes more.
+        app.world_mut().get_mut::<Health>(entity).unwrap().armor = -0.5;
+        hit(&mut app, 10.0);
+        assert_eq!(health(&app).value, before - 20.0);
         step(&mut app, 0.5);
         hit(&mut app, 100.0);
         hit(&mut app, 10.0);
