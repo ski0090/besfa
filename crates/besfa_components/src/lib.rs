@@ -1,9 +1,10 @@
 //! The components a Besfa game ships with, and the plugins that make them
 //! work: the scene file, changes to placed models' parts, terrain and the
 //! foliage on it, the sky and its lens flare, animation state machines and
-//! offsets over their poses, inventories and equipment, health, world
-//! saves, UI kept over places in the world, and the editor's markers for
-//! what it cannot show otherwise.
+//! offsets over their poses, gaits for models with no walking clip,
+//! inventories and equipment, health, world saves, UI kept over places
+//! in the world, and the editor's markers for what it cannot show
+//! otherwise.
 //!
 //! Games use [`default_plugins`] in place of `DefaultPlugins`, or
 //! `besfa_editor_plugin::default_plugins` while the Besfa editor runs them,
@@ -42,7 +43,7 @@ pub use health::{Damage, Died, Health, HealthPlugin};
 pub use inventory::{EquipSlot, Equipment, Inventory, ItemStack};
 pub use marker::{Marker, MarkerIcon};
 pub use part_changes::{PartChange, PartChanges};
-pub use pose::{PoseOffset, PoseOffsets, PosePlugin};
+pub use pose::{GAIT, Gait, PoseOffset, PoseOffsets, PosePlugin, Swing};
 pub use save::{Persist, SaveFilter, SceneId, backup_path, load_world, save_world};
 pub use scene::{MeshColor, MeshShape, RuntimeOnly, SCENE_PATH, SceneEntity};
 pub use sky::{Moon, Sky, SkyMode, Sun};
