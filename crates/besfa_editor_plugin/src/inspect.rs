@@ -343,18 +343,26 @@ fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
 /// What a type says of its fields, by their path in its JSON value, keys
 /// joined by `/` and list items as `*`: the enums of plain variants with the
 /// variants the editor offers, the Options with what one that is None starts
-/// as, the lists with what a new item starts as, and the arrays, whose length
-/// is fixed.
+/// as, the lists with what a new item starts as, the maps keyed by text with
+/// what a new entry starts as, their entries as `*` too, and the arrays,
+/// whose length is fixed.
 fn shapes(registry: &TypeRegistry, type_id: TypeId) -> Shapes {
     let mut found = Shapes::default();
     walk(registry, type_id, &mut Vec::new(), &mut found);
     found
 }
 
-/// The default value of `type_id` as JSON, when it has one.
+/// The default value of `type_id` as JSON, when it has one: an empty list
+/// or map when it is one, which registers no default.
 fn default_json(registry: &TypeRegistry, type_id: TypeId) -> Option<Value> {
-    let value = registry.get_type_data::<ReflectDefault>(type_id)?.default();
-    json(value.as_partial_reflect(), registry).ok()
+    let Some(default) = registry.get_type_data::<ReflectDefault>(type_id) else {
+        return match registry.get_type_info(type_id)? {
+            TypeInfo::List(_) => Some(Value::Array(Vec::new())),
+            TypeInfo::Map(_) => Some(Value::Object(Default::default())),
+            _ => None,
+        };
+    };
+    json(default.default().as_partial_reflect(), registry).ok()
 }
 
 fn walk(
@@ -387,6 +395,12 @@ fn walk(
                 found.items.insert(here, item);
             }
             inside("*", info.item_ty().id(), found)
+        }
+        // A map keyed by text: its entries come and go by key.
+        TypeInfo::Map(info) if info.key_ty().is::<String>() => {
+            let start = default_json(registry, info.value_ty().id()).unwrap_or(Value::Null);
+            found.maps.insert(here, start);
+            inside("*", info.value_ty().id(), found)
         }
         TypeInfo::Array(info) => {
             found.fixed.insert(here);
@@ -514,6 +528,7 @@ mod tests {
         color: Color,
         names: Vec<String>,
         dyes: [Option<Kind>; 2],
+        belts: std::collections::BTreeMap<String, Vec<Tool>>,
     }
 
     #[test]
@@ -532,11 +547,18 @@ mod tests {
         assert!(told.fixed.contains("dyes"), "an array's length is fixed");
         assert!(!told.fixed.contains("names"));
         assert_eq!(told.options.get("dyes/*"), Some(&serde_json::json!("Axe")));
+        // A map's entries as `*`, what a new one starts as and what it holds.
+        assert_eq!(told.maps.get("belts"), Some(&serde_json::json!([])));
+        assert_eq!(
+            told.items.get("belts/*"),
+            Some(&serde_json::json!({"kind": "Axe", "damage": 0.0}))
+        );
         let found = told.choices;
         let axe_or_bow = vec!["Axe".to_string(), "Bow".to_string()];
         assert_eq!(found.get("tools/*/kind"), Some(&axe_or_bow));
         assert_eq!(found.get("best"), Some(&axe_or_bow), "an Option as what it holds");
-        assert_eq!(found.len(), 3, "a color's variants hold values: {found:?}");
+        assert_eq!(found.get("belts/*/*/kind"), Some(&axe_or_bow));
+        assert_eq!(found.len(), 4, "a color's variants hold values: {found:?}");
         let shown = shapes(&registry, TypeId::of::<Visibility>()).choices;
         assert_eq!(shown[""], ["Inherited", "Hidden", "Visible"]);
     }

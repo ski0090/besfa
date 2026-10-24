@@ -454,7 +454,7 @@ impl Fields<'_> {
     fn node(&mut self, ui: &mut Ui, node: &Value, path: &mut Vec<String>, label: Option<&str>) {
         // An Option: None offers ➕ to give it a value, a value 🗙 to take it.
         let shapes = self.shapes;
-        if let Some(start) = shapes.options.get(&shape(path)) {
+        if let Some(start) = shapes.options.get(&shape(path, shapes)) {
             if node.is_null() {
                 return row(ui, label, |ui| {
                     read_only(ui, "None", MUTED);
@@ -499,6 +499,9 @@ impl Fields<'_> {
             }
             _ => return row(ui, label, |ui| self.leaf(ui, node, path)),
         };
+        if let Some(start) = self.shapes.maps.get(&shape(path, self.shapes)) {
+            return self.entries(ui, map, path, label.unwrap_or("entries"), start);
+        }
         let mut children = |ui: &mut Ui| {
             for (key, value) in map {
                 if !path.is_empty() || !self.hidden.contains(&key.as_str()) {
@@ -524,7 +527,7 @@ impl Fields<'_> {
     /// an Option field does.
     fn list(&mut self, ui: &mut Ui, items: &[Value], path: &mut Vec<String>, label: &str) {
         let shapes = self.shapes;
-        let fixed = shapes.fixed.contains(&shape(path));
+        let fixed = shapes.fixed.contains(&shape(path, shapes));
         let mut changed = None;
         row(ui, Some(label), |ui| {
             if !fixed && ui.small_button("➕").on_hover_text("Add an item").clicked() {
@@ -532,7 +535,7 @@ impl Fields<'_> {
                 // A copy of the last, or what the type starts one as.
                 let item = items
                     .last()
-                    .or_else(|| shapes.items.get(&shape(path)))
+                    .or_else(|| shapes.items.get(&shape(path, shapes)))
                     .cloned()
                     .unwrap_or_else(|| json!({}));
                 grown.push(item);
@@ -544,7 +547,7 @@ impl Fields<'_> {
                 path.push(index.to_string());
                 let name = format!("#{index}");
                 let mut remove = false;
-                let option = shapes.options.contains_key(&shape(path));
+                let option = shapes.options.contains_key(&shape(path, shapes));
                 let mut remove_button = |ui: &mut Ui| {
                     remove = !fixed
                         && ui
@@ -584,6 +587,72 @@ impl Fields<'_> {
         }
     }
 
+    /// A map keyed by text: each entry under its key with a 🗙 that takes it
+    /// out, and a key field with a ➕ that adds an entry by that key, which
+    /// starts as the value type's default. A type with none takes no new
+    /// entries.
+    fn entries(
+        &mut self,
+        ui: &mut Ui,
+        map: &serde_json::Map<String, Value>,
+        path: &mut Vec<String>,
+        label: &str,
+        start: &Value,
+    ) {
+        let id = self.id.with(&path[..]).with("new key");
+        let mut changed = None;
+        row(ui, Some(label), |ui| {
+            if start.is_null() {
+                return;
+            }
+            let mut key: String = ui.data_mut(|data| data.get_temp(id)).unwrap_or_default();
+            ui.add(egui::TextEdit::singleline(&mut key).hint_text("key").desired_width(80.0));
+            let fresh = !key.is_empty() && !map.contains_key(&key);
+            if ui
+                .add_enabled(fresh, egui::Button::new("➕").small())
+                .on_hover_text("Add an entry by this key")
+                .clicked()
+            {
+                let mut grown = map.clone();
+                grown.insert(std::mem::take(&mut key), start.clone());
+                changed = Some(grown);
+            }
+            ui.data_mut(|data| data.insert_temp(id, key));
+        });
+        ui.indent((label, path.len()), |ui| {
+            for (key, value) in map {
+                path.push(key.clone());
+                let mut remove = false;
+                let mut remove_button = |ui: &mut Ui| {
+                    remove = ui.small_button("🗙").on_hover_text("Remove this entry").clicked();
+                };
+                match value {
+                    Value::Object(_) => {
+                        row(ui, Some(key), remove_button);
+                        ui.indent(key, |ui| self.node(ui, value, path, None));
+                    }
+                    Value::Array(inner) if !is_vector(inner) => {
+                        row(ui, Some(key), remove_button);
+                        ui.indent(key, |ui| self.node(ui, value, path, Some("items")));
+                    }
+                    _ => row(ui, Some(key), |ui| {
+                        self.leaf(ui, value, path);
+                        remove_button(ui);
+                    }),
+                }
+                if remove {
+                    let mut shrunk = map.clone();
+                    shrunk.remove(key);
+                    changed = Some(shrunk);
+                }
+                path.pop();
+            }
+        });
+        if let Some(map) = changed {
+            self.change = Some((path.clone(), Value::Object(map)));
+        }
+    }
+
     fn leaf(&mut self, ui: &mut Ui, node: &Value, path: &[String]) {
         let id = self.id.with(path);
         let euler_rotation = self.euler_rotation && path == ["rotation"];
@@ -602,7 +671,7 @@ impl Fields<'_> {
             }
             Value::String(text) => {
                 // An enum of plain variants picks one from a list.
-                if let Some(variants) = self.shapes.choices.get(&shape(path)) {
+                if let Some(variants) = self.shapes.choices.get(&shape(path, self.shapes)) {
                     let mut picked = text.clone();
                     egui::ComboBox::from_id_salt(id)
                         .selected_text(text.as_str())
@@ -750,12 +819,14 @@ fn row(ui: &mut Ui, label: Option<&str>, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// The path of a field in its type, list items as `*`: what [`Shapes`] keys by.
-fn shape(path: &[String]) -> String {
-    let keys: Vec<&str> = path
-        .iter()
-        .map(|key| if key.parse::<usize>().is_ok() { "*" } else { key.as_str() })
-        .collect();
+/// The path of a field in its type, list items and map entries as `*`:
+/// what [`Shapes`] keys by.
+fn shape(path: &[String], shapes: &Shapes) -> String {
+    let mut keys: Vec<&str> = Vec::new();
+    for key in path {
+        let entry = key.parse::<usize>().is_ok() || shapes.maps.contains_key(&keys.join("/"));
+        keys.push(if entry { "*" } else { key });
+    }
     keys.join("/")
 }
 
@@ -939,6 +1010,46 @@ mod tests {
         harness.get_by_label("🗙").click();
         harness.run();
         assert_eq!(harness.state().clone().unwrap()["worn"], Value::Null);
+    }
+
+    #[test]
+    fn adds_and_removes_the_entries_of_a_map_by_key() {
+        let shapes = Shapes {
+            maps: BTreeMap::from([("layers".to_owned(), json!([]))]),
+            items: BTreeMap::from([("layers/*".to_owned(), json!({"bone": "", "angle": 0.0}))]),
+            ..Default::default()
+        };
+        let pose = json!({"layers": {"lean": [{"bone": "Chest", "angle": 0.3}]}});
+        let editor = |value: Value, shapes: Shapes| {
+            Harness::builder().build_ui_state(
+                move |ui, changed: &mut Option<Value>| {
+                    if let Some(value) = value_editor_with(ui, Id::new("pose"), &value, false, &[], &shapes) {
+                        *changed = Some(value);
+                    }
+                },
+                None,
+            )
+        };
+        // A typed key: the map's ➕, before the list's, adds an entry by it.
+        let mut harness = editor(pose.clone(), shapes.clone());
+        let key = Id::new("pose").with(&["layers".to_owned()][..]).with("new key");
+        harness.ctx.data_mut(|data| data.insert_temp(key, "seat".to_owned()));
+        harness.run();
+        harness.get_all_by_label("➕").next().unwrap().click();
+        harness.run();
+        let grown = harness.state().clone().unwrap();
+        assert_eq!(grown["layers"]["seat"], json!([]));
+        assert_eq!(grown["layers"]["lean"], pose["layers"]["lean"]);
+
+        let mut harness = editor(pose.clone(), shapes.clone());
+        harness.run();
+        harness.get_all_by_label("🗙").next().unwrap().click();
+        harness.run();
+        assert_eq!(harness.state().clone().unwrap()["layers"], json!({}));
+
+        // Its entries' fields by their shape.
+        let path = ["layers", "lean", "0", "bone"].map(String::from);
+        assert_eq!(shape(&path, &shapes), "layers/*/*/bone");
     }
 
     #[test]
