@@ -17,7 +17,7 @@
 
 | 크레이트 | 담는 것 |
 | --- | --- |
-| `besfa_components` | `default_plugins()`(`DefaultPlugins` + 아래), 씬 파일 읽기(`ScenePlugin`, `SceneEntity`, `MeshShape`, `MeshColor`, `SCENE_PATH`), 부품 변경 다시 걸기(`PartChanges`), 지형(`Terrain`, `TerrainFile`, `TerrainData`와 로더, 메시 만들기, `TerrainHeight`), 하늘(`Sky`, `Sun`, `Moon`, 렌즈 플레어), 애니메이션 상태 기계, 흩뿌리기 표식(`Scattered`, `ScatterGroup`), 다시 가져오기 이벤트(`Reimported`), `EditorOnly` 표식 |
+| `besfa_components` | `default_plugins()`(`DefaultPlugins` + 아래), 씬 파일 읽기(`ScenePlugin`, `SceneEntity`, `MeshShape`, `MeshColor`, `SCENE_PATH`), 부품 변경 다시 걸기(`PartChanges`), 지형(`Terrain`, `TerrainFile`, `TerrainData`와 로더, 메시 만들기, `TerrainHeight`), 하늘(`Sky`, `Sun`, `Moon`, 렌즈 플레어), 애니메이션 상태 기계와 그 자세 위에 뼈를 돌리고 옮기는 층(`PoseOffsets`), 세계의 자리 위에 붙는 UI(`WorldLabel`), 흩뿌리기 표식(`Scattered`, `ScatterGroup`), 다시 가져오기 이벤트(`Reimported`), `EditorOnly` 표식 |
 | `besfa_editor_plugin` | `default_plugins()`(`besfa_components::default_plugins()` + 편집 플러그인), 편집 상태, 프로토콜, 인스펙터 보고, 씬·프리팹 저장, 지형 붓과 `.terrain` 쓰기, 흩뿌리기 붓, 땅에 내려놓기, 미리보기·썸네일·스크린샷, 뷰포트 텍스처 |
 
 - `besfa_components`는 `bevy`(기본 feature)와 `serde_json`(부품 변경 값이 JSON이다)만 쓴다. `besfa_protocol`, `windows`, `wgpu`, `debug` feature는 쓰지 않는다.

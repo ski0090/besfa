@@ -1,8 +1,9 @@
 //! The components a Besfa game ships with, and the plugins that make them
 //! work: the scene file, changes to placed models' parts, terrain and the
-//! foliage on it, the sky and its lens flare, animation state machines,
-//! inventories and equipment, health, world saves, and the editor's markers for what
-//! it cannot show otherwise.
+//! foliage on it, the sky and its lens flare, animation state machines and
+//! offsets over their poses, inventories and equipment, health, world
+//! saves, UI kept over places in the world, and the editor's markers for
+//! what it cannot show otherwise.
 //!
 //! Games use [`default_plugins`] in place of `DefaultPlugins`, or
 //! `besfa_editor_plugin::default_plugins` while the Besfa editor runs them,
@@ -22,12 +23,14 @@ pub mod inventory;
 pub mod lens_flare;
 pub mod marker;
 pub mod part_changes;
+pub mod pose;
 #[doc(hidden)]
 pub mod reflect;
 pub mod save;
 pub mod scene;
 pub mod sky;
 pub mod terrain;
+pub mod world_label;
 
 pub use animation::{
     AnimationClips, AnimationCondition, AnimationParams, AnimationState, AnimationStateMachine,
@@ -39,10 +42,12 @@ pub use health::{Damage, Died, Health, HealthPlugin};
 pub use inventory::{EquipSlot, Equipment, Inventory, ItemStack};
 pub use marker::{Marker, MarkerIcon};
 pub use part_changes::{PartChange, PartChanges};
+pub use pose::{PoseOffset, PoseOffsets, PosePlugin};
 pub use save::{Persist, SaveFilter, SceneId, backup_path, load_world, save_world};
 pub use scene::{MeshColor, MeshShape, RuntimeOnly, SCENE_PATH, SceneEntity};
 pub use sky::{Moon, Sky, SkyMode, Sun};
 pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight, TerrainTint};
+pub use world_label::{WorldLabel, WorldLabelPlugin};
 
 /// `DefaultPlugins` that load the scene from `assets/scenes/main.scn.ron`
 /// and run the components in it.
@@ -58,6 +63,8 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .add(lens_flare::LensFlarePlugin)
         .add(animation::AnimationStateMachinePlugin)
         .add(health::HealthPlugin)
+        .add(pose::PosePlugin)
+        .add(world_label::WorldLabelPlugin)
 }
 
 /// Kept out of the editor's Hierarchy and the scene file.
