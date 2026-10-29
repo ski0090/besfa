@@ -5,7 +5,9 @@
 //! keeping the save before beside it, and [`load_world`] puts them back.
 //! An entity from the scene file is found again by its id there and has its
 //! saved components put back on it; the others are spawned anew, after the
-//! ones already there are taken away.
+//! ones already there are taken away. [`write_entity`] and [`read_entity`]
+//! do the same for one entity, as a dedicated server shows it to the games
+//! joined to it.
 
 use std::{
     any::TypeId,
@@ -161,6 +163,61 @@ pub fn load_world(world: &mut World, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `entity`'s components of `kept`, written as a world save of it alone,
+/// as to send it over the network or keep it apart.
+pub fn write_entity(
+    world: &World,
+    entity: Entity,
+    kept: &HashSet<TypeId>,
+) -> Result<String, String> {
+    let registry = world.resource::<AppTypeRegistry>().read();
+    DynamicWorldBuilder::from_world(world, &registry)
+        .with_component_filter(WorldFilter::Allowlist(kept.clone()))
+        .deny_all_resources()
+        .extract_entities(std::iter::once(entity))
+        .build()
+        .serialize(&registry)
+        .map_err(|error| error.to_string())
+}
+
+/// Puts onto `entity` the components of `kept` that `text`, from
+/// [`write_entity`], holds. It may have come over the network: anything
+/// else in it is left out.
+pub fn read_entity(
+    world: &mut World,
+    entity: Entity,
+    text: &str,
+    kept: &HashSet<TypeId>,
+) -> Result<(), String> {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let assets = world.resource::<AssetServer>().clone();
+    let mut read = {
+        let registry = registry.read();
+        let mut loader = &assets;
+        let mut deserializer =
+            ron::de::Deserializer::from_str(text).map_err(|error| error.to_string())?;
+        WorldDeserializer {
+            type_registry: &registry,
+            load_from_path: &mut loader,
+        }
+        .deserialize(&mut deserializer)
+        .map_err(|error| error.to_string())?
+    };
+    read.resources.clear();
+    let [saved] = read.entities.as_mut_slice() else {
+        return Err("not one entity".into());
+    };
+    saved.components.retain(|component| {
+        component
+            .get_represented_type_info()
+            .is_some_and(|info| kept.contains(&info.type_id()))
+    });
+    let mut map = EntityHashMap::default();
+    map.insert(saved.entity, entity);
+    read.write_to_world(world, &mut map)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +274,28 @@ mod tests {
         assert_eq!(walls, [(Wall(150.0), Transform::from_xyz(1.0, 0.0, 2.0), false)]);
         assert_eq!(world.query::<&SceneId>().iter(world).count(), 0);
         fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn an_entity_goes_to_text_and_onto_another_keeping_only_what_is_let_in() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .register_type::<Wall>()
+            .register_type::<Glow>();
+        let world = app.world_mut();
+        let from = world
+            .spawn((Wall(80.0), Glow, Transform::from_xyz(1.0, 2.0, 3.0)))
+            .id();
+        let wall = HashSet::from([TypeId::of::<Wall>()]);
+        // The sender lets more go than the receiver takes, as a cheat would.
+        let mut sent = wall.clone();
+        sent.insert(TypeId::of::<Glow>());
+        let text = write_entity(world, from, &sent).unwrap();
+        let to = world.spawn_empty().id();
+        read_entity(world, to, &text, &wall).unwrap();
+        assert_eq!(world.get::<Wall>(to), Some(&Wall(80.0)));
+        assert!(world.get::<Glow>(to).is_none(), "not let in");
+        assert!(world.get::<Transform>(to).is_none(), "not sent");
+        assert!(read_entity(world, to, "(", &wall).is_err());
     }
 }

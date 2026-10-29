@@ -8,14 +8,7 @@
 //! to the editor, and saves the scene back when asked. Launched by
 //! `besfa_mcp`, it runs the same way with no window at all.
 
-use std::time::Duration;
-
-use bevy::{
-    app::{PluginGroupBuilder, ScheduleRunnerPlugin},
-    prelude::*,
-    window::ExitCondition,
-    winit::WinitPlugin,
-};
+use bevy::app::PluginGroupBuilder;
 
 mod edit;
 mod edit_mode;
@@ -66,17 +59,7 @@ pub fn default_plugins() -> PluginGroupBuilder {
         return plugins;
     }
 
-    plugins = plugins
-        .set(WindowPlugin {
-            primary_window: None,
-            exit_condition: ExitCondition::DontExit,
-            ..default()
-        })
-        // Without a window winit has nothing to drive, so tick at a fixed rate.
-        .disable::<WinitPlugin>()
-        .add(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
-            1.0 / 60.0,
-        )));
+    plugins = besfa_components::windowless(plugins, 60.0);
     if viewport {
         plugins.add(viewport::ViewportPlugin)
     } else {

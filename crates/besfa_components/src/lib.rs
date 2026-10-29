@@ -19,6 +19,7 @@ use bevy::{app::PluginGroupBuilder, prelude::*};
 pub mod animation;
 pub mod foliage;
 pub mod ground;
+pub mod headless;
 pub mod health;
 pub mod inventory;
 pub mod lens_flare;
@@ -39,12 +40,15 @@ pub use animation::{
 };
 pub use foliage::{Foliage, FoliagePlugin};
 pub use ground::{ScatterGroup, Scattered};
+pub use headless::windowless;
 pub use health::{Damage, Died, Health, HealthPlugin};
 pub use inventory::{EquipSlot, Equipment, Inventory, ItemStack};
 pub use marker::{Marker, MarkerIcon};
 pub use part_changes::{PartChange, PartChanges};
 pub use pose::{GAIT, Gait, PoseOffset, PoseOffsets, PosePlugin, Swing};
-pub use save::{Persist, SaveFilter, SceneId, backup_path, load_world, save_world};
+pub use save::{
+    Persist, SaveFilter, SceneId, backup_path, load_world, read_entity, save_world, write_entity,
+};
 pub use scene::{MeshColor, MeshShape, RuntimeOnly, SCENE_PATH, SceneEntity};
 pub use sky::{Moon, Sky, SkyMode, Sun};
 pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight, TerrainTint};

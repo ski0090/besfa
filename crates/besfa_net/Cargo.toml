@@ -1,0 +1,17 @@
+[package]
+name = "besfa_net"
+version = "0.1.0"
+edition = "2024"
+description = "Dedicated servers for Besfa games: the game with no window or GPU, and the UDP connection between it and the games joined to it"
+
+[dependencies]
+bevy = "0.20.0"
+# windowless(), which headless() builds on.
+besfa_components = { path = "../besfa_components" }
+# The connection, and what goes over it, are renet's; games use these
+# re-exported, so a server and its games run the same version.
+renet = "2.0.0"
+renet_netcode = "2.0.0"
+# Messages are JSON.
+serde = "1"
+serde_json = "1"
