@@ -186,6 +186,13 @@ fn write(
     at_origin: bool,
     path: &Path,
 ) -> Result<(), String> {
+    // Until the scene file has spawned, a save would write it over with
+    // only what the game made so far.
+    if world.contains_resource::<Loading>() {
+        return Err(format!(
+            "{SCENE_PATH} has not loaded yet, and what it holds would be left out; try again once it has"
+        ));
+    }
     // A file that places itself would load forever.
     if let Some(placed) = entities
         .iter()
@@ -964,6 +971,25 @@ mod tests {
         let loaded = loaded.world().get::<Camera>(entities[0]).unwrap();
         assert_eq!(loaded.order, 3);
         assert!(loaded.is_active);
+    }
+
+    #[test]
+    fn writes_nothing_before_the_scene_file_has_loaded() {
+        let mut app = test_app();
+        app.insert_resource(Loading(Handle::default()));
+        let rock = app.world_mut().spawn((Name::new("Rock"), SceneEntity)).id();
+        let dir = std::env::temp_dir().join(format!("besfa-loading-{}", std::process::id()));
+        let path = dir.join(SCENE_PATH);
+
+        let error = save(app.world_mut(), &path).expect_err("the scene file is loading");
+        assert!(error.contains("has not loaded"), "{error}");
+        let prefab = dir.join("prefabs/rock.scn.ron");
+        assert!(save_prefab(app.world_mut(), rock, &prefab).is_err());
+        assert!(!dir.exists(), "nothing is written");
+
+        app.world_mut().remove_resource::<Loading>();
+        save(app.world_mut(), &path).expect("the scene should save once loaded");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

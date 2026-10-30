@@ -99,7 +99,7 @@ fn tools() -> Value {
                 "{\"command\":\"set\",\"id\":ID,\"component\":PATH,\"value\":{...}} replaces the whole value; left-out fields take defaults\n",
                 "{\"command\":\"insert\",\"id\":ID,\"component\":PATH} / {\"command\":\"remove\",...}\n",
                 "{\"command\":\"duplicate\",\"id\":ID} / {\"command\":\"delete\",\"id\":ID} hides it until {\"command\":\"restore\",\"id\":ID}\n",
-                "{\"command\":\"save\"} writes the scene file; {\"command\":\"save_prefab\",\"id\":ID,\"path\":\"prefabs/x.scn.ron\"}\n",
+                "{\"command\":\"save\"} writes the scene file; {\"command\":\"save_prefab\",\"id\":ID,\"path\":\"prefabs/x.scn.ron\"}; both are refused until the scene file has loaded, which `entities` waits for\n",
                 "{\"command\":\"screenshot\",\"file\":\"shots/map.png\",\"target\":[0,0,0],\"eye\":[40,30,40]} or with \"top\":200 instead of eye, a view straight down over a square that many meters wide, north (-Z) up; renders the scene without editor overlays to a PNG relative to the project, once its models have loaded, and with \"markers\":true also the icons and rings of what has no mesh to show it, as spawn points; read the file to see it\n",
                 "{\"command\":\"thumbnail\",\"path\":\"models/x.glb\",\"file\":\"thumb.png\"} renders one model on its own\n",
                 "Terrain: {\"command\":\"spawn\",\"kind\":\"terrain\",\"name\":\"Ground\"} makes flat ground 256 m a side centered on it, covered by its first layer; resize it by setting its besfa_editor_plugin::terrain::Terrain component to {\"size\":200}, which also takes \"layers\", up to four colors (by default grass, dirt, stone, sand); its heights go to a .terrain file of their own when the scene is saved\n",
@@ -128,7 +128,7 @@ fn tools() -> Value {
         },
         {
             "name": "entities",
-            "description": "Without `id`, the scene's entities, as JSON: id, name, parent, whether the scene file keeps it, and the asset it shows. The parts a placed model or prefab spawns under it are left out unless `parts` is true. `name` and `asset` keep those whose name or asset path contains the text, ignoring case, and `parent` those right under that entity. With `id`, selects that entity in the game and returns its components with their values. Right after start the first list can come before the scene file has loaded, so `scene` reads false; ask again.",
+            "description": "Without `id`, the scene's entities, as JSON: id, name, parent, whether the scene file keeps it, and the asset it shows. The parts a placed model or prefab spawns under it are left out unless `parts` is true. `name` and `asset` keep those whose name or asset path contains the text, ignoring case, and `parent` those right under that entity. With `id`, selects that entity in the game and returns its components with their values. Right after start, the list waits until the scene file has loaded.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
