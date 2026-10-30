@@ -1878,90 +1878,323 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    /// The editor and what the README shows of it, for the screenshots.
+    /// The editor and what the manual shows of it, for the screenshots.
     struct Screen {
         editor: Editor,
         prebuild: Prebuild,
         /// Ringed in the picture.
         highlight: Option<egui::Rect>,
+        /// Numbered markers the manual's text refers to, in order.
+        callouts: Vec<egui::Pos2>,
     }
 
-    /// Renders the editor for the README's screenshots, with the fonts the
-    /// running editor uses, and writes them to docs/images. Not part of
-    /// `cargo test`; run it after changing the UI:
+    /// Where the screenshots' game data lives: what a template game reported
+    /// in edit mode with a terrain, a sky and two placed models added, and
+    /// the thumbnails it drew of the models.
+    const DATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/screenshot_data");
+
+    /// Entities in `screenshot_data/reports.txt`.
+    const CUBE: u64 = 4294966819;
+    const TERRAIN: u64 = 4294966805;
+    const SKY: u64 = 4294966804;
+    const ZOMBIE: u64 = 4294966789;
+
+    /// The window the screenshots show, in points.
+    const WINDOW: egui::Vec2 = egui::vec2(1280.0, 800.0);
+
+    /// The panels the screenshots crop to, in points.
+    const RIGHT_PANEL: egui::Rect =
+        egui::Rect::from_min_max(egui::pos2(962.0, 44.0), egui::pos2(1280.0, 598.0));
+    const BOTTOM_PANEL: egui::Rect =
+        egui::Rect::from_min_max(egui::pos2(0.0, 598.0), egui::pos2(700.0, 800.0));
+
+    /// Renders the hub and the editor for the user manual's screenshots,
+    /// with the fonts the running editor uses, and writes them to
+    /// docs/images. Not part of `cargo test`; run it after changing the UI:
     ///
     /// ```text
-    /// cargo test -p besfa_editor readme_screenshots -- --ignored
+    /// cargo test -p besfa_editor manual_screenshots -- --ignored
     /// ```
     #[test]
     #[ignore = "writes docs/images"]
-    fn readme_screenshots() {
+    fn manual_screenshots() {
+        hub_screenshots();
+        editor_screenshots();
+    }
+
+    fn hub_screenshots() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::temp_dir().join(format!("besfa_manual_hub_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = crate::project::RecentProjects {
+            file: dir.join("recent_projects.json"),
+        };
+        for path in [r"C:\Projects\space_shooter", r"C:\Projects\my_game"] {
+            store.add(&Project::new(path));
+        }
+        let state = (
+            crate::hub::Hub::new(&store),
+            store,
+            Prebuild::with_phase(crate::process::PrebuildPhase::Ready, "Bevy is ready"),
+        );
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(WINDOW + egui::Vec2::splat(2.0 * MARGIN))
+            .with_pixels_per_point(PIXELS_PER_POINT)
+            .wgpu()
+            .build_ui_state(
+                |ui, (hub, store, prebuild): &mut (crate::hub::Hub, _, Prebuild)| {
+                    hub.ui(ui, store, prebuild);
+                },
+                state,
+            );
+        crate::style(&harness.ctx);
+        harness.run();
+        save(&mut harness, "hub", None);
+
+        harness.get_by_label("➕ New project").click();
+        harness.run();
+        harness
+            .get_by_role(egui::accesskit::Role::TextInput)
+            .type_text(r"C:\Projects\my_game");
+        harness.remove_cursor();
+        harness.run();
+        save(&mut harness, "hub-create", None);
+        drop(harness);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn editor_screenshots() {
+        use egui_kittest::kittest::Queryable;
         const OLD: &str = "28b39927dda69b765ee1e7071794050033b4a307";
         const LATEST: &str = "51b56bc0a1d9cd2bd1f1c5d6a2a8d5c9e0f1a2b3";
-        // What the template game prints and reports once it runs.
-        let game_output = [
+        // What the template game prints once it runs, then what it reports.
+        let log = [
             r"   Compiling my_game v0.1.0 (C:\Projects\my_game)",
             "    Finished `dev` profile [optimized + debuginfo] target(s) in 5.67s",
             r"     Running `C:\Users\you\AppData\Local\Besfa\target\debug\my_game.exe`",
             "2026-10-07T05:36:08.737706Z  INFO besfa_editor_plugin::viewport: Rendering into the editor viewport 1280x720.",
             "2026-10-07T05:36:08.776701Z  INFO besfa_editor_plugin::scene: Loaded scenes/main.scn.ron",
-            r#"@besfa {"type":"systems","crate":"my_game","systems":[{"schedule":"Update","name":"my_game::spin"}]}"#,
-            r#"@besfa {"type":"entities","entities":[{"id":4294967295,"name":"Cube"},{"id":4294967294,"name":"Light"},{"id":4294967293,"name":"Camera"}]}"#,
         ];
-        let read = |editor: &mut Editor, lines: &[&str]| {
-            for line in lines {
-                if editor.scene.handle(line).is_none() {
-                    editor.log(*line);
-                }
-            }
+        let reports = fs::read_to_string(Path::new(DATA).join("reports.txt")).unwrap();
+        let reports: Vec<&str> = reports.lines().collect();
+        let game_output: Vec<&str> = log
+            .iter()
+            .copied()
+            .chain(
+                // Each entity's components are shown once it is selected.
+                reports
+                    .iter()
+                    .copied()
+                    .filter(|line| !line.contains(r#""type":"entity""#)),
+            )
+            .collect();
+        let entity = |id: u64| {
+            let id = format!(r#""type":"entity","id":{id},"#);
+            *reports.iter().find(|line| line.contains(&id)).unwrap()
         };
+
+        // A project with the models the game pictured, and their thumbnails.
+        let dir = std::env::temp_dir().join(format!("besfa_manual_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let models = ["zombie-runner.glb", "oak-tree.glb", "small-stones.glb"];
+        for (folder, files) in [
+            ("assets/models", &models[..]),
+            ("assets/prefabs", &["rock-pile.scn.ron"][..]),
+            ("assets/scenes", &["main.scn.ron"][..]),
+        ] {
+            fs::create_dir_all(dir.join(folder)).unwrap();
+            for file in files {
+                fs::write(dir.join(folder).join(file), "").unwrap();
+            }
+        }
+        let thumbnails = dir.join("target/besfa/thumbnails/models");
+        fs::create_dir_all(&thumbnails).unwrap();
+        for model in models {
+            let file = format!("{model}.png");
+            fs::copy(
+                Path::new(DATA).join("thumbnails").join(&file),
+                thumbnails.join(file),
+            )
+            .unwrap();
+        }
 
         // Waiting for a prebuild, the editor starts no game of its own.
         let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
-        let project = Project::new(r"C:\Projects\my_game");
+        let project = Project::new(dir.to_string_lossy());
         let mut editor = Editor::new(project, None, &waiting, &egui::Context::default());
         editor.waiting_for_prebuild = false;
-        editor.plugin_revision = Some(OLD.into());
+        editor.plugin_revision = Some(LATEST.into());
         editor.latest_plugin_revision = Some(LATEST.into());
-        read(&mut editor, &game_output);
 
         let screen = Screen {
             editor,
             prebuild: Prebuild::with_phase(crate::process::PrebuildPhase::Ready, "Bevy is ready"),
             highlight: None,
+            callouts: Vec::new(),
         };
         let mut harness = egui_kittest::Harness::builder()
-            // The window, and the margin the harness puts around it.
-            .with_size([1280.0 + 2.0 * MARGIN, 800.0 + 2.0 * MARGIN])
+            .with_size(WINDOW + egui::Vec2::splat(2.0 * MARGIN))
             .with_pixels_per_point(PIXELS_PER_POINT)
             .wgpu()
             .build_ui_state(
                 |ui, screen: &mut Screen| {
                     screen.editor.ui(ui, &screen.prebuild);
-                    if let Some(rect) = screen.highlight {
-                        let layer =
-                            egui::LayerId::new(egui::Order::Debug, egui::Id::new("highlight"));
-                        ui.ctx().layer_painter(layer).rect_stroke(
-                            rect.expand(3.0),
-                            6.0,
-                            (2.0, Color32::from_rgb(0xFF, 0x5F, 0x57)),
-                            egui::StrokeKind::Outside,
-                        );
-                    }
+                    annotate(ui.ctx(), screen.highlight, &screen.callouts);
                 },
                 screen,
             );
         crate::style(&harness.ctx);
-        harness.run();
+        let ctx = harness.ctx.clone();
+        let read = |editor: &mut Editor, lines: &[&str]| {
+            for line in lines {
+                match editor.scene.handle(line) {
+                    Some(report) => editor.on_report(report, &ctx),
+                    None => editor.log(*line),
+                }
+            }
+        };
+        let select = |editor: &mut Editor, id: u64| {
+            editor.scene.select(Some(id));
+            editor.scene.handle(entity(id));
+        };
+        read(&mut harness.state_mut().editor, &game_output);
+        harness.run_steps(4);
+
+        // The whole window with the cube selected, its parts numbered.
+        select(&mut harness.state_mut().editor, CUBE);
+        harness.state_mut().callouts = vec![
+            egui::pos2(143.0, 11.0),
+            egui::pos2(427.0, 33.0),
+            egui::pos2(87.0, 57.0),
+            egui::pos2(590.0, 293.0),
+            egui::pos2(1193.0, 57.0),
+            egui::pos2(120.0, 612.0),
+        ];
+        harness.run_steps(4);
+        save(&mut harness, "editor-overview", None);
+        harness.state_mut().callouts.clear();
+        harness.run_steps(4);
+        save(&mut harness, "inspector", Some(RIGHT_PANEL));
+
+        // What the hierarchy's + adds.
+        harness
+            .get_all_by_label("➕")
+            .find(|node| node.rect().min.x < 300.0)
+            .unwrap()
+            .click();
+        harness.remove_cursor();
+        harness.run_steps(4);
+        save(
+            &mut harness,
+            "hierarchy-add-menu",
+            Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 46.0),
+                egui::vec2(380.0, 290.0),
+            )),
+        );
+        harness
+            .get_all_by_label("➕")
+            .find(|node| node.rect().min.x < 300.0)
+            .unwrap()
+            .click();
+        harness.run_steps(4);
+
+        // Terrain painting, and the sky.
+        let editor = &mut harness.state_mut().editor;
+        select(editor, TERRAIN);
+        editor.inspector.terrain.tool = Some(besfa_protocol::TerrainTool::Paint);
+        harness.run_steps(4);
+        save(&mut harness, "terrain-tools", Some(RIGHT_PANEL));
+        let editor = &mut harness.state_mut().editor;
+        editor.inspector.terrain.tool = None;
+        select(editor, SKY);
+        harness.run_steps(4);
+        save(&mut harness, "sky-inspector", Some(RIGHT_PANEL));
+
+        // Scattering two of the models.
+        let editor = &mut harness.state_mut().editor;
+        editor.right_tab = RightTab::Scatter;
+        editor.scatter.on = true;
+        editor.scatter.models = ["models/oak-tree.glb", "models/small-stones.glb"]
+            .map(|path| besfa_protocol::ScatterModel {
+                path: path.into(),
+                weight: 1.0,
+            })
+            .into();
+        harness.run_steps(4);
+        save(&mut harness, "scatter-tab", Some(RIGHT_PANEL));
+        let editor = &mut harness.state_mut().editor;
+        editor.scatter.on = false;
+
+        // The placed zombie's state machine.
+        select(editor, ZOMBIE);
+        editor.right_tab = RightTab::Animation;
+        harness.run_steps(4);
+        save(&mut harness, "animation-tab", Some(RIGHT_PANEL));
+        // ponytail: the Inspector widens each frame over the machine's nested
+        // lists; show the cube there until that is fixed.
+        let editor = &mut harness.state_mut().editor;
+        select(editor, CUBE);
+        editor.right_tab = RightTab::Inspector;
+
+        // The Assets tab, with the models' thumbnails.
+        harness.state_mut().editor.assets_tab = true;
+        harness.run_steps(4);
+        save(&mut harness, "assets-tab", Some(BOTTOM_PANEL));
+
+        harness.state_mut().editor.assets_tab = false;
+        harness.run_steps(4);
+
+        // Who Play starts.
+        harness
+            .get_all_by_role(egui::accesskit::Role::ComboBox)
+            .find(|node| node.rect().min.y < 60.0)
+            .unwrap()
+            .click();
+        harness.remove_cursor();
+        harness.run_steps(4);
+        save(
+            &mut harness,
+            "play-as",
+            Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(420.0, 200.0),
+            )),
+        );
+        harness
+            .get_all_by_role(egui::accesskit::Role::ComboBox)
+            .find(|node| node.rect().min.y < 60.0)
+            .unwrap()
+            .click();
+        harness.remove_cursor();
+        harness.run_steps(4);
+
+        // The Edit menu.
+        harness.get_by_label("Edit").click();
+        harness.remove_cursor();
+        harness.run_steps(4);
+        save(
+            &mut harness,
+            "menu-edit",
+            Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(420.0, 160.0),
+            )),
+        );
+        harness.get_by_label("Edit").click();
+        harness.remove_cursor();
+        harness.run_steps(4);
 
         // The project's plugin is not the prebuild's: the toolbar warns, and
         // hovering explains what clicking does.
+        harness.state_mut().editor.plugin_revision = Some(OLD.into());
+        harness.run_steps(4);
         let rect = plugin_icon(&harness, "⚠");
         harness.hover_at(rect.center());
         harness.state_mut().highlight = Some(rect);
         // Past the tooltip's delay.
         harness.run_steps(8);
-        save(&mut harness, "plugin-update-available", Some(110.0));
+        save(&mut harness, "plugin-update-available", Some(top(110.0)));
 
         // Clicking updates it, restarts the game and logs what cargo did.
         harness.remove_cursor();
@@ -1980,11 +2213,79 @@ mod tests {
         );
         editor.scene.reset();
         read(editor, &game_output);
+        select(editor, CUBE);
         editor.plugin_revision = Some(LATEST.into());
-        harness.run();
+        harness.run_steps(4);
         harness.state_mut().highlight = Some(plugin_icon(&harness, "✔"));
-        harness.run();
+        harness.run_steps(4);
         save(&mut harness, "plugin-updated", None);
+        harness.state_mut().highlight = None;
+
+        // Leaving with unsaved changes, while an edit session runs.
+        let editor = &mut harness.state_mut().editor;
+        editor.game = Some(
+            CliProcess::start(
+                &dir,
+                "cmd",
+                &["/c", "ping -n 60 127.0.0.1 > nul"],
+                &[],
+                &ctx,
+            )
+            .unwrap(),
+        );
+        editor.dialog = Some(Dialog::Unsaved(AfterSave::Leave));
+        harness.run_steps(4);
+        save(
+            &mut harness,
+            "unsaved-dialog",
+            Some(egui::Rect::from_center_size(
+                (WINDOW / 2.0).to_pos2(),
+                egui::vec2(480.0, 200.0),
+            )),
+        );
+        // The zombie's model preview, last: the panel stays as wide as it.
+        let editor = &mut harness.state_mut().editor;
+        editor.dialog = None;
+        editor.open_preview("models/zombie-runner.glb".into());
+        let preview = reports
+            .iter()
+            .find(|line| line.contains(r#""type":"preview""#));
+        read(editor, &[preview.unwrap()]);
+        harness.run_steps(4);
+        let panel = egui::Rect::from_min_max(egui::pos2(876.0, 44.0), egui::pos2(1280.0, 598.0));
+        save(&mut harness, "model-preview", Some(panel));
+
+        drop(harness);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Rings `highlight` and numbers `callouts` over the UI.
+    fn annotate(ctx: &egui::Context, highlight: Option<egui::Rect>, callouts: &[egui::Pos2]) {
+        let red = Color32::from_rgb(0xFF, 0x5F, 0x57);
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Debug,
+            egui::Id::new("annotate"),
+        ));
+        if let Some(rect) = highlight {
+            painter.rect_stroke(rect.expand(3.0), 6.0, (2.0, red), egui::StrokeKind::Outside);
+        }
+        for (number, &at) in (1..).zip(callouts) {
+            // Callouts are where they show in the picture, inside the margin.
+            let at = at + egui::Vec2::splat(MARGIN);
+            painter.circle_filled(at, 11.0, red);
+            painter.text(
+                at,
+                egui::Align2::CENTER_CENTER,
+                number.to_string(),
+                egui::FontId::proportional(14.0),
+                Color32::WHITE,
+            );
+        }
+    }
+
+    /// The window's top `height` points.
+    fn top(height: f32) -> egui::Rect {
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW.x, height))
     }
 
     /// Keeps text sharp.
@@ -2001,15 +2302,23 @@ mod tests {
             .rect()
     }
 
-    /// Writes the window, or its top `height` points, to docs/images.
-    fn save(harness: &mut egui_kittest::Harness<Screen>, name: &str, height: Option<f32>) {
-        let image = harness.render().expect("render the editor");
-        let margin = (MARGIN * PIXELS_PER_POINT) as u32;
-        let width = image.width() - 2 * margin;
-        let height = height.map_or(image.height() - 2 * margin, |points| {
-            (points * PIXELS_PER_POINT) as u32
-        });
-        let image = image::imageops::crop_imm(&image, margin, margin, width, height).to_image();
+    /// Writes the window, or the part of it in `crop` (points), to
+    /// docs/images.
+    fn save<State>(
+        harness: &mut egui_kittest::Harness<State>,
+        name: &str,
+        crop: Option<egui::Rect>,
+    ) {
+        let image = harness.render().expect("render the window");
+        let crop = crop.unwrap_or(egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW));
+        let [x, y, width, height] = [
+            crop.min.x + MARGIN,
+            crop.min.y + MARGIN,
+            crop.width(),
+            crop.height(),
+        ]
+        .map(|points| (points * PIXELS_PER_POINT) as u32);
+        let image = image::imageops::crop_imm(&image, x, y, width, height).to_image();
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../docs/images/{name}.png"));
         image.save(path).expect("write the screenshot");
