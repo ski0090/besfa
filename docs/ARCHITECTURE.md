@@ -83,3 +83,19 @@ match std::env::var("BESFA_NET").as_deref() {
     _ => { app.add_plugins(default_plugins()); }
 }
 ```
+
+## 게임이 연 서버
+
+게임은 자기 메뉴에서 데디케이트 서버를 열고 그 서버에 들어갈 수 있다(duskhold의 멀티 플레이 > 서버 만들기, [ski0090/besfa#2](https://github.com/ski0090/besfa/issues/2)). `besfa_net::Hosted::start(args, log)`는 게임 자기 실행 파일을 `args`로 하나 더 띄우고(게임이 서버 역할로 읽을 인자, 예: `--server 세계 --port 5000`), 창은 띄우지 않으며(Windows의 `CREATE_NO_WINDOW`), 출력은 `log` 파일에 남긴다. 에디터의 Play로 띄운 게임이 연 서버도 뷰포트나 편집 세션에 붙지 않도록 `BESFA_`로 시작하는 환경 변수를 모두 빼고 띄운다.
+
+서버는 그 게임이 끝나면 함께 끝난다. `Hosted`는 서버의 stdin을 파이프로 쥐고 있고, 게임이 정상으로 끝나든 갑자기 꺼지든 파이프가 닫힌다. `headless()`가 더하는 `LeaveWithParent`는 `Hosted`가 띄운 서버(`BESFA_NET_HOSTED`)에서만 stdin을 끝까지 읽다가, 닫히면 Ctrl+C처럼 `AppExit`를 보내므로 게임의 닫기 길(저장)이 그대로 돈다. 터미널에서 띄운 서버는 건드리지 않는다. `Hosted::ended()`는 서버가 떠 있으면 `None`, 끝났으면 로그의 마지막 ERROR 줄의 메시지(없으면 끝난 상태)를 준다. 포트를 이미 쓰고 있어 열지 못한 경우 등을 게임 화면에 보여 줄 때 쓴다.
+
+친구가 들어올 주소는 `besfa_net::addresses()`가 준다. 인터넷(8.8.8.8)과 Tailscale의 DNS(100.100.100.100)로 가는 길에 UDP 소켓을 이어(보내는 것은 없다) 이 컴퓨터의 주소를 읽고, 같은 공유기 안의 주소(`lan`)와 Tailscale 주소(`tailscale`, 100.64.0.0/10)로 나눈다. Tailscale이 꺼져 있으면 `tailscale`은 `None`이다. `besfa_net::tailnet_peers()`는 `tailscale status --json`으로 같은 Tailscale 네트워크에서 지금 켜져 있는 다른 컴퓨터의 이름과 IPv4 주소를 준다(Tailscale이 없으면 빈 목록). Tailscale은 사용자가 설치한 것을 쓰고, 게임 안에 넣지 않는다. Tailscale이 두 컴퓨터를 이어 주므로 공유기 포트를 열거나 게임용 서버를 빌리지 않아도 된다. 다만 로그인과 연결 조정은 Tailscale의 서버가 하고, 두 컴퓨터가 바로 잇지 못하면(양쪽 모두 까다로운 NAT 등) Tailscale의 중계(DERP)를 거쳐 느려질 수 있다. 이 컴퓨터가 Tailscale exit node를 쓰면 인터넷으로 가는 길도 Tailscale이라 `lan`은 `None`이다.
+
+```rust
+let args = ["--server", "세계", "--port", "5000"].map(String::from);
+let hosted = besfa_net::Hosted::start(&args, Path::new("saves/세계/server.log"))?;
+// Client::connect(([127, 0, 0, 1], 5000).into(), PROTOCOL); 서버가 뜨는 동안 닿지 않으면 다시 잇는다.
+let reach = besfa_net::addresses(); // 친구에게 reach.tailscale, reach.lan을 보여 준다.
+// hosted를 들고 있다가 게임이 끝나면 버린다: 서버가 저장하고 끝난다.
+```
