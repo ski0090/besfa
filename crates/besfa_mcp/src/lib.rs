@@ -21,8 +21,11 @@ pub use besfa_protocol::run_features;
 use besfa_protocol::{Command, EntityInfo, Placement, Report, Request, SpawnKind};
 use serde_json::{Value, json};
 
-/// How much of the game's log a failure shows.
+/// How much of the game's log a failure shows: its last lines, and the
+/// first errors before them, which a game shutting down buries under
+/// dozens of warnings.
 const LOG_LINES: usize = 40;
+const ERROR_LINES: usize = 10;
 
 /// Answers MCP requests on stdin until the client closes it, then stops
 /// the game it started.
@@ -350,7 +353,13 @@ struct Inbox {
     /// The latest report of the selection's components, which each entity
     /// a command makes becomes.
     entity: Option<Value>,
-    logs: VecDeque<String>,
+    /// The game's last lines that were not reports, each marked when it
+    /// says what went wrong.
+    logs: VecDeque<(bool, String)>,
+    /// The first of those marked lines that fell out of `logs`.
+    errors: Vec<String>,
+    /// How many other lines fell out.
+    dropped: usize,
     /// The game's outputs still open; none once it exited.
     open: u8,
 }
@@ -372,10 +381,35 @@ impl Inbox {
     }
 
     fn log(&mut self, line: String) {
-        self.logs.push_back(line);
+        // Bevy's errors, panics, whose message is on the next line, and
+        // cargo's errors.
+        let error = line.contains(" ERROR ")
+            || line.contains("panicked at")
+            || line.starts_with("error")
+            || self
+                .logs
+                .back()
+                .is_some_and(|(_, last)| last.contains("panicked at"));
+        self.logs.push_back((error, line));
         if self.logs.len() > LOG_LINES {
-            self.logs.pop_front();
+            match self.logs.pop_front() {
+                Some((true, line)) if self.errors.len() < ERROR_LINES => self.errors.push(line),
+                _ => self.dropped += 1,
+            }
         }
+    }
+
+    /// The log a failure shows: the first errors, then the last lines.
+    fn log_text(&self) -> String {
+        let dropped = format!("[{} lines left out]", self.dropped);
+        let lines: Vec<&str> = self
+            .errors
+            .iter()
+            .map(String::as_str)
+            .chain((self.dropped > 0).then_some(dropped.as_str()))
+            .chain(self.logs.iter().map(|(_, line)| line.as_str()))
+            .collect();
+        lines.join("\n")
     }
 }
 
@@ -517,8 +551,7 @@ impl Game {
         } else {
             "The game did not answer in time."
         };
-        let log: Vec<&str> = inbox.logs.iter().map(String::as_str).collect();
-        Err(format!("{why}\nLog:\n{}", log.join("\n")))
+        Err(format!("{why}\nLog:\n{}", inbox.log_text()))
     }
 }
 
@@ -626,6 +659,26 @@ mod tests {
                 json!({"type": "done", "command": 1, "error": "nope"}),
             ]
         );
+    }
+
+    #[test]
+    fn keeps_the_first_errors_ahead_of_the_shutdown_warnings() {
+        let mut inbox = Inbox::default();
+        inbox.log("2026-10-30T05:36:08.1Z  INFO duskhold: Loaded scenes/main.scn.ron".into());
+        inbox.log("2026-10-30T05:36:08.2Z ERROR bevy_render::error_handler: Caught DeviceLost error: Out of memory".into());
+        inbox.log("thread 'main' panicked at src/main.rs:2:5:".into());
+        inbox.log("the device is gone".into());
+        for _ in 0..100 {
+            inbox.log("2026-10-30T05:36:08.3Z  WARN bevy_ecs::world::command_queue: CommandQueue has un-applied commands being dropped.".into());
+        }
+
+        let log = inbox.log_text();
+        let lines: Vec<&str> = log.lines().collect();
+        assert!(lines[0].contains("DeviceLost"), "{log}");
+        assert_eq!(lines[2], "the device is gone");
+        assert_eq!(lines[3], "[61 lines left out]");
+        assert_eq!(lines.len(), 4 + LOG_LINES);
+        assert!(lines[4].contains("CommandQueue"));
     }
 
     #[test]
