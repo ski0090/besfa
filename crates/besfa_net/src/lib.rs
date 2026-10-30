@@ -4,7 +4,9 @@
 //! it, over [`renet`] and its netcode transport. Each frame a game calls
 //! `update`, reads and sends renet's messages, then calls `send_packets`.
 //! What the two say is the game's own: [`encode`] and [`decode`] put a
-//! message in bytes and back.
+//! message in bytes and back. A game can also start a server from its own
+//! menu, [`Hosted`], and tell friends where to reach it, [`addresses`] and
+//! [`tailnet_peers`].
 
 // ponytail: bevy_renet's update and send systems as methods the game calls
 // from its own systems; switch to bevy_renet once it supports this Bevy
@@ -30,17 +32,22 @@ use renet_netcode::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 
+mod host;
+pub use host::{Addresses, Hosted, LeaveWithParent, Peer, addresses, is_tailscale, tailnet_peers};
+
 /// `plugins` with no window and no GPU, ticking `hz` times a second, as a
-/// dedicated server runs.
+/// dedicated server runs; one a game [`Hosted`] stops with that game.
 pub fn headless(plugins: PluginGroupBuilder, hz: f64) -> PluginGroupBuilder {
-    besfa_components::windowless(plugins, hz).set(RenderPlugin {
-        render_creation: WgpuSettings {
-            backends: None,
+    besfa_components::windowless(plugins, hz)
+        .set(RenderPlugin {
+            render_creation: WgpuSettings {
+                backends: None,
+                ..default()
+            }
+            .into(),
             ..default()
-        }
-        .into(),
-        ..default()
-    })
+        })
+        .add(LeaveWithParent)
 }
 
 /// `message` as bytes to send.
