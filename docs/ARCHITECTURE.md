@@ -52,3 +52,34 @@ flowchart LR
 ```
 
 이 경로는 게임 IPC와 별도다. D3D 핸들 전달과 동기화는 뷰포트 전용 계약으로 다룬다. 리사이즈만 예외로, 에디터가 새 크기의 텍스처를 만들어 그 이름을 `viewport` 명령으로 보내면 게임이 새 텍스처를 열어 카메라들을 옮긴다.
+
+## 서버와 클라이언트로 Play
+
+도구 막대의 Play 방식 목록에서 `Server + N clients`를 고르면, Play는 게임을 데디케이트 서버 하나와 그 서버에 들어가는 클라이언트 N개로 띄운다(Unreal의 PIE 넷 모드). 서버로 뜰지 클라이언트로 뜰지는 게임이 시작할 때 정하므로, 에디터는 저장하지 않은 씬을 먼저 저장하고 편집 세션을 끈 뒤, 모두를 편집 세션과 같은 `cargo run --features …`로 띄운다. 실행 파일이 하나이므로 코드가 바뀌었으면 처음 뜬 cargo가 한 번 빌드하고 나머지는 빌드 디렉터리 잠금을 기다렸다가 같은 파일을 실행한다. 첫 번째 클라이언트는 편집 세션처럼 `BESFA_EDIT_MODE`와 뷰포트를 받고 바로 `play`한다. 서버와 두 번째부터의 클라이언트는 편집 상태가 아니며(서버는 창 없이, 클라이언트는 각자 창으로 뜬다), 출력은 `[server]`, `[client 2]`를 줄 앞에 붙여 로그 패널에 보인다. Stop은 모두를 끄고, 모두 끝난 뒤에 편집 세션을 다시 띄운다. 뷰포트의 클라이언트가 스스로 끝나면 나머지도 끈다. 서버나 창 클라이언트가 끝나면 로그에만 남긴다. 강제로 끄므로 서버는 끝나기 전에 저장할 기회가 없다.
+
+에디터가 게임에 알리는 것은 환경 변수 세 개다. 게임은 시작할 때 이것을 읽어 자기 서버·클라이언트 설정으로 바꾼다. 읽지 않는 게임은 서버 자리에도 보통 게임이 하나 더 뜬다.
+
+| 환경 변수 | 값 |
+| --- | --- |
+| `BESFA_NET` | `serve`: 창과 GPU 없는 데디케이트 서버(`besfa_net::headless`)로 뜬다. `join`: 서버에 들어가는 클라이언트로 뜬다. 없으면 혼자 하는 게임이다 |
+| `BESFA_NET_PORT` | `serve`는 이 UDP 포트에서 받고, `join`은 `127.0.0.1`의 이 포트로 들어간다. 에디터는 Play마다 비어 있는 포트를 고르므로 따로 켜 둔 서버와 겹치지 않는다 |
+| `BESFA_NET_CLIENT` | `join`에만 붙는 1부터의 번호다. 1이 뷰포트의 게임이다. 한 Play 안의 플레이어를 구별하므로, 같은 이름을 받지 않는 게임은 이 번호로 이름을 짓는다 |
+
+`besfa_net::Client`는 서버를 15초 동안 다시 찾으므로, 클라이언트가 먼저 떠도 서버가 그 안에 열리면 들어간다. 게임 쪽은 이렇게 받는다(duskhold의 `src/main.rs`가 같은 일을 한다).
+
+```rust
+match std::env::var("BESFA_NET").as_deref() {
+    Ok("serve") => {
+        let port: u16 = std::env::var("BESFA_NET_PORT")?.parse()?;
+        app.add_plugins(besfa_net::headless(default_plugins(), 30.0));
+        // Server::listen(port, PROTOCOL, max_clients) once the scene is ready.
+    }
+    Ok("join") => {
+        let port: u16 = std::env::var("BESFA_NET_PORT")?.parse()?;
+        let player = std::env::var("BESFA_NET_CLIENT")?;
+        app.add_plugins(default_plugins());
+        // Client::connect(([127, 0, 0, 1], port).into(), PROTOCOL), as `player`.
+    }
+    _ => { app.add_plugins(default_plugins()); }
+}
+```
