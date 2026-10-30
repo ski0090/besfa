@@ -107,7 +107,21 @@ besfa/
 | `besfa_protocol` | 에디터와 실행 중 게임 사이의 메시지 타입 |
 | `besfa_viewport_windows` | Bevy 렌더 타깃과 에디터 뷰포트의 GPU 연결 |
 
+## 테스트
+
+```bash
+cargo test
+```
+
+사용 설명서의 에디터 스크린샷은 테스트로 그린다. UI를 바꾼 뒤에는 다시 찍는다(`docs/images`에 쓴다).
+
+```bash
+cargo test -p besfa_editor manual_screenshots -- --ignored
+```
+
 ## 설계 문서
+
+에디터 쓰는 법은 [사용 설명서](./manual/README.md)에 있다.
 
 - [아키텍처](./ARCHITECTURE.md)
 - [Editor UI](./EDITOR_UI.md)

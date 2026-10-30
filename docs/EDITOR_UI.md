@@ -1,5 +1,7 @@
 # Editor UI
 
+> 에디터를 쓰는 사람을 위한 설명은 [사용 설명서](./manual/README.md)에 있다. 이 문서는 에디터의 동작과 구현을 개발자용으로 적는다. 동작을 바꾸면 두 문서를 함께 고친다.
+
 `crates/besfa_editor`는 Besfa의 egui 기반 데스크톱 에디터다. `cargo run -p besfa_editor`로 실행한다.
 
 이 crate는 UI 표시, 사용자 입력, 에디터 상태 표현을 담당한다. Bevy 게임 실행, 프로젝트 파일 생성, 씬 데이터 해석은 게임의 `besfa_editor_plugin`과 `besfa` CLI가 맡는다. 그래서 에디터는 Bevy에 의존하지 않는다.

@@ -1,0 +1,82 @@
+[← 사용 설명서 목차](README.md)
+
+# 업데이트
+
+Besfa는 두 부분을 따로 업데이트합니다.
+
+- **에디터와 CLI**: 내 컴퓨터에 설치한 에디터와 `besfa` 명령
+- **게임의 플러그인**: 각 게임 프로젝트가 쓰는 `besfa_editor_plugin`(과 `besfa_components`)
+
+목차:
+
+- [에디터와 CLI 업데이트](#에디터와-cli-업데이트)
+- [게임의 플러그인 업데이트](#게임의-플러그인-업데이트)
+- [릴리스 빌드에는 에디터가 들어가지 않습니다](#릴리스-빌드에는-에디터가-들어가지-않습니다)
+
+## 에디터와 CLI 업데이트
+
+에디터 소스 폴더(`besfa`)에서:
+
+```bash
+git pull
+```
+
+```bash
+cargo install --path crates/besfa_cli
+```
+
+그다음 에디터를 다시 시작합니다.
+
+```bash
+cargo run -p besfa_editor
+```
+
+- CLI 재설치(`cargo install`)는 `crates/besfa_cli`가 바뀌었을 때 필요합니다. 잘 모르겠으면 매번 해도 됩니다.
+- 에디터는 시작할 때 [Bevy 미리 빌드](01-getting-started.md#bevy-미리-빌드)를 GitHub에 있는 최신 플러그인으로 맞춥니다. 툴바에 진행 상황이 나오고, **Bevy is ready**가 뜰 때까지 **Play**는 기다립니다.
+
+## 게임의 플러그인 업데이트
+
+게임 프로젝트는 플러그인을 GitHub에서 받고, `Cargo.lock`이 그중 한 커밋에 고정합니다. 그래서 직접 업데이트하기 전까지는 같은 플러그인을 계속 씁니다.
+
+에디터 툴바 오른쪽, **Bevy is ready** 왼쪽에 따로 떨어진 아이콘이 이 프로젝트의 플러그인 커밋을 Bevy 미리 빌드의 커밋과 비교해 보여 줍니다(**Bevy is ready** 글자 바로 앞의 ✔는 미리 빌드 상태라 다른 것입니다).
+
+| 아이콘 | 뜻 |
+| --- | --- |
+| 초록 ✔ | 같은 커밋입니다. 그대로 쓰면 됩니다. |
+| 노란 ⚠ | 다른 커밋이거나, 에디터와 대화하는 방식(프로토콜)이 다릅니다. 마우스를 올리면 이유와 누르면 무엇을 하는지 나옵니다. |
+
+![툴바의 노란 경고 아이콘과 툴팁](../images/plugin-update-available.png)
+
+**아이콘을 누르면 업데이트합니다.**
+
+1. 에디터가 프로젝트에서 `cargo update -p besfa_editor_plugin`을 실행합니다. 같은 저장소의 `besfa_components`도 함께 올라가고, 다른 의존성은 건드리지 않습니다.
+2. 게임을 멈추고 새 플러그인으로 다시 빌드합니다.
+3. cargo의 출력이 **Log**에 나오고(`Process exited with code 1.`은 이전 게임을 멈춘 기록입니다), 아이콘이 초록으로 바뀝니다.
+
+![업데이트 뒤의 초록 아이콘과 Log의 cargo 출력](../images/plugin-updated.png)
+
+에디터 없이 하려면 프로젝트 폴더에서 같은 명령을 실행하세요.
+
+```bash
+cargo update -p besfa_editor_plugin
+```
+
+알아 둘 것:
+
+- 아직 `Cargo.lock`이 없거나 플러그인을 로컬 경로로 쓰는 프로젝트에는 아이콘이 나오지 않습니다.
+- 아이콘은 "어느 쪽이 더 새것인지"는 구분하지 않고 다른지만 봅니다.
+- 플러그인 변경은 GitHub의 `main`에 올라가야 게임에 반영됩니다. 플러그인을 직접 고쳐 올렸다면, 에디터를 다시 시작해 미리 빌드를 새 커밋으로 올린 뒤 각 프로젝트에서 아이콘을 누르세요.
+- 설명서에서 "플러그인이 오래됐다"고 하는 메뉴나 기능이 안 보일 때도 이 아이콘을 누르면 됩니다.
+- [Claude Code](14-claude-code.md)가 쓰는 `besfa mcp`는 CLI를 설치할 때 알던 명령만 받고, 모르는 명령은 거절합니다. 플러그인을 업데이트해 새 명령이 생겼다면 CLI도 다시 설치하세요(`cargo install --path crates/besfa_cli`).
+
+## 릴리스 빌드에는 에디터가 들어가지 않습니다
+
+`besfa new`로 만든 게임은 에디터 플러그인을 `besfa_editor` 기능(feature)을 켰을 때만 넣고, 에디터는 게임을 그 기능으로 실행합니다. 그래서 배포용으로 빌드하면 에디터 없이 게임에 필요한 `besfa_components`만 들어갑니다.
+
+```bash
+cargo build --release
+```
+
+---
+
+다음: [Claude Code로 다루기](14-claude-code.md)

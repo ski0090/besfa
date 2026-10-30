@@ -41,7 +41,7 @@ impl Project {
 
 /// Recently opened projects, newest first, stored as a JSON list of paths.
 pub struct RecentProjects {
-    file: PathBuf,
+    pub(crate) file: PathBuf,
 }
 
 impl RecentProjects {
