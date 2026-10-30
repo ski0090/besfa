@@ -3,11 +3,14 @@
 //! playing. Stop ends play by relaunching the game in edit mode, which
 //! resets the scene and picks up code changes. In both states the game
 //! reports its entities, which the hierarchy and inspector panels show and
-//! change through commands on its stdin, one JSON object per line.
+//! change through commands on its stdin, one JSON object per line. A net
+//! Play runs the game as a dedicated server and as the clients joined to it
+//! instead; see docs/ARCHITECTURE.md.
 
 use std::{
     collections::VecDeque,
     fs,
+    net::{Ipv4Addr, UdpSocket},
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime},
 };
@@ -58,6 +61,10 @@ const SNAP_FILE: &str = "besfa/snap.besfa";
 /// The log keeps the latest lines.
 const MAX_LOG_LINES: usize = 2000;
 
+/// The most clients a net Play starts: as many players as a duskhold world
+/// takes.
+const MAX_CLIENTS: usize = 4;
+
 /// The viewport texture's size until the panel has been laid out.
 const DEFAULT_VIEWPORT: [u32; 2] = [1280, 720];
 
@@ -78,6 +85,8 @@ const TOOLS: [(Tool, &str, &str, Key); 3] = [
 #[derive(Clone, Copy)]
 enum AfterSave {
     Rebuild,
+    /// A net Play, whose server and clients read the scene file.
+    Play,
     Leave,
     Close,
 }
@@ -144,8 +153,15 @@ pub struct Editor {
     starting: bool,
     /// The game was told to play; otherwise it sits paused in edit mode.
     playing: bool,
-    /// Launch an edit session once the game exits.
-    relaunch: bool,
+    /// Clients a Play starts joined to a dedicated server, the game in the
+    /// viewport first; none plays the game alone.
+    net_clients: usize,
+    /// A net Play's dedicated server and clients in windows, with what
+    /// their log lines start with.
+    net: Vec<(String, CliProcess)>,
+    /// Launch a game, playing or not, once the game and the net Play's
+    /// processes have exited.
+    relaunch: Option<bool>,
     /// The prebuild holds the shared build directory; the edit session
     /// starts once it is done.
     waiting_for_prebuild: bool,
@@ -206,7 +222,9 @@ impl Editor {
             ghost: None,
             starting: false,
             playing: false,
-            relaunch: false,
+            net_clients: 0,
+            net: Vec::new(),
+            relaunch: None,
             waiting_for_prebuild: prebuild.running(),
             plugin_revision: None,
             latest_plugin_revision: None,
@@ -237,8 +255,7 @@ impl Editor {
     /// Shows the editor; true once it should go back to the hub.
     pub fn ui(&mut self, ui: &mut Ui, prebuild: &Prebuild) -> bool {
         let ctx = ui.ctx().clone();
-        self.poll_game(&ctx);
-        self.poll_update(&ctx);
+        self.poll_processes(&ctx);
         if self.waiting_for_prebuild && !prebuild.running() {
             self.waiting_for_prebuild = false;
             // The prebuild moved its lock to the latest plugin.
@@ -366,6 +383,15 @@ impl Editor {
         std::mem::take(&mut self.leave)
     }
 
+    /// Takes in what the game, the net Play and the plugin update said, and
+    /// launches the next game once the last one is gone.
+    fn poll_processes(&mut self, ctx: &egui::Context) {
+        self.poll_game(ctx);
+        self.poll_net();
+        self.relaunch_when_exited(ctx);
+        self.poll_update(ctx);
+    }
+
     /// Reports from the game go to the scene, everything else to the log.
     fn poll_game(&mut self, ctx: &egui::Context) {
         let Some(game) = &self.game else {
@@ -381,11 +407,48 @@ impl Editor {
                     self.log(format!("Process exited with code {code}."));
                     self.game = None;
                     self.playing = false;
-                    if std::mem::take(&mut self.relaunch) {
-                        self.launch(false, ctx);
-                    }
+                    // A net Play ends with the game in the viewport.
+                    self.stop_net();
                 }
             }
+        }
+    }
+
+    /// The net Play's lines go to the log, each marked with its process.
+    fn poll_net(&mut self) {
+        let mut lines = Vec::new();
+        self.net.retain(|(label, process)| {
+            let mut running = true;
+            for output in process.poll() {
+                lines.push(match output {
+                    Output::Line(line) => format!("[{label}] {line}"),
+                    Output::Exit(code) => {
+                        running = false;
+                        format!("[{label}] Process exited with code {code}.")
+                    }
+                });
+            }
+            running
+        });
+        for line in lines {
+            self.log(line);
+        }
+    }
+
+    /// Launches the game `relaunch` asks for once the last game and its net
+    /// Play have exited.
+    fn relaunch_when_exited(&mut self, ctx: &egui::Context) {
+        if self.game.is_none()
+            && self.net.is_empty()
+            && let Some(play) = self.relaunch.take()
+        {
+            self.launch(play, ctx);
+        }
+    }
+
+    fn stop_net(&self) {
+        for (_, process) in &self.net {
+            process.stop();
         }
     }
 
@@ -442,6 +505,17 @@ impl Editor {
         self.assets.forget_asked();
         let shared = self.viewport.as_ref().zip(self.render.as_ref());
         let shared = shared.map(|(viewport, render)| (viewport.name.clone(), adapter_name(render)));
+        // A net Play's server listens on a port free now, apart from any
+        // server started outside the editor.
+        let mut port = None;
+        if play && self.net_clients > 0 {
+            match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).and_then(|s| s.local_addr()) {
+                Ok(address) => port = Some(address.port().to_string()),
+                Err(error) => self.log(format!(
+                    "Could not find a free port for the server: {error}"
+                )),
+            }
+        }
         // Read by besfa_editor_plugin: start paused, play on `play`.
         let mut env = vec![("BESFA_EDIT_MODE", "1")];
         if let Some((name, adapter)) = &shared {
@@ -459,9 +533,32 @@ impl Editor {
         let manifest = fs::read_to_string(self.project.file("Cargo.toml")).unwrap_or_default();
         let features = besfa_protocol::run_features(&manifest);
         let args = ["run", "--features", features.as_str()];
+        // The same build plays every part: the first `cargo run` builds it
+        // while the others wait for the build directory.
+        if let Some(port) = &port {
+            let server = [("BESFA_NET", "serve"), ("BESFA_NET_PORT", port)];
+            self.start_net("server".into(), &args, &server, ctx);
+            env.extend([
+                ("BESFA_NET", "join"),
+                ("BESFA_NET_PORT", port),
+                ("BESFA_NET_CLIENT", "1"),
+            ]);
+        }
         match CliProcess::start(Path::new(&self.project.path), "cargo", &args, &env, ctx) {
             Ok(game) => self.game = Some(game),
             Err(error) => return self.log(format!("Could not start cargo: {error}")),
+        }
+        // The other clients play in windows of their own.
+        if let Some(port) = &port {
+            for client in 2..=self.net_clients {
+                let number = client.to_string();
+                let join = [
+                    ("BESFA_NET", "join"),
+                    ("BESFA_NET_PORT", port),
+                    ("BESFA_NET_CLIENT", &number),
+                ];
+                self.start_net(format!("client {client}"), &args, &join, ctx);
+            }
         }
         // Sent while cargo still builds, these wait in the pipe for the game.
         if play {
@@ -487,10 +584,33 @@ impl Editor {
         self.playing = play;
     }
 
+    /// Starts one process of a net Play, which `env` tells its part.
+    fn start_net(
+        &mut self,
+        label: String,
+        args: &[&str],
+        env: &[(&str, &str)],
+        ctx: &egui::Context,
+    ) {
+        match CliProcess::start(Path::new(&self.project.path), "cargo", args, env, ctx) {
+            Ok(process) => self.net.push((label, process)),
+            Err(error) => self.log(format!("[{label}] Could not start cargo: {error}")),
+        }
+    }
+
     /// Unsaved changes are saved first: Stop restarts from the file.
     fn play(&mut self, ctx: &egui::Context) {
         self.logs.clear();
         self.input.focus_next = true;
+        if self.net_clients > 0 {
+            // A game picks being a server or a client as it starts, so the
+            // edit session makes way for them, and they read the scene file.
+            if self.game.is_some() && self.scene.dirty {
+                self.starting = true;
+                return self.save_then(AfterSave::Play, ctx);
+            }
+            return self.restart(true, ctx);
+        }
         if self.game.is_none() {
             // The edit session is gone, e.g. it failed to build or crashed.
             return self.launch(true, ctx);
@@ -504,17 +624,17 @@ impl Editor {
         self.playing = true;
     }
 
-    /// Stops the game and starts a new edit session once it has exited: the
-    /// running game locks its executable against the next build.
-    fn restart(&mut self, ctx: &egui::Context) {
-        match &self.game {
-            Some(game) => {
-                self.starting = true;
-                self.relaunch = true;
-                game.stop();
-            }
-            None => self.launch(false, ctx),
+    /// Stops the game and any net Play, and launches the next game, playing
+    /// with `play`, once they have exited: a running game locks its
+    /// executable against the next build.
+    fn restart(&mut self, play: bool, ctx: &egui::Context) {
+        self.starting = true;
+        self.relaunch = Some(play);
+        if let Some(game) = &self.game {
+            game.stop();
         }
+        self.stop_net();
+        self.relaunch_when_exited(ctx);
     }
 
     /// Sends `command` and returns the number the game answers it with.
@@ -742,7 +862,8 @@ impl Editor {
 
     fn after_save(&mut self, then: AfterSave, ctx: &egui::Context) {
         match then {
-            AfterSave::Rebuild => self.restart(ctx),
+            AfterSave::Rebuild => self.restart(false, ctx),
+            AfterSave::Play => self.restart(true, ctx),
             // A failed save keeps the changes unsaved; the log says why.
             AfterSave::Leave => self.leave = !self.scene.dirty,
             AfterSave::Close if !self.scene.dirty => self.close(ctx),
@@ -776,7 +897,7 @@ impl Editor {
             self.starting = true;
             self.save_then(AfterSave::Rebuild, ctx);
         } else {
-            self.restart(ctx);
+            self.restart(false, ctx);
         }
     }
 
@@ -796,7 +917,7 @@ impl Editor {
 
     fn after_update(&mut self, ctx: &egui::Context) {
         self.read_plugin_revisions();
-        self.restart(ctx);
+        self.restart(false, ctx);
     }
 
     fn set_command(id: u64, component: &str, value: Value) -> Command {
@@ -1210,11 +1331,12 @@ impl Editor {
                 let label = if self.playing { "⏹ Stop" } else { "▶ Play" };
                 if ui.add_enabled(!busy, Button::new(label)).clicked() {
                     if self.playing {
-                        self.restart(ctx)
+                        self.restart(false, ctx)
                     } else {
                         self.play(ctx)
                     }
                 }
+                self.play_as(ui, !busy && !self.playing);
                 ui.add_space(12.0);
                 for (tool, icon, tooltip, _) in TOOLS {
                     let button = Button::selectable(self.tool == tool, icon);
@@ -1245,6 +1367,30 @@ impl Editor {
                     self.plugin_status(ui, busy, ctx);
                 });
             });
+        });
+    }
+
+    /// Whether Play runs the game alone, or as a dedicated server and the
+    /// clients joined to it.
+    fn play_as(&mut self, ui: &mut Ui, enabled: bool) {
+        let name = |clients: usize| match clients {
+            0 => "Standalone".to_owned(),
+            1 => "Server + 1 client".to_owned(),
+            n => format!("Server + {n} clients"),
+        };
+        ui.add_enabled_ui(enabled, |ui| {
+            egui::ComboBox::from_id_salt("play_as")
+                .selected_text(name(self.net_clients))
+                .show_ui(ui, |ui| {
+                    for clients in 0..=MAX_CLIENTS {
+                        ui.selectable_value(&mut self.net_clients, clients, name(clients));
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "Play a dedicated server with clients joined to it. The first client \
+                     plays in the viewport; the others open windows.",
+                );
         });
     }
 
@@ -1576,6 +1722,7 @@ impl Drop for Editor {
         for process in self.game.iter().chain(&self.update) {
             process.stop();
         }
+        self.stop_net();
     }
 }
 
@@ -1676,6 +1823,50 @@ mod tests {
                 .unwrap()
                 .contains("Update the editor")
         );
+    }
+
+    #[test]
+    fn a_net_play_ends_with_its_game_and_the_next_game_waits_for_all() {
+        let dir = std::env::temp_dir().join(format!("besfa_net_play_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
+        let mut editor = Editor::new(Project::new(dir.to_string_lossy()), None, &waiting, &ctx);
+        let start = |command: &str| CliProcess::start(&dir, "cmd", &["/c", command], &[], &ctx);
+        let long = "ping -n 60 127.0.0.1 > nul";
+        let server_exits = |editor: &Editor| {
+            let exited = |line: &&String| line.starts_with("[server] Process exited");
+            editor.logs.iter().filter(exited).count()
+        };
+        // Polls as each frame does until `done`; taskkill takes seconds.
+        let poll_until = |editor: &mut Editor, done: &dyn Fn(&Editor) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !done(editor) {
+                assert!(Instant::now() < deadline, "{:?}", editor.logs);
+                editor.poll_processes(&ctx);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+
+        // The game in the viewport ends on its own: the server goes too, and
+        // nothing launches.
+        editor.game = Some(start("exit 3").unwrap());
+        editor.net = vec![("server".into(), start(long).unwrap())];
+        poll_until(&mut editor, &|editor| editor.net.is_empty());
+        assert_eq!(server_exits(&editor), 1);
+        assert!(editor.game.is_none());
+
+        // After Stop the edit session launches once the server has exited
+        // too, which outlives the game here.
+        editor.game = Some(start("exit 3").unwrap());
+        editor.net = vec![("server".into(), start(long).unwrap())];
+        editor.playing = true;
+        editor.relaunch = Some(false);
+        poll_until(&mut editor, &|editor| editor.relaunch.is_none());
+        assert_eq!(server_exits(&editor), 2, "{:?}", editor.logs);
+        assert!(editor.game.is_some() && !editor.playing);
+        drop(editor);
+        let _ = fs::remove_dir_all(dir);
     }
 
     /// The editor and what the README shows of it, for the screenshots.
