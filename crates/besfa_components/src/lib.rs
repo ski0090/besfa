@@ -1,10 +1,9 @@
 //! The components a Besfa game ships with, and the plugins that make them
 //! work: the scene file, changes to placed models' parts, terrain and the
 //! foliage on it, the sky and its lens flare, animation state machines and
-//! offsets over their poses, gaits for models with no walking clip,
-//! inventories and equipment, health, world saves, UI kept over places
-//! in the world, and the editor's markers for what it cannot show
-//! otherwise.
+//! offsets over their poses, gaits for models with no walking clip, world
+//! saves, UI kept over places in the world, and the editor's markers for
+//! what it cannot show otherwise.
 //!
 //! Games use [`default_plugins`] in place of `DefaultPlugins`, or
 //! `besfa_editor_plugin::default_plugins` while the Besfa editor runs them,
@@ -20,8 +19,6 @@ pub mod animation;
 pub mod foliage;
 pub mod ground;
 pub mod headless;
-pub mod health;
-pub mod inventory;
 pub mod lens_flare;
 pub mod marker;
 pub mod part_changes;
@@ -41,8 +38,6 @@ pub use animation::{
 pub use foliage::{Foliage, FoliagePlugin};
 pub use ground::{ScatterGroup, Scattered};
 pub use headless::windowless;
-pub use health::{Damage, Died, Health, HealthPlugin};
-pub use inventory::{EquipSlot, Equipment, Inventory, ItemStack};
 pub use marker::{Marker, MarkerIcon};
 pub use part_changes::{PartChange, PartChanges};
 pub use pose::{GAIT, Gait, PoseOffset, PoseOffsets, PosePlugin, Swing};
@@ -67,7 +62,6 @@ pub fn default_plugins() -> PluginGroupBuilder {
         .add(sky::SkyPlugin)
         .add(lens_flare::LensFlarePlugin)
         .add(animation::AnimationStateMachinePlugin)
-        .add(health::HealthPlugin)
         .add(pose::PosePlugin)
         .add(world_label::WorldLabelPlugin)
 }
@@ -104,13 +98,8 @@ mod tests {
             (PartChanges::type_path(), "part_changes::PartChanges"),
             (Scattered::type_path(), "ground::Scattered"),
             (ScatterGroup::type_path(), "ground::ScatterGroup"),
-            (Inventory::type_path(), "inventory::Inventory"),
-            (Health::type_path(), "health::Health"),
             (Marker::type_path(), "marker::Marker"),
             (Persist::type_path(), "save::Persist"),
-            (ItemStack::type_path(), "inventory::ItemStack"),
-            (Equipment::type_path(), "inventory::Equipment"),
-            (EquipSlot::type_path(), "inventory::EquipSlot"),
             (
                 AnimationStateMachine::type_path(),
                 "animation::AnimationStateMachine",
