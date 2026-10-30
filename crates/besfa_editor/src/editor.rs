@@ -37,7 +37,7 @@ use crate::{
     scatter::ScatterTools,
     scene::{Edit, EditHistory, Scene},
     terrain::TERRAIN,
-    viewport::{ViewportInput, ViewportTexture, adapter_name},
+    viewport::{ViewportInput, ViewportTexture, adapter_name, path_with_dxc},
 };
 
 /// The protocol whose plugins make and sculpt terrain from the editor.
@@ -442,6 +442,7 @@ impl Editor {
         self.assets.forget_asked();
         let shared = self.viewport.as_ref().zip(self.render.as_ref());
         let shared = shared.map(|(viewport, render)| (viewport.name.clone(), adapter_name(render)));
+        let path = shared.as_ref().and_then(|_| path_with_dxc());
         // Read by besfa_editor_plugin: start paused, play on `play`.
         let mut env = vec![("BESFA_EDIT_MODE", "1")];
         if let Some((name, adapter)) = &shared {
@@ -452,6 +453,14 @@ impl Editor {
                 ("WGPU_BACKEND", "dx12"),
                 ("WGPU_ADAPTER_NAME", adapter),
             ]);
+            match &path {
+                // DXC, or FXC should it fail to load.
+                Some(path) => env.extend([("WGPU_DX12_COMPILER", "auto"), ("PATH", path.as_str())]),
+                None => self.log(
+                    "No Windows SDK DXC found: the game compiles its shaders with FXC, \
+                     which can draw much slower.",
+                ),
+            }
         }
         // Dynamic linking makes rebuilds after a code change much faster, and
         // the editor feature brings in the plugin; a plain `cargo build`

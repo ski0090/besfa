@@ -8,7 +8,7 @@
 //! samples gamma-encoded bytes, so each frame is copied into a plain BGRA
 //! texture that egui shows.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, path::Path, sync::Arc};
 
 use besfa_protocol::{Button, Command, PointerEvent};
 use eframe::{
@@ -112,6 +112,28 @@ impl Drop for ViewportTexture {
 /// the shared texture.
 pub fn adapter_name(render: &RenderState) -> String {
     render.adapter.get_info().name
+}
+
+/// `PATH` with the newest Windows SDK's DXC first, for the game's
+/// `WGPU_DX12_COMPILER=auto` to find. Otherwise Bevy compiles the game's
+/// shaders for DX12 with FXC, whose shaders drew duskhold's main pass in
+/// ~1.2 s a frame on an Intel Arc iGPU against ~10 ms with DXC. None
+/// without the SDK's DXC.
+pub fn path_with_dxc() -> Option<String> {
+    // ponytail: only the SDK's default folder; read KitsRoot10 from the
+    // registry if one installed elsewhere shows up.
+    let bin = Path::new(&std::env::var_os("ProgramFiles(x86)")?).join(r"Windows Kits\10\bin");
+    let dxc = std::fs::read_dir(bin)
+        .ok()?
+        .filter_map(|version| Some(version.ok()?.path().join("x64")))
+        // DXC signs shaders with the dxil.dll beside it.
+        .filter(|dir| dir.join("dxcompiler.dll").is_file() && dir.join("dxil.dll").is_file())
+        .max()?;
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::join_paths(std::iter::once(dxc).chain(std::env::split_paths(&path)))
+        .ok()?
+        .into_string()
+        .ok()
 }
 
 /// Pixels one wheel notch scrolls, which the game zooms by.
