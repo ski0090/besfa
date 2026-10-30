@@ -33,7 +33,7 @@ use renet_netcode::{
 use serde::{Serialize, de::DeserializeOwned};
 
 mod host;
-pub use host::{Addresses, Hosted, LeaveWithParent, Peer, addresses, is_tailscale, tailnet_peers};
+pub use host::{Addresses, Hosted, LeaveWithParent, Peer, addresses, tailnet_peers};
 
 /// `plugins` with no window and no GPU, ticking `hz` times a second, as a
 /// dedicated server runs; one a game [`Hosted`] stops with that game.

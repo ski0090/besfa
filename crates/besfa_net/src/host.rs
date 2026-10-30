@@ -148,7 +148,8 @@ pub struct Addresses {
 }
 
 /// This computer's addresses, by which way out it takes to the internet
-/// and to Tailscale. Nothing is sent.
+/// and to Tailscale. Nothing is sent. With a Tailscale exit node on, the
+/// way to the internet goes by Tailscale too, and `lan` is none.
 pub fn addresses() -> Addresses {
     Addresses {
         lan: way_to(Ipv4Addr::new(8, 8, 8, 8)).filter(|ip| !is_tailscale(*ip)),
@@ -167,7 +168,7 @@ fn way_to(to: Ipv4Addr) -> Option<IpAddr> {
 
 /// Whether `ip` is in 100.64.0.0/10, the shared space Tailscale gives its
 /// computers their addresses from.
-pub fn is_tailscale(ip: IpAddr) -> bool {
+fn is_tailscale(ip: IpAddr) -> bool {
     matches!(ip, IpAddr::V4(ip) if ip.octets()[0] == 100 && ip.octets()[1] & 0xc0 == 64)
 }
 

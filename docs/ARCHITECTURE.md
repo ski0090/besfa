@@ -90,7 +90,7 @@ match std::env::var("BESFA_NET").as_deref() {
 
 서버는 그 게임이 끝나면 함께 끝난다. `Hosted`는 서버의 stdin을 파이프로 쥐고 있고, 게임이 정상으로 끝나든 갑자기 꺼지든 파이프가 닫힌다. `headless()`가 더하는 `LeaveWithParent`는 `Hosted`가 띄운 서버(`BESFA_NET_HOSTED`)에서만 stdin을 끝까지 읽다가, 닫히면 Ctrl+C처럼 `AppExit`를 보내므로 게임의 닫기 길(저장)이 그대로 돈다. 터미널에서 띄운 서버는 건드리지 않는다. `Hosted::ended()`는 서버가 떠 있으면 `None`, 끝났으면 로그의 마지막 ERROR 줄의 메시지(없으면 끝난 상태)를 준다. 포트를 이미 쓰고 있어 열지 못한 경우 등을 게임 화면에 보여 줄 때 쓴다.
 
-친구가 들어올 주소는 `besfa_net::addresses()`가 준다. 인터넷(8.8.8.8)과 Tailscale의 DNS(100.100.100.100)로 가는 길에 UDP 소켓을 이어(보내는 것은 없다) 이 컴퓨터의 주소를 읽고, 같은 공유기 안의 주소(`lan`)와 Tailscale 주소(`tailscale`, 100.64.0.0/10)로 나눈다. Tailscale이 꺼져 있으면 `tailscale`은 `None`이다. `besfa_net::tailnet_peers()`는 `tailscale status --json`으로 같은 Tailscale 네트워크에서 지금 켜져 있는 다른 컴퓨터의 이름과 IPv4 주소를 준다(Tailscale이 없으면 빈 목록). Tailscale은 사용자가 설치한 것을 쓰고, 게임 안에 넣지 않는다. Tailscale이 두 컴퓨터를 바로 이어 주므로 공유기 포트를 열거나 게임용 서버를 빌리지 않아도 된다.
+친구가 들어올 주소는 `besfa_net::addresses()`가 준다. 인터넷(8.8.8.8)과 Tailscale의 DNS(100.100.100.100)로 가는 길에 UDP 소켓을 이어(보내는 것은 없다) 이 컴퓨터의 주소를 읽고, 같은 공유기 안의 주소(`lan`)와 Tailscale 주소(`tailscale`, 100.64.0.0/10)로 나눈다. Tailscale이 꺼져 있으면 `tailscale`은 `None`이다. `besfa_net::tailnet_peers()`는 `tailscale status --json`으로 같은 Tailscale 네트워크에서 지금 켜져 있는 다른 컴퓨터의 이름과 IPv4 주소를 준다(Tailscale이 없으면 빈 목록). Tailscale은 사용자가 설치한 것을 쓰고, 게임 안에 넣지 않는다. Tailscale이 두 컴퓨터를 이어 주므로 공유기 포트를 열거나 게임용 서버를 빌리지 않아도 된다. 다만 로그인과 연결 조정은 Tailscale의 서버가 하고, 두 컴퓨터가 바로 잇지 못하면(양쪽 모두 까다로운 NAT 등) Tailscale의 중계(DERP)를 거쳐 느려질 수 있다. 이 컴퓨터가 Tailscale exit node를 쓰면 인터넷으로 가는 길도 Tailscale이라 `lan`은 `None`이다.
 
 ```rust
 let args = ["--server", "세계", "--port", "5000"].map(String::from);
