@@ -18,6 +18,7 @@ Besfa를 설치하고, 에디터를 켜고, 첫 프로젝트를 만들어 여는
 
 - **Windows**. 에디터는 Windows에서만 돌아갑니다(DirectX 12로 그립니다).
 - **Rust**. [rustup.rs](https://rustup.rs/)에서 설치합니다. 설치한 뒤 터미널에서 `cargo --version`이 버전을 출력하면 됩니다.
+- **Visual Studio C++ 빌드 도구와 Windows SDK**. Windows의 Rust는 이것이 있어야 컴파일됩니다. rustup 설치 프로그램이 없으면 설치하라고 안내합니다. Windows SDK가 있으면 게임의 셰이더도 빠르게 컴파일됩니다([게임 화면이 느려요](16-troubleshooting.md#게임-화면이-느려요)).
 - **Git**. 에디터 소스를 받을 때 씁니다.
 
 ## 설치
@@ -61,6 +62,8 @@ cargo run -p besfa_editor
 ```
 
 처음에는 에디터를 컴파일하느라 몇 분 걸립니다. 다음부터는 금방 뜹니다.
+
+아직 바탕화면 아이콘 같은 바로가기는 없습니다. 에디터를 켤 때마다 `besfa` 폴더에서 이 명령을 실행하세요.
 
 > CLI를 설치하기 전에 에디터를 켜 두었다면, 에디터를 껐다가 다시 켜세요. 그래야 에디터가 새로 설치된 `besfa`를 찾습니다.
 
@@ -127,7 +130,7 @@ besfa new C:\Projects\my_game
 - 프로젝트 이름이나 경로를 누르면 엽니다.
 - 오른쪽 **🗁**(Show in Explorer): 탐색기에서 프로젝트 폴더를 엽니다.
 - 오른쪽 **🗑**(Delete project): 확인 창(**Delete '<이름>'?**)이 뜨고, **Delete**를 누르면 프로젝트 폴더를 **휴지통**으로 옮기고 목록에서 뺍니다. 휴지통에서 되살릴 수 있습니다.
-- 폴더가 지워졌거나 `Cargo.toml`이 없어진 프로젝트는 누르면 목록에서만 빠집니다. 이때 폴더는 건드리지 않습니다.
+- 폴더가 지워졌거나 `Cargo.toml`이 없어진 프로젝트는 누르면 목록에서만 빠지고, 허브 아래에 `'<경로>' is no longer a Cargo project and was removed.`가 잠깐 나옵니다. 이때 폴더는 건드리지 않습니다.
 
 목록은 `%APPDATA%\Besfa\recent_projects.json`에 저장됩니다.
 
@@ -138,6 +141,7 @@ besfa new C:\Projects\my_game
 | 경로 | 무엇 |
 | --- | --- |
 | `Cargo.toml` | Rust 프로젝트 설정. Besfa 크레이트를 GitHub에서 받아 씁니다. |
+| `Cargo.lock` | 의존성 버전 고정. 게임이 쓰는 플러그인 버전도 여기 고정됩니다([업데이트](13-updating.md#게임의-플러그인-업데이트)). 지우지 마세요. |
 | `src/main.rs` | 게임 코드. 에디터가 열려 있을 때 고치면 [저절로 다시 빌드](05-play-and-save.md#코드를-고치면-다시-빌드)됩니다. |
 | `assets/scenes/main.scn.ron` | 씬 파일. 에디터의 **Save scene**이 여기에 씁니다. |
 | `assets/` | 모델, 프리팹 같은 에셋을 넣는 폴더. [에셋과 프리팹](07-assets-prefabs.md) 참고. |

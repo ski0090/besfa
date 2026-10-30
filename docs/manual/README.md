@@ -14,7 +14,7 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 4. [씬 뷰 조작](04-scene-view.md): 카메라를 움직이고, 물건을 골라 옮깁니다.
 5. [실행과 저장](05-play-and-save.md): 게임을 실행해 보고, 고친 씬을 저장합니다.
 
-여기까지 읽으면 에디터의 기본은 모두 쓸 수 있습니다.
+여기까지 읽으면 에디터의 기본은 모두 쓸 수 있습니다. Bevy나 게임 에디터가 처음이라면 아래 [용어](#용어)를 먼저 훑어보세요.
 
 ## 주제별 목차
 
@@ -49,8 +49,8 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 | 툴바 **Standalone** 목록 | [서버와 클라이언트로 실행](05-play-and-save.md#서버와-클라이언트로-실행) |
 | 툴바 이동·회전·크기 버튼, **#**, **Grid** | [씬 뷰 조작 - 핸들](04-scene-view.md#이동회전크기-핸들) |
 | 툴바 🌲 버튼 | [흩뿌리기](10-scatter.md) |
-| 툴바 오른쪽 끝 ✔/⚠ 아이콘 | [업데이트 - 게임의 플러그인](13-updating.md#게임의-플러그인-업데이트) |
-| 툴바 오른쪽 끝 **Bevy is ready** | [설치와 시작 - Bevy 미리 빌드](01-getting-started.md#bevy-미리-빌드) |
+| 툴바 오른쪽, **Bevy is ready** 왼쪽에 따로 떨어진 ✔/⚠ 아이콘(누를 수 있음) | [업데이트 - 게임의 플러그인](13-updating.md#게임의-플러그인-업데이트) |
+| 툴바 맨 오른쪽 끝 **✔ Bevy is ready** | [설치와 시작 - Bevy 미리 빌드](01-getting-started.md#bevy-미리-빌드) |
 | 왼쪽 **Hierarchy** 패널 | [엔티티와 Inspector](03-hierarchy-inspector.md#hierarchy-패널) |
 | 오른쪽 **Inspector** 탭 | [엔티티와 Inspector](03-hierarchy-inspector.md#inspector-패널) |
 | 오른쪽 **Scatter** 탭 | [흩뿌리기](10-scatter.md) |
@@ -72,11 +72,15 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 | 컴포넌트 | 엔티티에 붙은 데이터 한 덩어리. 위치는 `Transform`, 보임 여부는 `Visibility`처럼 컴포넌트마다 하는 일이 있습니다. |
 | 시스템 | 게임 코드의 함수. 매 프레임 컴포넌트를 읽고 바꿉니다(예: 큐브를 돌리는 `spin`). |
 | 에셋 | 프로젝트의 `assets` 폴더에 있는 파일. 3D 모델(`.glb`, `.gltf`), 씬과 프리팹(`.scn.ron`) 등. |
+| glTF | 3D 모델 파일 형식. `.glb`(파일 하나)나 `.gltf`(여러 파일)로 저장됩니다. Blender 같은 도구에서 내보냅니다. |
+| 뷰포트 | 에디터 가운데의 게임 화면이 나오는 곳. |
+| 핸들 | 고른 물건에 그려지는 화살표·고리. 마우스로 끌어 물건을 옮기고, 돌리고, 크기를 바꿉니다. |
 | 프리팹 | 여러 엔티티를 묶어 파일로 저장한 것. 씬에 여러 번 놓고, 고치면 놓은 곳 모두에 반영됩니다. |
 | 편집 상태 | 게임이 멈춘 채로 떠 있는 상태. 씬을 고치는 동안은 이 상태입니다. |
 | 실행 상태 | Play를 눌러 게임 시간이 흐르는 상태. 게임을 직접 해 볼 수 있습니다. |
 | 플러그인 | 게임에 들어가 에디터와 대화하는 Rust 크레이트 `besfa_editor_plugin`. 프로젝트마다 버전이 고정됩니다. |
 | Bevy 미리 빌드 | 에디터가 시작할 때 Bevy를 미리 컴파일해 두는 작업. 덕분에 게임은 내 코드만 컴파일합니다. |
+| 데디케이트 서버 | 화면 없이 게임 규칙만 돌리는 멀티플레이 서버. 플레이어(클라이언트)들이 여기에 접속합니다. |
 
 ## 개발자 문서
 
@@ -85,12 +89,4 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 - [프로젝트 개요](../PROJECT_OVERVIEW.md), [아키텍처](../ARCHITECTURE.md), [Editor UI 명세](../EDITOR_UI.md)
 - [에디터 데이터 포맷](../DATA_FORMAT.md), [CLI 계약](../CLI_CONTRACT.md)
 
-## 설명서 스크린샷 다시 찍기
-
-설명서의 에디터 스크린샷은 테스트가 그립니다. UI를 바꾼 뒤에는 저장소 폴더에서 아래 명령으로 다시 찍으세요(`docs/images`에 씁니다).
-
-```bash
-cargo test -p besfa_editor manual_screenshots -- --ignored
-```
-
-테스트는 실제 게임이 보낸 보고(`crates/besfa_editor/screenshot_data`)를 화면에 넣어 그립니다. 뷰포트에는 게임 화면이 그려지지 않으므로 뷰포트를 보여 주는 그림은 없습니다.
+설명서의 스크린샷을 다시 찍는 법은 [프로젝트 개요 - 테스트](../PROJECT_OVERVIEW.md#테스트)에 있습니다.

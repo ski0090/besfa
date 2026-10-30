@@ -12,7 +12,7 @@
 
 ## Scatter 탭
 
-오른쪽 패널의 **Scatter** 탭에 흩뿌릴 물건 목록과 붓 설정이 있습니다. 툴바의 🌲(Scatter) 단추를 켜면 이 탭이 열립니다.
+오른쪽 패널의 **Scatter** 탭에 흩뿌릴 물건 목록과 붓 설정이 있습니다. 툴바의 나무 모양 아이콘 🌲(Scatter) 단추를 켜면 이 탭이 열립니다.
 
 ![Scatter 탭](../images/scatter-tab.png)
 
