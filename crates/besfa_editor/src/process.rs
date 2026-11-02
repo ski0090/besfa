@@ -44,6 +44,13 @@ fn on_path(program: &str) -> PathBuf {
     find_program(program, std::env::split_paths(&paths), own).unwrap_or_else(|| program.into())
 }
 
+/// The first `program` on PATH, for the settings screen to tell whether an
+/// agent's command is installed.
+pub fn find_program_on_path(program: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH").unwrap_or_default();
+    find_program(program, std::env::split_paths(&paths), None)
+}
+
 /// The first `program` in `dirs`, skipping `own` and the folders in it.
 fn find_program(
     program: &str,
