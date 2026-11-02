@@ -69,7 +69,7 @@ impl ScatterTools {
             let mut gone = None;
             for (index, model) in self.models.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                    if ui.small_button("🗙").on_hover_text("Remove").clicked() {
                         gone = Some(index);
                     }
                     ui.add(
@@ -168,7 +168,7 @@ mod tests {
         harness.run();
         harness.get_by_label("oak.glb");
         harness.get_by_label("Paint to place; hold Shift to erase.");
-        harness.get_by_label("✕").click();
+        harness.get_by_label("🗙").click();
         harness.run();
         assert!(harness.state().models.is_empty(), "removed");
     }
