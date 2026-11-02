@@ -27,6 +27,7 @@ VARIABLES
     starting,   \* Editor.starting: a restart is under way; the toolbar is disabled
     updating,   \* Editor.update: `cargo update -p besfa_editor_plugin` runs
     relaunch,   \* Editor.relaunch: "none", or launch "edit"/"play" once the game exited
+    waitRebuild,\* Editor.rebuild_after_save: a rebuild waits for the scene to save
     dialog,     \* Editor.dialog: "none", or Dialog::Unsaved before "Close"/"Leave"
     hasGame,    \* Editor.game.is_some(), until the editor reads the game's exit
     ui,         \* "editor", "closed" (window closed) or "hub" (back to the hub)
@@ -48,7 +49,7 @@ VARIABLES
 
 vars == <<dirty, pending, playing, starting, updating, relaunch, dialog, hasGame, ui,
           toGame, toEditor, game, killed, scene, file, made, waived, cause, lost,
-          nextEdit, restarts>>
+          nextEdit, restarts, waitRebuild>>
 
 Save == [k |-> "save", id |-> 0]
 Reset == [k |-> "reset", id |-> 0]
@@ -62,7 +63,7 @@ Init ==
     /\ updating = FALSE /\ relaunch = "none" /\ dialog = "none" /\ hasGame = TRUE
     /\ ui = "editor" /\ toGame = <<>> /\ toEditor = <<>> /\ game = "edit"
     /\ killed = FALSE /\ scene = {} /\ file = {} /\ made = {} /\ waived = {}
-    /\ cause = "none" /\ lost = {} /\ nextEdit = 1 /\ restarts = 0
+    /\ cause = "none" /\ lost = {} /\ nextEdit = 1 /\ restarts = 0 /\ waitRebuild = FALSE
 
 (* Editor::restart: stop the game (taskkill, which lands later) and launch *)
 (* `mode` once it exited. Leaves the variables it does not set to the      *)
@@ -83,26 +84,48 @@ End(where, why) ==
 (* Editor::save: sends Save while there is an edit session. *)
 SendSave == toGame' = IF hasGame /\ ~playing THEN Append(toGame, Save) ELSE toGame
 
-(* Editor::after_save: what follows a save, with `d` the dirty mark after it. *)
+(* Editor::after_save: what follows a save, with `d` the dirty mark after *)
+(* it. A restart, a Play or a plugin update goes only once the save       *)
+(* cleared the mark. Otherwise the game keeps the changes, and a rebuild  *)
+(* waits for the scene to save.                                           *)
 AfterSave(then, d) ==
-    CASE then = "Rebuild" ->
+    CASE then \in {"Rebuild", "Play", "NetPlay", "Update"} /\ d ->
+            /\ starting' = FALSE
+            /\ waitRebuild' = (waitRebuild \/ then = "Rebuild")
+            /\ UNCHANGED <<updating, relaunch, killed, cause, ui, game, lost, playing, toGame>>
+      [] then = "Rebuild" /\ ~d ->
             /\ Restart("edit", "rebuild")
-            /\ UNCHANGED <<updating, ui, game, lost>>
-      [] then = "Play" ->
+            /\ UNCHANGED <<updating, ui, game, lost, playing, toGame, waitRebuild>>
+      [] then = "NetPlay" /\ ~d ->
             /\ Restart("play", "netplay")
-            /\ UNCHANGED <<updating, ui, game, lost>>
-      \* The plugin update starts only once the save cleared the mark.
+            /\ UNCHANGED <<updating, ui, game, lost, playing, toGame, waitRebuild>>
+      \* Editor::play again, which now plays.
+      [] then = "Play" /\ ~d ->
+            /\ toGame' = Append(toGame, [k |-> "play", id |-> 0])
+            /\ playing' = TRUE
+            /\ starting' = FALSE
+            /\ UNCHANGED <<updating, relaunch, killed, cause, ui, game, lost, waitRebuild>>
       [] then = "Update" /\ ~d ->
             /\ updating' = TRUE
-            /\ UNCHANGED <<starting, relaunch, killed, cause, ui, game, lost>>
-      [] then = "Update" ->
-            /\ starting' = FALSE
-            /\ UNCHANGED <<updating, relaunch, killed, cause, ui, game, lost>>
+            /\ UNCHANGED <<starting, relaunch, killed, cause, ui, game, lost, playing, toGame,
+                           waitRebuild>>
       [] then \in {"Close", "Leave"} /\ ~d ->
             /\ End(IF then = "Close" THEN "closed" ELSE "hub", IF then = "Close" THEN "close" ELSE "leave")
-            /\ UNCHANGED <<starting, updating, relaunch, killed, cause>>
+            /\ UNCHANGED <<starting, updating, relaunch, killed, cause, playing, toGame, waitRebuild>>
       [] OTHER ->
-            UNCHANGED <<starting, updating, relaunch, killed, cause, ui, game, lost>>
+            UNCHANGED <<starting, updating, relaunch, killed, cause, ui, game, lost, playing,
+                        toGame, waitRebuild>>
+
+(* Editor::rebuild past its guards: save first and wait, or restart. *)
+Rebuild ==
+    /\ waitRebuild' = FALSE
+    /\ IF hasGame /\ dirty
+         THEN /\ starting' = TRUE
+              /\ SendSave
+              /\ pending' = "Rebuild"
+              /\ UNCHANGED <<relaunch, killed, cause>>
+         ELSE /\ Restart("edit", "rebuild")
+              /\ UNCHANGED <<toGame, pending>>
 
 -----------------------------------------------------------------------------
 (* What the user does *)
@@ -127,7 +150,7 @@ YouEdit ==
     /\ dirty' = TRUE
     /\ nextEdit' = nextEdit + 1
     /\ UNCHANGED <<pending, playing, starting, updating, relaunch, dialog, hasGame, ui,
-                   toEditor, game, killed, scene, file, waived, cause, lost, restarts>>
+                   toEditor, game, killed, scene, file, waived, cause, lost, restarts, waitRebuild>>
 
 (* A handle drag, terrain stroke or scatter stroke in the scene view: the *)
 (* editor sends the pointer input down the same stdin; the game changes   *)
@@ -141,7 +164,7 @@ YouDragInSceneView ==
     /\ made' = made \cup {nextEdit}
     /\ nextEdit' = nextEdit + 1
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, dialog, hasGame, ui,
-                   toEditor, game, killed, scene, file, waived, cause, lost, restarts>>
+                   toEditor, game, killed, scene, file, waived, cause, lost, restarts, waitRebuild>>
 
 (* Ctrl+S, File > Save scene. *)
 YouSave ==
@@ -149,16 +172,23 @@ YouSave ==
     /\ ui = "editor" /\ dialog = "none" /\ hasGame /\ ~playing
     /\ SendSave
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, dialog, hasGame, ui,
-                   toEditor, game, killed, scene, file, made, waived, cause, lost, nextEdit, restarts>>
+                   toEditor, game, killed, scene, file, made, waived, cause, lost, nextEdit, restarts, waitRebuild>>
 
-(* Toolbar Play, Standalone: Editor::play saves first without waiting, then plays. *)
+(* Toolbar Play, Standalone: Editor::play saves first and plays once the *)
+(* game reports the save.                                                  *)
 YouPressPlay ==
     /\ YouMayAct
     /\ ui = "editor" /\ dialog = "none" /\ ~starting /\ ~playing /\ hasGame
-    /\ toGame' = IF dirty THEN toGame \o <<Save, [k |-> "play", id |-> 0]>> ELSE Append(toGame, [k |-> "play", id |-> 0])
-    /\ playing' = TRUE
-    /\ UNCHANGED <<dirty, pending, starting, updating, relaunch, dialog, hasGame, ui,
-                   toEditor, game, killed, scene, file, made, waived, cause, lost, nextEdit, restarts>>
+    /\ IF dirty
+         THEN /\ starting' = TRUE
+              /\ SendSave
+              /\ pending' = "Play"
+              /\ UNCHANGED playing
+         ELSE /\ toGame' = Append(toGame, [k |-> "play", id |-> 0])
+              /\ playing' = TRUE
+              /\ UNCHANGED <<starting, pending>>
+    /\ UNCHANGED <<dirty, updating, relaunch, dialog, hasGame, ui, toEditor, game, killed,
+                   scene, file, made, waived, cause, lost, nextEdit, restarts, waitRebuild>>
 
 (* Toolbar Play with "Server + N clients": waits for the save, then restarts. *)
 YouPressNetPlay ==
@@ -167,12 +197,12 @@ YouPressNetPlay ==
     /\ IF hasGame /\ dirty
          THEN /\ starting' = TRUE
               /\ SendSave
-              /\ pending' = "Play"
+              /\ pending' = "NetPlay"
               /\ UNCHANGED <<relaunch, killed, cause>>
          ELSE /\ Restart("play", "netplay")
               /\ UNCHANGED <<toGame, pending>>
     /\ UNCHANGED <<dirty, playing, updating, dialog, hasGame, ui, toEditor, game, scene, file,
-                   made, waived, lost, nextEdit, restarts>>
+                   made, waived, lost, nextEdit, restarts, waitRebuild>>
 
 (* Toolbar Stop, Editor::stop: relaunches the game in edit mode from the  *)
 (* file, or, when no new process is needed, sends Reset and clears the     *)
@@ -189,19 +219,13 @@ YouPressStop ==
           /\ toGame' = Append(toGame, Reset)
           /\ UNCHANGED <<starting, relaunch, killed, cause>>
     /\ UNCHANGED <<pending, updating, dialog, hasGame, ui, toEditor, game, scene, file, made,
-                   waived, lost, nextEdit, restarts>>
+                   waived, lost, nextEdit, restarts, waitRebuild>>
 
 (* A file under src/ changed: Editor::rebuild. Not blocked by the dialog. *)
 YouChangeCode ==
     /\ YouMayAct
     /\ ui = "editor" /\ ~playing /\ ~starting
-    /\ IF hasGame /\ dirty
-         THEN /\ starting' = TRUE
-              /\ SendSave
-              /\ pending' = "Rebuild"
-              /\ UNCHANGED <<relaunch, killed, cause>>
-         ELSE /\ Restart("edit", "rebuild")
-              /\ UNCHANGED <<toGame, pending>>
+    /\ Rebuild
     /\ UNCHANGED <<dirty, playing, updating, dialog, hasGame, ui, toEditor, game, scene, file,
                    made, waived, lost, nextEdit, restarts>>
 
@@ -219,14 +243,14 @@ YouClickPluginIcon ==
          ELSE /\ updating' = TRUE
               /\ UNCHANGED <<toGame, pending>>
     /\ UNCHANGED <<dirty, playing, relaunch, dialog, hasGame, ui, toEditor,
-                   game, killed, scene, file, made, waived, cause, lost, nextEdit, restarts>>
+                   game, killed, scene, file, made, waived, cause, lost, nextEdit, restarts, waitRebuild>>
 
 PluginUpdated ==
     /\ updating
     /\ updating' = FALSE
     /\ Restart("edit", "update")
     /\ UNCHANGED <<dirty, pending, playing, dialog, hasGame, ui, toGame, toEditor, game,
-                   scene, file, made, waived, lost, nextEdit, restarts>>
+                   scene, file, made, waived, lost, nextEdit, restarts, waitRebuild>>
 
 (* The window's close button or Alt+F4: asks only while the mark is set. *)
 YouCloseWindow ==
@@ -239,7 +263,7 @@ YouCloseWindow ==
          ELSE /\ End("closed", "close")
               /\ UNCHANGED dialog
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, hasGame, toGame,
-                   toEditor, killed, scene, file, made, waived, cause, nextEdit, restarts>>
+                   toEditor, killed, scene, file, made, waived, cause, nextEdit, restarts, waitRebuild>>
 
 (* File > Back to Project Hub: Editor::request_leave. *)
 YouGoToHub ==
@@ -251,14 +275,14 @@ YouGoToHub ==
          ELSE /\ End("hub", "leave")
               /\ UNCHANGED dialog
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, hasGame, toGame,
-                   toEditor, killed, scene, file, made, waived, cause, nextEdit, restarts>>
+                   toEditor, killed, scene, file, made, waived, cause, nextEdit, restarts, waitRebuild>>
 
 YouCancel ==
     /\ YouMayAct
     /\ ui = "editor" /\ dialog # "none"
     /\ dialog' = "none"
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, hasGame, ui, toGame,
-                   toEditor, game, killed, scene, file, made, waived, cause, lost, nextEdit, restarts>>
+                   toEditor, game, killed, scene, file, made, waived, cause, lost, nextEdit, restarts, waitRebuild>>
 
 YouDiscard ==
     /\ YouMayAct
@@ -268,7 +292,7 @@ YouDiscard ==
     /\ ui' = IF dialog = "Close" THEN "closed" ELSE "hub"
     /\ game' = "down"
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, hasGame, toGame,
-                   toEditor, killed, scene, file, made, cause, lost, nextEdit, restarts>>
+                   toEditor, killed, scene, file, made, cause, lost, nextEdit, restarts, waitRebuild>>
 
 (* The dialog's Save, shown only with an edit session that is not playing. *)
 YouChooseSave ==
@@ -278,7 +302,7 @@ YouChooseSave ==
     /\ SendSave
     /\ pending' = dialog
     /\ UNCHANGED <<dirty, playing, starting, updating, relaunch, hasGame, ui, toEditor, game,
-                   killed, scene, file, made, waived, cause, lost, nextEdit, restarts>>
+                   killed, scene, file, made, waived, cause, lost, nextEdit, restarts, waitRebuild>>
 
 -----------------------------------------------------------------------------
 (* What the game does: edit_mode.rs run_commands, one command at a time, in order *)
@@ -302,7 +326,7 @@ GameRunsCommand ==
                     /\ game' = "play"
                     /\ UNCHANGED <<scene, file, toEditor>>
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, dialog, hasGame, ui,
-                   killed, made, waived, cause, lost, nextEdit, restarts>>
+                   killed, made, waived, cause, lost, nextEdit, restarts, waitRebuild>>
 
 GameFailsToSave ==
     /\ SaveCanFail
@@ -310,7 +334,7 @@ GameFailsToSave ==
     /\ toGame' = Tail(toGame)
     /\ toEditor' = Append(toEditor, [k |-> "saved", ok |-> FALSE])
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, dialog, hasGame, ui,
-                   game, killed, scene, file, made, waived, cause, lost, nextEdit, restarts>>
+                   game, killed, scene, file, made, waived, cause, lost, nextEdit, restarts, waitRebuild>>
 
 (* edit_mode.rs reset: the world goes back to the file. What the scene had *)
 (* and the file lacked is lost; edits queued after the Reset still come.   *)
@@ -322,7 +346,7 @@ GameResets ==
     /\ made' = (made \ scene) \cup file
     /\ lost' = IF (scene \ file) \ waived # {} THEN lost \cup {"stop"} ELSE lost
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, dialog, hasGame, ui,
-                   toEditor, killed, file, waived, cause, nextEdit, restarts>>
+                   toEditor, killed, file, waived, cause, nextEdit, restarts, waitRebuild>>
 
 (* taskkill lands: the process and its stdin are gone. *)
 GameIsKilled ==
@@ -331,24 +355,31 @@ GameIsKilled ==
     /\ toGame' = <<>>
     /\ Lose(cause)
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, dialog, hasGame, ui,
-                   toEditor, killed, scene, file, made, waived, cause, nextEdit, restarts>>
+                   toEditor, killed, scene, file, made, waived, cause, nextEdit, restarts, waitRebuild>>
 
 -----------------------------------------------------------------------------
 (* What the editor does on its own *)
 
-(* poll_game: Scene::handle, then Editor::on_report. *)
+(* poll_game: Scene::handle, then Editor::on_report. Later in the same   *)
+(* frame, before any input, Editor::ui runs a rebuild that waited once    *)
+(* the mark is clear.                                                     *)
 EditorReadsReport ==
     /\ ui = "editor" /\ hasGame /\ toEditor # <<>>
     /\ LET r == Head(toEditor)
            d == IF r.k = "edited" THEN TRUE ELSE IF r.ok THEN FALSE ELSE dirty
        IN /\ toEditor' = Tail(toEditor)
           /\ dirty' = d
-          /\ IF r.k = "saved" /\ pending # "none"
-               THEN /\ pending' = "none"
+          /\ CASE r.k = "saved" /\ pending # "none" ->
+                    /\ pending' = "none"
                     /\ AfterSave(pending, d)
-               ELSE UNCHANGED <<pending, starting, updating, relaunch, killed, cause, ui, game, lost>>
-    /\ UNCHANGED <<playing, dialog, hasGame, toGame, scene, file, made, waived,
-                   nextEdit, restarts>>
+               [] waitRebuild /\ ~d /\ ~playing /\ ~starting ->
+                    /\ waitRebuild' = FALSE
+                    /\ Restart("edit", "rebuild")
+                    /\ UNCHANGED <<pending, updating, ui, game, lost, playing, toGame>>
+               [] OTHER ->
+                    UNCHANGED <<pending, starting, updating, relaunch, killed, cause, ui, game, lost,
+                                playing, toGame, waitRebuild>>
+    /\ UNCHANGED <<dialog, hasGame, scene, file, made, waived, nextEdit, restarts>>
 
 (* SAVE_TIMEOUT passed without an answer: after_save runs anyway. *)
 SaveTimesOut ==
@@ -356,8 +387,8 @@ SaveTimesOut ==
     /\ ui = "editor" /\ pending # "none"
     /\ pending' = "none"
     /\ AfterSave(pending, dirty)
-    /\ UNCHANGED <<dirty, playing, dialog, hasGame, toGame, toEditor, scene, file,
-                   made, waived, nextEdit, restarts>>
+    /\ UNCHANGED <<dirty, dialog, hasGame, toEditor, scene, file, made, waived, nextEdit,
+                   restarts>>
 
 (* Output::Exit, then relaunch_when_exited and Editor::launch, which resets *)
 (* the scene (and its mark) and loads the file.                             *)
@@ -374,6 +405,7 @@ EditorRelaunches ==
     /\ waived' = {}
     /\ cause' = "none"
     /\ restarts' = restarts + 1
+    /\ waitRebuild' = FALSE
     /\ UNCHANGED <<pending, updating, dialog, hasGame, ui, toGame, toEditor, file, lost, nextEdit>>
 
 Finished ==
@@ -405,7 +437,7 @@ NoLossOnLeave == "leave" \notin lost
 TypeOK ==
     /\ dirty \in BOOLEAN /\ playing \in BOOLEAN /\ hasGame \in BOOLEAN
     /\ game \in {"edit", "play", "down"} /\ ui \in {"editor", "closed", "hub"}
-    /\ pending \in {"none", "Rebuild", "Play", "Update", "Close", "Leave"}
+    /\ pending \in {"none", "Rebuild", "Play", "NetPlay", "Update", "Close", "Leave"}
     /\ dialog \in {"none", "Close", "Leave"}
     /\ file \subseteq 1..MaxEdits /\ scene \subseteq 1..MaxEdits
 =============================================================================

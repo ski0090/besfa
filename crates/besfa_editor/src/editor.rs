@@ -90,7 +90,8 @@ const TOOLS: [(Tool, &str, &str, Key); 3] = [
 #[derive(Clone, Copy)]
 enum AfterSave {
     Rebuild,
-    /// A net Play, whose server and clients read the scene file.
+    /// A Play: a net Play's server and clients read the scene file, and
+    /// Stop restarts from it.
     Play,
     /// A plugin update, which restarts the game from the scene file.
     Update,
@@ -179,6 +180,8 @@ pub struct Editor {
     pending_save: Option<(Instant, AfterSave)>,
     /// The game's code changed since the game was built, so Stop rebuilds.
     code_changed: bool,
+    /// A rebuild put off until the scene is saved.
+    rebuild_after_save: bool,
     /// Save once this frame's fields have committed.
     save_after_ui: bool,
     source: SourceWatch,
@@ -241,6 +244,7 @@ impl Editor {
             plugin_revision: None,
             latest_plugin_revision: None,
             pending_save: None,
+            rebuild_after_save: false,
             code_changed: false,
             save_after_ui: false,
             inspector: Inspector::default(),
@@ -285,7 +289,7 @@ impl Editor {
         }
         let settled = self.source.settled(&ctx);
         self.code_changed |= settled;
-        if settled {
+        if settled || (self.rebuild_after_save && !self.scene.dirty) {
             self.rebuild(prebuild, &ctx);
         }
         for path in self.assets.poll(&ctx) {
@@ -504,6 +508,7 @@ impl Editor {
     fn launch(&mut self, play: bool, ctx: &egui::Context) {
         self.starting = false;
         // The game builds from the code as it is now.
+        self.rebuild_after_save = false;
         self.code_changed = false;
         self.scene.reset();
         self.history = crate::scene::EditHistory::default();
@@ -627,30 +632,29 @@ impl Editor {
         }
     }
 
-    /// Unsaved changes are saved first: Stop restarts from the file.
+    /// Unsaved changes are saved first, and playing waits for that: Stop
+    /// restarts from the file.
     fn play(&mut self, ctx: &egui::Context) {
         self.logs.clear();
         self.input.focus_next = true;
+        if self.game.is_some() && self.scene.dirty {
+            self.starting = true;
+            return self.save_then(AfterSave::Play, ctx);
+        }
         if self.net_clients > 0 {
             // A game picks being a server or a client as it starts, so the
             // edit session makes way for them, and they read the scene file.
-            if self.game.is_some() && self.scene.dirty {
-                self.starting = true;
-                return self.save_then(AfterSave::Play, ctx);
-            }
             return self.restart(true, ctx);
         }
         if self.game.is_none() {
             // The edit session is gone, e.g. it failed to build or crashed.
             return self.launch(true, ctx);
         }
-        if self.scene.dirty {
-            self.save();
-        }
         // Playing drops the game's preview.
         self.previewing = false;
         self.send(Command::Play);
         self.playing = true;
+        self.starting = false;
     }
 
     /// Ends play. The game goes back to edit mode in its own process, which
@@ -921,13 +925,21 @@ impl Editor {
 
     fn after_save(&mut self, then: AfterSave, ctx: &egui::Context) {
         match then {
-            AfterSave::Rebuild => self.restart(false, ctx),
-            AfterSave::Play => self.restart(true, ctx),
-            // The game keeps the changes a failed save left out.
-            AfterSave::Update if self.scene.dirty => {
+            // A failed or late save left changes out of the file a restart
+            // would load, so the game keeps them instead.
+            AfterSave::Rebuild | AfterSave::Play | AfterSave::Update if self.scene.dirty => {
                 self.starting = false;
-                self.log("Not updating the plugin: the scene's changes are not saved.");
+                self.rebuild_after_save |= matches!(then, AfterSave::Rebuild);
+                self.log(match then {
+                    AfterSave::Rebuild => {
+                        "The scene's changes are not saved; the game rebuilds once they are."
+                    }
+                    AfterSave::Play => "Not playing: the scene's changes are not saved.",
+                    _ => "Not updating the plugin: the scene's changes are not saved.",
+                });
             }
+            AfterSave::Rebuild => self.restart(false, ctx),
+            AfterSave::Play => self.play(ctx),
             AfterSave::Update => self.update_plugin(ctx),
             // A failed save keeps the changes unsaved; the log says why.
             AfterSave::Leave => self.leave = !self.scene.dirty,
@@ -957,6 +969,7 @@ impl Editor {
         if self.playing || self.starting || prebuild.running() {
             return;
         }
+        self.rebuild_after_save = false;
         self.log("Source changed; rebuilding.");
         if self.game.is_some() && self.scene.dirty {
             self.starting = true;
@@ -1993,6 +2006,55 @@ mod tests {
         assert!(editor.update.is_some());
 
         editor.game.as_ref().unwrap().stop();
+        drop(editor);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn plays_and_rebuilds_only_once_the_scene_is_saved() {
+        let dir = std::env::temp_dir().join(format!("besfa_play_save_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
+        let ready = Prebuild::with_phase(crate::process::PrebuildPhase::Ready, "");
+        let mut editor = Editor::new(Project::new(dir.to_string_lossy()), None, &waiting, &ctx);
+        let game = CliProcess::start(
+            &dir,
+            "cmd",
+            &["/c", "ping -n 60 127.0.0.1 > nul"],
+            &[],
+            &ctx,
+        );
+        editor.game = Some(game.unwrap());
+        let failed = || Report::Saved {
+            error: Some("disk full".into()),
+        };
+
+        // Play waits for the save; a failed one leaves the edit session be,
+        // since Stop would restart from the file.
+        editor.scene.dirty = true;
+        editor.play(&ctx);
+        assert!(!editor.playing && editor.starting);
+        editor.on_report(failed(), &ctx);
+        assert!(!editor.playing && !editor.starting && editor.scene.dirty);
+
+        // A rebuild the failed save put off waits for the scene to save.
+        editor.rebuild(&ready, &ctx);
+        editor.on_report(failed(), &ctx);
+        assert!(editor.rebuild_after_save && editor.relaunch.is_none());
+        editor.scene.dirty = false;
+        editor.rebuild(&ready, &ctx);
+        assert!(!editor.rebuild_after_save && editor.relaunch == Some(false));
+
+        // Saved, Play plays.
+        editor.relaunch = None;
+        editor.starting = false;
+        editor.scene.dirty = true;
+        editor.play(&ctx);
+        editor.scene.dirty = false;
+        editor.on_report(Report::Saved { error: None }, &ctx);
+        assert!(editor.playing && !editor.starting);
+
         drop(editor);
         let _ = fs::remove_dir_all(dir);
     }
