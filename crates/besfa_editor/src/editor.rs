@@ -1900,6 +1900,7 @@ fn rust_files(directory: &Path) -> Vec<(PathBuf, SystemTime)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::{Access, Cli, Provider};
 
     #[test]
     fn notices_a_source_change_once_it_settles() {
@@ -2282,7 +2283,56 @@ mod tests {
         harness.run_steps(4);
         save(&mut harness, "assets-tab", Some(BOTTOM_PANEL));
 
-        harness.state_mut().editor.bottom_tab = BottomTab::Log;
+        // The Agent tab with its model list open: Claude's CLI is not
+        // logged in, ChatGPT's is, and Gemini goes with a key.
+        let editor = &mut harness.state_mut().editor;
+        editor.agents = Agents::fixed(
+            [Cli::LoggedOut, Cli::LoggedIn, Cli::LoggedIn],
+            &[(Provider::Gemini, "gemini-key")],
+        );
+        editor.agent.access.insert(Provider::Gemini, Access::Key);
+        editor.bottom_tab = BottomTab::Agent;
+        harness.run_steps(4);
+        let model_list = || {
+            |node: &egui_kittest::Node| node.rect().min.y > BOTTOM_PANEL.min.y
+        };
+        harness
+            .get_all_by_role(egui::accesskit::Role::ComboBox)
+            .find(model_list())
+            .unwrap()
+            .click();
+        harness.remove_cursor();
+        harness.run_steps(4);
+        save(
+            &mut harness,
+            "agent-tab",
+            Some(egui::Rect::from_min_max(
+                egui::pos2(0.0, 520.0),
+                BOTTOM_PANEL.max,
+            )),
+        );
+        harness
+            .get_all_by_role(egui::accesskit::Role::ComboBox)
+            .find(model_list())
+            .unwrap()
+            .click();
+        harness.run_steps(4);
+
+        // Agent Settings, each provider showing what its choice needs.
+        harness.state_mut().editor.agent_open = true;
+        harness.run_steps(4);
+        let title = harness.get_by_label("Agent Settings").rect();
+        save(
+            &mut harness,
+            "agent-settings",
+            Some(egui::Rect::from_min_size(
+                title.min - egui::vec2(12.0, 8.0),
+                egui::vec2(460.0, 230.0),
+            )),
+        );
+        let editor = &mut harness.state_mut().editor;
+        editor.agent_open = false;
+        editor.bottom_tab = BottomTab::Log;
         harness.run_steps(4);
 
         // Who Play starts.

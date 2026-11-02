@@ -270,6 +270,21 @@ impl Agents {
         self.checks = Some(receiver);
     }
 
+    /// Agents whose CLIs stand as `cli`, in `Provider::ALL` order, with
+    /// `keys` saved; they are never checked.
+    #[cfg(test)]
+    pub fn fixed(cli: [Cli; 3], keys: &[(Provider, &str)]) -> Self {
+        Self {
+            cli: Provider::ALL.into_iter().zip(cli).collect(),
+            keys: keys
+                .iter()
+                .map(|(provider, key)| (*provider, key.to_string()))
+                .collect(),
+            checks: Some(mpsc::channel().1),
+            key_error: None,
+        }
+    }
+
     /// Checks the CLIs unless they were checked already.
     pub fn check_once(&mut self, ctx: &egui::Context) {
         if self.checks.is_none() {
@@ -698,12 +713,7 @@ mod tests {
     }
 
     fn agents(cli: Cli) -> Agents {
-        Agents {
-            cli: Provider::ALL.map(|provider| (provider, cli)).into(),
-            keys: BTreeMap::new(),
-            checks: None,
-            key_error: None,
-        }
+        Agents::fixed([cli; 3], &[])
     }
 
     struct Tab {
