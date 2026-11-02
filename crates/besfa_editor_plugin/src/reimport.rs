@@ -40,7 +40,7 @@ impl Plugin for ReimportPlugin {
 }
 
 #[derive(Resource, Default)]
-struct Reloads(Vec<Reload>);
+pub(crate) struct Reloads(Vec<Reload>);
 
 struct Reload {
     /// Relative to the asset directory.

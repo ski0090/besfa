@@ -109,7 +109,7 @@ impl Shot {
 }
 
 #[derive(Resource, Default)]
-struct Shots {
+pub(crate) struct Shots {
     /// The pictures asked for, with the path the report names and the file
     /// each goes to.
     queue: VecDeque<(String, PathBuf, Shot)>,

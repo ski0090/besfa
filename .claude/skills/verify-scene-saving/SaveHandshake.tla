@@ -31,7 +31,7 @@ VARIABLES
     hasGame,    \* Editor.game.is_some(), until the editor reads the game's exit
     ui,         \* "editor", "closed" (window closed) or "hub" (back to the hub)
     \* The pipes
-    toGame,     \* the game's stdin: [k |-> "edit"/"drag", id |-> n], [k |-> "save"], [k |-> "play", id |-> 0]
+    toGame,     \* the game's stdin: [k |-> "edit"/"drag", id |-> n], [k |-> "save"/"play"/"reset", id |-> 0]
     toEditor,   \* the game's stdout: [k |-> "saved", ok |-> b], [k |-> "edited", ok |-> TRUE]
     \* The game process
     game,       \* "edit" (paused), "play" or "down"
@@ -51,6 +51,7 @@ vars == <<dirty, pending, playing, starting, updating, relaunch, dialog, hasGame
           nextEdit, restarts>>
 
 Save == [k |-> "save", id |-> 0]
+Reset == [k |-> "reset", id |-> 0]
 Unsaved == (made \ file) \ waived
 
 \* The game process ends now, by `why`; what the file lacks is lost.
@@ -173,13 +174,22 @@ YouPressNetPlay ==
     /\ UNCHANGED <<dirty, playing, updating, dialog, hasGame, ui, toEditor, game, scene, file,
                    made, waived, lost, nextEdit, restarts>>
 
-(* Toolbar Stop: relaunches the game in edit mode from the file. *)
+(* Toolbar Stop, Editor::stop: relaunches the game in edit mode from the  *)
+(* file, or, when no new process is needed, sends Reset and clears the     *)
+(* editor's scene and mark at once; the game reloads the file once it gets *)
+(* to the command.                                                         *)
 YouPressStop ==
     /\ YouMayAct
     /\ ui = "editor" /\ dialog = "none" /\ ~starting /\ playing
-    /\ Restart("edit", "stop")
-    /\ UNCHANGED <<dirty, pending, playing, updating, dialog, hasGame, ui, toGame, toEditor,
-                   game, scene, file, made, waived, lost, nextEdit, restarts>>
+    /\ \/ /\ Restart("edit", "stop")
+          /\ UNCHANGED <<dirty, playing, toGame>>
+       \/ /\ hasGame
+          /\ playing' = FALSE
+          /\ dirty' = FALSE
+          /\ toGame' = Append(toGame, Reset)
+          /\ UNCHANGED <<starting, relaunch, killed, cause>>
+    /\ UNCHANGED <<pending, updating, dialog, hasGame, ui, toEditor, game, scene, file, made,
+                   waived, lost, nextEdit, restarts>>
 
 (* A file under src/ changed: Editor::rebuild. Not blocked by the dialog. *)
 YouChangeCode ==
@@ -274,7 +284,7 @@ YouChooseSave ==
 (* What the game does: edit_mode.rs run_commands, one command at a time, in order *)
 
 GameRunsCommand ==
-    /\ game # "down" /\ toGame # <<>>
+    /\ game # "down" /\ toGame # <<>> /\ Head(toGame).k # "reset"
     /\ LET c == Head(toGame) IN
          /\ toGame' = Tail(toGame)
          /\ CASE c.k = "edit" ->
@@ -301,6 +311,18 @@ GameFailsToSave ==
     /\ toEditor' = Append(toEditor, [k |-> "saved", ok |-> FALSE])
     /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, dialog, hasGame, ui,
                    game, killed, scene, file, made, waived, cause, lost, nextEdit, restarts>>
+
+(* edit_mode.rs reset: the world goes back to the file. What the scene had *)
+(* and the file lacked is lost; edits queued after the Reset still come.   *)
+GameResets ==
+    /\ game # "down" /\ toGame # <<>> /\ Head(toGame).k = "reset"
+    /\ toGame' = Tail(toGame)
+    /\ game' = "edit"
+    /\ scene' = file
+    /\ made' = (made \ scene) \cup file
+    /\ lost' = IF (scene \ file) \ waived # {} THEN lost \cup {"stop"} ELSE lost
+    /\ UNCHANGED <<dirty, pending, playing, starting, updating, relaunch, dialog, hasGame, ui,
+                   toEditor, killed, file, waived, cause, nextEdit, restarts>>
 
 (* taskkill lands: the process and its stdin are gone. *)
 GameIsKilled ==
@@ -362,7 +384,7 @@ Next ==
     \/ YouEdit \/ YouDragInSceneView \/ YouSave \/ YouPressPlay \/ YouPressNetPlay
     \/ YouPressStop \/ YouChangeCode \/ YouClickPluginIcon \/ PluginUpdated
     \/ YouCloseWindow \/ YouGoToHub \/ YouCancel \/ YouDiscard \/ YouChooseSave
-    \/ GameRunsCommand \/ GameFailsToSave \/ GameIsKilled
+    \/ GameRunsCommand \/ GameResets \/ GameFailsToSave \/ GameIsKilled
     \/ EditorReadsReport \/ SaveTimesOut \/ EditorRelaunches \/ Finished
 
 Spec == Init /\ [][Next]_vars
