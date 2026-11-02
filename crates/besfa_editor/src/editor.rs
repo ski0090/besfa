@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    agent::{self, AgentPanel, AgentSettings, Agents},
+    agent::{self, AgentPanel, AgentSettings, Agents, Route},
     animation,
     inspector::{Action, Inspector, TRANSFORM},
     panels::{
@@ -1619,7 +1619,7 @@ impl Editor {
     fn agent_tab(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         self.agents.check_once(ctx);
         let before = self.agent.clone();
-        let route = self.agents.route(self.agent.provider);
+        let route = self.agent_route();
         let blocked = route.as_ref().err().copied().or(self
             .scene
             .dirty
@@ -1633,7 +1633,7 @@ impl Editor {
             self.log(format!("Could not save the agent settings: {error}"));
         }
         // The pick may have changed this frame, so the route is asked again.
-        if let (Some(prompt), Ok(route)) = (prompt, self.agents.route(self.agent.provider)) {
+        if let (Some(prompt), Ok(route)) = (prompt, self.agent_route()) {
             let provider = self.agent.provider;
             let invocation = agent::invocation(provider, &route, self.agent.model(provider));
             let directory = self.project.file("");
@@ -1663,8 +1663,18 @@ impl Editor {
         }
     }
 
+    /// How a prompt to the picked provider would go out, or why it cannot.
+    fn agent_route(&self) -> Result<Route, &'static str> {
+        let provider = self.agent.provider;
+        self.agents.route(provider, self.agent.access(provider))
+    }
+
     fn agent_window(&mut self, ctx: &egui::Context) {
-        agent::window(ctx, &mut self.agent_open, &mut self.agents);
+        if agent::window(ctx, &mut self.agent_open, &mut self.agent, &mut self.agents)
+            && let Err(error) = self.agent.write(&AgentSettings::file())
+        {
+            self.log(format!("Could not save the agent settings: {error}"));
+        }
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {

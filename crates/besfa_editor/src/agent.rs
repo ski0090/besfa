@@ -143,16 +143,28 @@ pub enum Route {
     Key(String),
 }
 
-/// The CLI's own login wins; a saved key covers a CLI that is not logged in.
-fn route(cli: Cli, key: &str) -> Result<Route, &'static str> {
-    match cli {
-        Cli::Checking => Err("Checking the command-line tool."),
-        Cli::Missing => Err("Install its command-line tool first."),
-        Cli::LoggedIn => Ok(Route::Cli),
-        Cli::LoggedOut if key.trim().is_empty() => {
-            Err("Log in to its command-line tool or enter an API key in File > Agent Settings.")
+/// How the user chose to reach a provider.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Access {
+    #[default]
+    Cli,
+    Key,
+}
+
+/// The route `access` takes, or what it still needs. A key goes through the
+/// CLI too, so the CLI must be installed either way.
+fn route(access: Access, cli: Cli, key: &str) -> Result<Route, &'static str> {
+    match (access, cli) {
+        (_, Cli::Checking) => Err("Checking the command-line tool."),
+        (_, Cli::Missing) => Err("Install its command-line tool first."),
+        (Access::Cli, Cli::LoggedIn) => Ok(Route::Cli),
+        (Access::Cli, Cli::LoggedOut) => Err(
+            "Log in to its command-line tool, or switch it to an API key in File > Agent Settings.",
+        ),
+        (Access::Key, _) if key.trim().is_empty() => {
+            Err("Enter its API key in File > Agent Settings.")
         }
-        Cli::LoggedOut => Ok(Route::Key(key.trim().into())),
+        (Access::Key, _) => Ok(Route::Key(key.trim().into())),
     }
 }
 
@@ -173,13 +185,14 @@ pub fn invocation(
     (provider.command().into(), args, env)
 }
 
-/// What the Agent tab last picked: the provider, and each provider's model,
-/// empty for the CLI's default.
+/// The provider and model the Agent tab last picked, each provider's model
+/// (empty for the CLI's default), and how each provider is reached.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentSettings {
     pub provider: Provider,
     pub models: BTreeMap<Provider, String>,
+    pub access: BTreeMap<Provider, Access>,
 }
 
 impl AgentSettings {
@@ -207,6 +220,10 @@ impl AgentSettings {
 
     pub fn model(&self, provider: Provider) -> &str {
         self.models.get(&provider).map_or("", String::as_str)
+    }
+
+    pub fn access(&self, provider: Provider) -> Access {
+        self.access.get(&provider).copied().unwrap_or_default()
     }
 }
 
@@ -270,20 +287,20 @@ impl Agents {
         self.cli.get(&provider).copied().unwrap_or(Cli::Checking)
     }
 
-    pub fn route(&self, provider: Provider) -> Result<Route, &'static str> {
+    pub fn route(&self, provider: Provider, access: Access) -> Result<Route, &'static str> {
         route(
+            access,
             self.cli(provider),
             self.keys.get(&provider).map_or("", String::as_str),
         )
     }
 
-    /// How the provider would be reached, in a word or two.
-    fn summary(&self, provider: Provider) -> &'static str {
-        match (self.cli(provider), self.route(provider)) {
-            (Cli::Checking, _) => "checking",
-            (_, Ok(Route::Cli)) => "uses CLI",
-            (_, Ok(Route::Key(_))) => "uses API key",
-            (_, Err(_)) => "can't send yet",
+    /// Whether the provider can take a prompt the way it is reached, once
+    /// its CLI is checked.
+    fn ready(&self, provider: Provider, access: Access) -> Option<bool> {
+        match self.cli(provider) {
+            Cli::Checking => None,
+            _ => Some(self.route(provider, access).is_ok()),
         }
     }
 }
@@ -334,61 +351,74 @@ fn write_secret(target: &str, secret: &str) -> Result<(), String> {
     unsafe { CredWriteW(&credential, 0) }.map_err(|error| error.to_string())
 }
 
-/// Shows the settings window while `open`: every provider with its CLI's
-/// state and an API key box.
-pub fn window(ctx: &egui::Context, open: &mut bool, agents: &mut Agents) {
+/// Shows the settings window while `open`: every provider, how it is
+/// reached, and only what that way needs. Returns true when `settings`
+/// changed, so the caller saves them.
+pub fn window(
+    ctx: &egui::Context,
+    open: &mut bool,
+    settings: &mut AgentSettings,
+    agents: &mut Agents,
+) -> bool {
+    let mut changed = false;
     egui::Window::new("Agent Settings")
         .open(open)
         .resizable(false)
-        .show(ctx, |ui| show(ui, agents));
+        .show(ctx, |ui| changed = show(ui, settings, agents));
+    changed
 }
 
-fn show(ui: &mut Ui, agents: &mut Agents) {
+fn show(ui: &mut Ui, settings: &mut AgentSettings, agents: &mut Agents) -> bool {
+    let before = settings.clone();
     ui.set_width(420.0);
     for provider in Provider::ALL {
+        let mut access = settings.access(provider);
         ui.group(|ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.strong(provider.label());
+                // Padding to a fixed width lines the toggles up.
+                let name = ui.strong(provider.label());
+                ui.add_space((70.0 - name.rect.width()).max(0.0));
+                ui.selectable_value(&mut access, Access::Cli, "CLI");
+                ui.selectable_value(&mut access, Access::Key, "API key");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let summary = agents.summary(provider);
-                    let color = match agents.route(provider) {
-                        Ok(_) => panels::GOOD,
-                        Err(_) if summary == "checking" => panels::MUTED,
-                        Err(_) => panels::WARNING,
+                    match agents.ready(provider, access) {
+                        None => ui.colored_label(panels::MUTED, "checking"),
+                        Some(true) => ui.colored_label(panels::GOOD, "ready"),
+                        Some(false) => ui.colored_label(panels::WARNING, "can't send yet"),
                     };
-                    ui.colored_label(color, summary);
                 });
             });
-            ui.horizontal(|ui| {
-                let command = provider.command();
-                let (installed, logged_in) = match agents.cli(provider) {
-                    Cli::Checking => ("checking", ""),
-                    Cli::Missing => ("not installed", ""),
-                    Cli::LoggedOut => ("installed", "not logged in"),
-                    Cli::LoggedIn => ("installed", "logged in"),
-                };
-                let line = match logged_in {
-                    "" => format!("CLI `{command}`: {installed}"),
-                    _ => format!("CLI `{command}`: {installed}, {logged_in}"),
-                };
-                ui.label(RichText::new(line).color(panels::MUTED).small());
-            });
-            if agents.cli(provider) == Cli::LoggedOut {
-                let hint = format!("Run `{}` in a terminal to log in.", provider.command());
-                ui.label(RichText::new(hint).color(panels::MUTED).small());
+            let command = provider.command();
+            let note = |ui: &mut Ui, text: String| {
+                ui.label(RichText::new(text).color(panels::MUTED).small());
+            };
+            match (access, agents.cli(provider)) {
+                (_, Cli::Checking) => note(ui, format!("Checking `{command}`.")),
+                (_, Cli::Missing) => note(ui, format!("`{command}` is not installed.")),
+                (Access::Cli, Cli::LoggedOut) => note(
+                    ui,
+                    format!(
+                        "`{command}` is not logged in. Run `{command}` in a terminal to log in."
+                    ),
+                ),
+                (Access::Cli, Cli::LoggedIn) => note(ui, format!("`{command}` is logged in.")),
+                (Access::Key, _) => {}
             }
-            let key = agents.keys.entry(provider).or_default();
-            let field = ui.add(
-                egui::TextEdit::singleline(key)
-                    .password(true)
-                    .hint_text(format!("{} API key", provider.label()))
-                    .desired_width(f32::INFINITY),
-            );
-            if field.lost_focus() {
-                agents.key_error = write_secret(&key_target(provider), key.trim()).err();
+            if access == Access::Key {
+                let key = agents.keys.entry(provider).or_default();
+                let field = ui.add(
+                    egui::TextEdit::singleline(key)
+                        .password(true)
+                        .hint_text(format!("{} API key", provider.label()))
+                        .desired_width(f32::INFINITY),
+                );
+                if field.lost_focus() {
+                    agents.key_error = write_secret(&key_target(provider), key.trim()).err();
+                }
             }
         });
+        settings.access.insert(provider, access);
     }
     if let Some(error) = &agents.key_error {
         ui.colored_label(panels::ERROR, format!("Could not save the key: {error}"));
@@ -405,6 +435,7 @@ fn show(ui: &mut Ui, agents: &mut Agents) {
             }
         });
     });
+    *settings != before
 }
 
 /// The Agent tab: a prompt box and the latest run's output.
@@ -536,7 +567,14 @@ fn model_picker(ui: &mut Ui, settings: &mut AgentSettings, agents: &Agents) {
         .selected_text(selected)
         .show_ui(ui, |ui| {
             for provider in Provider::ALL {
-                let heading = format!("{} · {}", provider.label(), agents.summary(provider));
+                let access = settings.access(provider);
+                let how = match (agents.ready(provider, access), access) {
+                    (None, _) => "checking",
+                    (Some(false), _) => "can't send yet",
+                    (Some(true), Access::Cli) => "CLI",
+                    (Some(true), Access::Key) => "API key",
+                };
+                let heading = format!("{} · {how}", provider.label());
                 ui.label(RichText::new(heading).color(panels::MUTED).small());
                 for model in std::iter::once("").chain(provider.models().iter().copied()) {
                     let current =
@@ -572,12 +610,49 @@ mod tests {
     use egui_kittest::{Harness, kittest::Queryable};
 
     #[test]
-    fn prefers_the_cli_login_and_falls_back_to_a_saved_key() {
-        assert_eq!(route(Cli::LoggedIn, "sk"), Ok(Route::Cli));
-        assert_eq!(route(Cli::LoggedOut, " sk "), Ok(Route::Key("sk".into())));
-        assert!(route(Cli::LoggedOut, "").is_err());
-        assert!(route(Cli::Missing, "sk").is_err());
-        assert!(route(Cli::Checking, "sk").is_err());
+    fn goes_the_chosen_way_once_that_way_has_what_it_needs() {
+        assert_eq!(route(Access::Cli, Cli::LoggedIn, "sk"), Ok(Route::Cli));
+        assert!(route(Access::Cli, Cli::LoggedOut, "sk").is_err());
+        assert_eq!(
+            route(Access::Key, Cli::LoggedIn, " sk "),
+            Ok(Route::Key("sk".into()))
+        );
+        assert_eq!(
+            route(Access::Key, Cli::LoggedOut, "sk"),
+            Ok(Route::Key("sk".into()))
+        );
+        assert!(route(Access::Key, Cli::LoggedIn, "").is_err());
+        assert!(route(Access::Key, Cli::Missing, "sk").is_err());
+        assert!(route(Access::Cli, Cli::Checking, "").is_err());
+    }
+
+    #[test]
+    fn shows_the_key_box_only_for_a_provider_switched_to_its_key() {
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, (settings, agents): &mut (AgentSettings, Agents)| {
+                show(ui, settings, agents);
+            },
+            (AgentSettings::default(), agents(Cli::LoggedOut)),
+        );
+        harness.run();
+        assert_eq!(
+            harness
+                .query_all_by_role(egui::accesskit::Role::PasswordInput)
+                .count(),
+            0
+        );
+        assert!(harness.query_by_label_contains("Run `claude`").is_some());
+
+        harness.get_all_by_label("API key").next().unwrap().click();
+        harness.run();
+        assert_eq!(harness.state().0.access(Provider::Claude), Access::Key);
+        assert_eq!(
+            harness
+                .query_all_by_role(egui::accesskit::Role::PasswordInput)
+                .count(),
+            1
+        );
+        assert!(harness.query_by_label_contains("Run `claude`").is_none());
     }
 
     #[test]
