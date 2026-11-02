@@ -87,6 +87,8 @@ enum AfterSave {
     Rebuild,
     /// A net Play, whose server and clients read the scene file.
     Play,
+    /// A plugin update, which restarts the game from the scene file.
+    Update,
     Leave,
     Close,
 }
@@ -873,6 +875,12 @@ impl Editor {
         match then {
             AfterSave::Rebuild => self.restart(false, ctx),
             AfterSave::Play => self.restart(true, ctx),
+            // The game keeps the changes a failed save left out.
+            AfterSave::Update if self.scene.dirty => {
+                self.starting = false;
+                self.log("Not updating the plugin: the scene's changes are not saved.");
+            }
+            AfterSave::Update => self.update_plugin(ctx),
             // A failed save keeps the changes unsaved; the log says why.
             AfterSave::Leave => self.leave = !self.scene.dirty,
             AfterSave::Close if !self.scene.dirty => self.close(ctx),
@@ -911,9 +919,13 @@ impl Editor {
     }
 
     /// Moves the project's plugin to the latest commit and restarts the edit
-    /// session, which rebuilds the game against it.
+    /// session, which rebuilds the game against it, once unsaved changes
+    /// are saved.
     fn update_plugin(&mut self, ctx: &egui::Context) {
         self.starting = true;
+        if self.game.is_some() && !self.playing && self.scene.dirty {
+            return self.save_then(AfterSave::Update, ctx);
+        }
         let args = ["update", "-p", "besfa_editor_plugin"];
         match CliProcess::start(Path::new(&self.project.path), "cargo", &args, &[], ctx) {
             Ok(update) => self.update = Some(update),
@@ -1874,6 +1886,48 @@ mod tests {
         poll_until(&mut editor, &|editor| editor.relaunch.is_none());
         assert_eq!(server_exits(&editor), 2, "{:?}", editor.logs);
         assert!(editor.game.is_some() && !editor.playing);
+        drop(editor);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn saves_unsaved_changes_before_updating_the_plugin() {
+        let dir = std::env::temp_dir().join(format!("besfa_update_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
+        let mut editor = Editor::new(Project::new(dir.to_string_lossy()), None, &waiting, &ctx);
+        let game = CliProcess::start(
+            &dir,
+            "cmd",
+            &["/c", "ping -n 60 127.0.0.1 > nul"],
+            &[],
+            &ctx,
+        );
+        editor.game = Some(game.unwrap());
+        editor.scene.dirty = true;
+
+        // The update waits for the save, which restarting would throw away.
+        editor.update_plugin(&ctx);
+        assert!(editor.update.is_none());
+        assert!(matches!(editor.pending_save, Some((_, AfterSave::Update))));
+
+        // A failed save leaves the game, and its changes, alone.
+        editor.on_report(
+            Report::Saved {
+                error: Some("disk full".into()),
+            },
+            &ctx,
+        );
+        assert!(editor.update.is_none() && !editor.starting && editor.scene.dirty);
+
+        // Once saved, the update starts.
+        editor.update_plugin(&ctx);
+        editor.scene.dirty = false;
+        editor.on_report(Report::Saved { error: None }, &ctx);
+        assert!(editor.update.is_some());
+
+        editor.game.as_ref().unwrap().stop();
         drop(editor);
         let _ = fs::remove_dir_all(dir);
     }
