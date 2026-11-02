@@ -34,7 +34,7 @@ const NO_WINDOW: Entity = Entity::PLACEHOLDER;
 
 /// Where the pointer was last, for the motion to the next position.
 #[derive(Resource, Default)]
-struct LastPointer(Option<Vec2>);
+pub(crate) struct LastPointer(Option<Vec2>);
 
 /// One viewport pointer event, in viewport pixels, as the game's input.
 pub(crate) fn pointer(world: &mut World, event: PointerEvent) {

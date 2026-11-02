@@ -1,7 +1,7 @@
 //! The editor for one project. The game runs in one of two states: paused
 //! in edit mode, where the viewport shows the scene as Startup built it, or
-//! playing. Stop ends play by relaunching the game in edit mode, which
-//! resets the scene and picks up code changes. In both states the game
+//! playing. Stop ends play by resetting the scene to its file in the same
+//! process, or by relaunching the game in edit mode when its code changed. In both states the game
 //! reports its entities, which the hierarchy and inspector panels show and
 //! change through commands on its stdin, one JSON object per line. A net
 //! Play runs the game as a dedicated server and as the clients joined to it
@@ -55,6 +55,10 @@ const SCATTER_PROTOCOL: u32 = 8;
 /// The protocol whose plugins place things where the viewport points, show
 /// a dragged asset's ghost and snap handles.
 const PLACE_PROTOCOL: u32 = 11;
+
+/// The protocol whose plugins end play in the same process, which keeps
+/// the shaders they compiled.
+const RESET_PROTOCOL: u32 = 13;
 
 /// Where a project keeps the scene view's snapping, in the project.
 const SNAP_FILE: &str = "besfa/snap.besfa";
@@ -174,6 +178,8 @@ pub struct Editor {
     latest_plugin_revision: Option<String>,
     /// A save in flight, until when it is waited for, and what follows it.
     pending_save: Option<(Instant, AfterSave)>,
+    /// The game's code changed since the game was built, so Stop rebuilds.
+    code_changed: bool,
     /// A rebuild put off until the scene is saved.
     rebuild_after_save: bool,
     /// Save once this frame's fields have committed.
@@ -239,6 +245,7 @@ impl Editor {
             latest_plugin_revision: None,
             pending_save: None,
             rebuild_after_save: false,
+            code_changed: false,
             save_after_ui: false,
             inspector: Inspector::default(),
             assets_tab: false,
@@ -280,7 +287,9 @@ impl Editor {
             self.pending_save = None;
             self.after_save(then, &ctx);
         }
-        if self.source.settled(&ctx) || (self.rebuild_after_save && !self.scene.dirty) {
+        let settled = self.source.settled(&ctx);
+        self.code_changed |= settled;
+        if settled || (self.rebuild_after_save && !self.scene.dirty) {
             self.rebuild(prebuild, &ctx);
         }
         for path in self.assets.poll(&ctx) {
@@ -500,6 +509,7 @@ impl Editor {
         self.starting = false;
         // The game builds from the code as it is now.
         self.rebuild_after_save = false;
+        self.code_changed = false;
         self.scene.reset();
         self.history = crate::scene::EditHistory::default();
         // The previous game has exited, so nothing renders into them any more.
@@ -645,6 +655,36 @@ impl Editor {
         self.send(Command::Play);
         self.playing = true;
         self.starting = false;
+    }
+
+    /// Ends play. The game goes back to edit mode in its own process, which
+    /// skips the build and keeps its compiled shaders, unless `restart`
+    /// asks for a new process or one is needed: the code changed, a net
+    /// Play runs other processes, or the game's plugin cannot.
+    fn stop(&mut self, restart: bool, ctx: &egui::Context) {
+        let in_place = !restart
+            && !self.code_changed
+            && self.net_clients == 0
+            && self.net.is_empty()
+            && self.update.is_none()
+            && self.protocol >= Some(RESET_PROTOCOL);
+        if !in_place || self.send(Command::Reset).is_none() {
+            return self.restart(false, ctx);
+        }
+        self.scene.reset();
+        // The game numbers the entities anew.
+        self.scene.selected = None;
+        self.history = crate::scene::EditHistory::default();
+        // The game's scene view starts over, without the brushes and snap.
+        self.brush = None;
+        self.scatter_brush = None;
+        self.sent_snap = None;
+        self.ghost = None;
+        self.assets.forget_asked();
+        if self.tool != Tool::Translate {
+            self.send(Command::Tool { tool: self.tool });
+        }
+        self.playing = false;
     }
 
     /// Stops the game and any net Play, and launches the next game, playing
@@ -1374,9 +1414,14 @@ impl Editor {
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let label = if self.playing { "⏹ Stop" } else { "▶ Play" };
-                if ui.add_enabled(!busy, Button::new(label)).clicked() {
+                let mut button = ui.add_enabled(!busy, Button::new(label));
+                if self.playing {
+                    button = button.on_hover_text("Ctrl+click restarts the game");
+                }
+                if button.clicked() {
                     if self.playing {
-                        self.restart(false, ctx)
+                        let restart = ui.input(|input| input.modifiers.command);
+                        self.stop(restart, ctx)
                     } else {
                         self.play(ctx)
                     }
@@ -2009,6 +2054,56 @@ mod tests {
         editor.scene.dirty = false;
         editor.on_report(Report::Saved { error: None }, &ctx);
         assert!(editor.playing && !editor.starting);
+
+        drop(editor);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stop_keeps_the_game_unless_a_new_process_is_needed() {
+        let dir = std::env::temp_dir().join(format!("besfa_stop_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
+        let mut editor = Editor::new(Project::new(dir.to_string_lossy()), None, &waiting, &ctx);
+        let long = || {
+            CliProcess::start(
+                &dir,
+                "cmd",
+                &["/c", "ping -n 60 127.0.0.1 > nul"],
+                &[],
+                &ctx,
+            )
+        };
+        let playing = |editor: &mut Editor, protocol| {
+            editor.game = Some(long().unwrap());
+            editor.protocol = Some(protocol);
+            editor.playing = true;
+            editor.relaunch = None;
+            editor.starting = false;
+        };
+
+        playing(&mut editor, RESET_PROTOCOL);
+        editor.scene.selected = Some(7);
+        editor.stop(false, &ctx);
+        assert!(!editor.playing && editor.relaunch.is_none() && editor.game.is_some());
+        assert_eq!(editor.scene.selected, None);
+
+        let restarts = |editor: &mut Editor, restart: bool| {
+            editor.stop(restart, &ctx);
+            assert!(editor.relaunch == Some(false) && editor.starting);
+            editor.game.take().unwrap().stop();
+        };
+        restarts(&mut editor, true);
+        playing(&mut editor, RESET_PROTOCOL);
+        editor.code_changed = true;
+        restarts(&mut editor, false);
+        editor.code_changed = false;
+        playing(&mut editor, RESET_PROTOCOL - 1);
+        restarts(&mut editor, false);
+        playing(&mut editor, RESET_PROTOCOL);
+        editor.net_clients = 1;
+        restarts(&mut editor, false);
 
         drop(editor);
         let _ = fs::remove_dir_all(dir);

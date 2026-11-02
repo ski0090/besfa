@@ -6,20 +6,23 @@
 //! `FixedUpdate` does not run. The editor writes one command per line to
 //! stdin, a JSON object such as `{"command":"play"}`; see
 //! [`besfa_protocol::Request`]. A request with a `seq` is answered with a
-//! `done` report once it has run. The editor ends a play session by killing
-//! the process, which resets the scene.
+//! `done` report once it has run. The editor ends a play session with
+//! `reset`, or by killing the process when the game must be rebuilt.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     sync::{Mutex, PoisonError, mpsc},
 };
 
+use besfa_components::TerrainData;
 use besfa_protocol::{Command, Placement, Report, Request, VERSION};
-use bevy::{input::InputSystems, prelude::*};
+use bevy::{
+    ecs::resource::IsResource, input::InputSystems, prelude::*, world_serialization::DynamicWorld,
+};
 
 use crate::{
     edit, ground, input,
-    inspect::{Changes, Selected, select, send_report},
+    inspect::{self, Changes, Selected, select, send_report},
     part_changes,
     preview::{self, ModelPreview},
     reimport,
@@ -60,10 +63,82 @@ impl Plugin for EditModePlugin {
             // Before Bevy reads this frame's input, which the commands write.
             .add_systems(PreUpdate, run_commands.before(InputSystems));
     }
+
+    /// Before any schedule runs, so what PreStartup spawns, like a physics
+    /// plugin's context, is made again by a reset rather than kept twice.
+    fn cleanup(&self, app: &mut App) {
+        let world = app.world_mut();
+        let all = non_resources(world);
+        world.insert_resource(Baseline(all));
+    }
 }
 
 fn pause(mut time: ResMut<Time<Virtual>>) {
     time.pause();
+}
+
+/// The entities that exist before any schedule runs: Bevy's own and the
+/// plugins', which a reset keeps.
+#[derive(Resource)]
+struct Baseline(HashSet<Entity>);
+
+/// Resources are entities too, and Bevy warns when they are despawned.
+fn non_resources(world: &mut World) -> HashSet<Entity> {
+    world
+        .query_filtered::<Entity, Without<IsResource>>()
+        .iter(world)
+        .collect()
+}
+
+/// Ends play in this process: what the game and Startup made goes, the files
+/// the scene is built from load again, and the startup schedules run as they
+/// do in a new process. Everything the plugin kept about the old scene starts
+/// over, and the editor gets the reports a new game sends.
+fn reset(world: &mut World) {
+    let keep = world.remove_resource::<Baseline>().unwrap();
+    for entity in non_resources(world).difference(&keep.0) {
+        let _ = world.try_despawn(*entity);
+    }
+    world.insert_resource(keep);
+
+    world.insert_resource(Selected::default());
+    world.insert_resource(SceneView::default());
+    world.insert_resource(ModelPreview::default());
+    world.insert_resource(terrain::Strokes::default());
+    world.insert_resource(reimport::Reloads::default());
+    world.insert_resource(shot::Shots::default());
+    world.insert_resource(thumbnail::Thumbnails::default());
+    world.remove_resource::<input::LastPointer>();
+    world.insert_resource(Time::<Virtual>::default());
+
+    reload_files(world);
+    send_report(&Report::Hello { version: VERSION });
+    send_report(&inspect::systems(world));
+    send_report(&inspect::addable_components(world));
+    world.run_schedule(PreStartup);
+    world.run_schedule(Startup);
+    world.run_schedule(PostStartup);
+}
+
+/// Asks for the scene and the terrain files again, as the last save left
+/// them, since play may have changed what is loaded. The scene's old asset
+/// goes first: it would spawn at once, before the new one arrives.
+fn reload_files(world: &mut World) {
+    let server = world.resource::<AssetServer>().clone();
+    if let Some(scene) = server.get_handle::<DynamicWorld>(SCENE_PATH) {
+        world
+            .resource_mut::<Assets<DynamicWorld>>()
+            .remove(scene.id());
+    }
+    server.reload(SCENE_PATH);
+    let terrains: Vec<_> = world
+        .resource::<Assets<TerrainData>>()
+        .iter()
+        .filter_map(|(id, _)| server.get_path(id))
+        .collect();
+    for path in terrains {
+        server.reload(path);
+    }
 }
 
 /// Exclusive, because commands change and save the whole world.
@@ -116,6 +191,10 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             preview::close(world);
             scene_view::stop(world);
             info!("Playing.");
+            Ok(())
+        }
+        Command::Reset => {
+            reset(world);
             Ok(())
         }
         Command::Select { id } => {

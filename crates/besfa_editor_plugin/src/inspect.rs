@@ -433,7 +433,7 @@ fn walk(
 
 /// Every system of every schedule, with the game's crate name so the editor
 /// can put the game's own systems first.
-fn systems(world: &World) -> Report {
+pub(crate) fn systems(world: &World) -> Report {
     let systems = world
         .resource::<Schedules>()
         .iter()
@@ -471,7 +471,7 @@ fn system_names(schedule: &Schedule) -> Vec<String> {
 
 /// Components the editor can add: reflected, with a default value, and not
 /// computed from other components.
-fn addable_components(world: &World) -> Report {
+pub(crate) fn addable_components(world: &World) -> Report {
     let registry = world.resource::<AppTypeRegistry>().read();
     let mut components: Vec<ComponentType> = registry
         .iter()

@@ -101,7 +101,8 @@ Last confirmed against commit **`05abc04`**. The model describes these:
 | `YouEdit` | `Editor::edit`, `Editor::replay` (editor.rs) |
 | `YouDragInSceneView` | scene-view input sent with `Editor::send`; `Report::Edited`/`Moved`/`TerrainPainted`/`Scattered` in `Editor::on_report` and `Scene::handle` |
 | `YouSave` | `Editor::save` (Ctrl+S, File > Save scene, `save_after_ui`) |
-| `YouPressPlay`, `YouPressStop` | `Editor::play`, the toolbar's Play/Stop in `Editor::toolbar`; `AfterSave::Play`, pending `"Play"` |
+| `YouPressPlay` | `Editor::play`, the toolbar's Play in `Editor::toolbar`; `AfterSave::Play`, pending `"Play"` |
+| `YouPressStop` | the toolbar's Stop, `Editor::stop`: `Editor::restart`, or `Command::Reset` and `Scene::reset` in place |
 | `YouPressNetPlay` | `Editor::play` with `net_clients > 0`; the same `AfterSave::Play`, pending `"NetPlay"` in the model |
 | `YouChangeCode`, `Rebuild` | `Editor::rebuild` (the `SourceWatch` trigger in `Editor::ui`) |
 | `YouClickPluginIcon`, `PluginUpdated` | `Editor::plugin_status`, `update_plugin` (and its `AfterSave::Update` arms in `after_save`), `poll_update`, `after_update` |
@@ -112,6 +113,7 @@ Last confirmed against commit **`05abc04`**. The model describes these:
 | `AfterSave` | `Editor::after_save`, `rebuild_after_save` (`waitRebuild`) |
 | `SaveTimesOut` | the `pending_save` deadline in `Editor::ui`, `SAVE_TIMEOUT` |
 | `Restart`, `GameIsKilled`, `EditorRelaunches` | `Editor::restart`, `CliProcess::stop` (process.rs), `relaunch_when_exited`, `launch`, `Scene::reset` |
+| `GameResets` | `reset` in `crates/besfa_editor_plugin/src/edit_mode.rs`, `Command::Reset` |
 | `GameRunsCommand`, `GameFailsToSave` | `run_commands` in `crates/besfa_editor_plugin/src/edit_mode.rs`, `Command::Save` → `Report::Saved` |
 
 Check whether a change touches the model with

@@ -76,7 +76,7 @@ fn count_compiling(cache: Res<PipelineCache>, compiling: Res<Compiling>) {
 }
 
 #[derive(Resource, Default)]
-struct Thumbnails {
+pub(crate) struct Thumbnails {
     /// Model paths, relative to the asset directory, with the file each
     /// picture goes to.
     queue: VecDeque<(String, PathBuf)>,

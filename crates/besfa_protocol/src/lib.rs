@@ -42,7 +42,8 @@ use serde_json::Value;
 /// 11. Placing where the scene view points, [`Placement::pointer`] and
 ///     [`Command::Ghost`], and snapping handles, [`Command::Snap`].
 /// 12. Markers in pictures of the scene, [`Command::Screenshot`]'s `markers`.
-pub const VERSION: u32 = 12;
+/// 13. [`Command::Reset`].
+pub const VERSION: u32 = 13;
 
 /// The game's cargo feature that brings in `besfa_editor_plugin`, in games
 /// that depend on `besfa_components` and leave the editor out of release
@@ -94,6 +95,11 @@ pub enum Command {
     /// Unpauses virtual time once, so a game that pauses itself stays
     /// paused, and hands the view to the game's cameras.
     Play,
+    /// Ends play without a new process: despawns what the game made, loads
+    /// the scene file again and runs the startup schedules, then sends
+    /// [`Report::Hello`] and the reports that follow it as a new game does.
+    /// Since protocol 13.
+    Reset,
     /// Picks the entity whose components the game reports; none clears it.
     Select {
         id: Option<u64>,
@@ -1066,6 +1072,7 @@ mod tests {
     fn writes_input_exactly_as_before_versions() {
         let line = |command| serde_json::to_string(&Request { seq: None, command }).unwrap();
         assert_eq!(line(Command::Play), r#"{"command":"play"}"#);
+        assert_eq!(line(Command::Reset), r#"{"command":"reset"}"#);
         assert_eq!(
             line(Command::Pointer(PointerEvent::Down {
                 x: 1.0,
