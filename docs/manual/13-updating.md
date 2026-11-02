@@ -49,9 +49,10 @@ cargo run -p besfa_editor
 
 **아이콘을 누르면 업데이트합니다.**
 
-1. 에디터가 프로젝트에서 `cargo update -p besfa_editor_plugin`을 실행합니다. 같은 저장소의 `besfa_components`도 함께 올라가고, 다른 의존성은 건드리지 않습니다.
-2. 게임을 멈추고 새 플러그인으로 다시 빌드합니다.
-3. cargo의 출력이 **Log**에 나오고(`Process exited with code 1.`은 이전 게임을 멈춘 기록입니다), 아이콘이 초록으로 바뀝니다.
+1. 저장하지 않은 변경(`*`)이 있으면 먼저 씬을 저장합니다. 저장이 실패하면 업데이트하지 않습니다(이유는 **Log**에). 게임과 고친 내용은 그대로 남습니다.
+2. 에디터가 프로젝트에서 `cargo update -p besfa_editor_plugin`을 실행합니다. 같은 저장소의 `besfa_components`도 함께 올라가고, 다른 의존성은 건드리지 않습니다.
+3. 게임을 멈추고 새 플러그인으로 다시 빌드합니다.
+4. cargo의 출력이 **Log**에 나오고(`Process exited with code 1.`은 이전 게임을 멈춘 기록입니다), 아이콘이 초록으로 바뀝니다.
 
 ![업데이트 뒤의 초록 아이콘과 Log의 cargo 출력](../images/plugin-updated.png)
 

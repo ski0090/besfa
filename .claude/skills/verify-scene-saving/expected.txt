@@ -1,0 +1,28 @@
+# What check.ps1 should print for each assumption set and rule, at the sync
+# commit in SKILL.md. FAIL lines are known findings (F1..F6 in SKILL.md), not
+# regressions. Change a line only when a change to the covered code is meant
+# to change that result.
+
+# The user waits for each step to finish; every save succeeds in time.
+patient-reliable NoLossOnPluginUpdate PASS
+patient-reliable NoLossOnStop PASS
+patient-reliable NoLossOnRebuild PASS
+patient-reliable NoLossOnNetPlay PASS
+patient-reliable NoLossOnClose PASS
+patient-reliable NoLossOnLeave PASS
+
+# The user waits; a save can fail or take longer than SAVE_TIMEOUT.
+patient-failing NoLossOnPluginUpdate FAIL
+patient-failing NoLossOnStop FAIL
+patient-failing NoLossOnRebuild FAIL
+patient-failing NoLossOnNetPlay FAIL
+patient-failing NoLossOnClose PASS
+patient-failing NoLossOnLeave PASS
+
+# The user acts while commands and reports are in flight; saves succeed.
+hasty-reliable NoLossOnPluginUpdate FAIL
+hasty-reliable NoLossOnStop FAIL
+hasty-reliable NoLossOnRebuild FAIL
+hasty-reliable NoLossOnNetPlay FAIL
+hasty-reliable NoLossOnClose FAIL
+hasty-reliable NoLossOnLeave FAIL
