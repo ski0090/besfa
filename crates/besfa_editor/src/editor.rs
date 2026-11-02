@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    agent::{self, AgentSettings},
     animation,
     inspector::{Action, Inspector, TRANSFORM},
     panels::{
@@ -183,6 +184,9 @@ pub struct Editor {
     /// The viewport shows the model preview instead of the scene.
     previewing: bool,
     dialog: Option<Dialog>,
+    /// Which agent prompts go to, and whether its settings window is open.
+    agent: AgentSettings,
+    agent_open: bool,
     /// The window may close: nothing is unsaved, or the user chose.
     closing: bool,
     leave: bool,
@@ -237,6 +241,8 @@ impl Editor {
             preview: None,
             previewing: false,
             dialog: None,
+            agent: AgentSettings::read(&AgentSettings::file()),
+            agent_open: false,
             closing: false,
             leave: false,
         };
@@ -370,6 +376,7 @@ impl Editor {
             });
         egui::CentralPanel::default().show(ui, |ui| self.viewport_ui(ui, &ctx));
         self.dialogs(&ctx);
+        self.agent_window(&ctx);
         self.send_brushes(&ctx);
         self.send_snap(&ctx);
 
@@ -1302,6 +1309,9 @@ impl Editor {
                     {
                         self.save_after_ui = true;
                     }
+                    if ui.button("Agent Settings...").clicked() {
+                        self.agent_open = true;
+                    }
                     if ui.button("Back to Project Hub").clicked() {
                         self.request_leave();
                     }
@@ -1584,6 +1594,15 @@ impl Editor {
                 self.viewport_request = self.send(Command::Viewport { name });
             }
             Err(error) => self.log(format!("Could not resize the viewport: {error}")),
+        }
+    }
+
+    fn agent_window(&mut self, ctx: &egui::Context) {
+        if agent::window(ctx, &mut self.agent_open, &mut self.agent) {
+            let file = AgentSettings::file();
+            if let Err(error) = self.agent.write(&file) {
+                self.log(format!("Could not save the agent settings: {error}"));
+            }
         }
     }
 
