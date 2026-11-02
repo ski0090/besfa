@@ -1,17 +1,23 @@
 //! Which AI agent the editor's prompts go to: a provider, reached through its
 //! command-line tool or through its API with a key from an environment
-//! variable. The key itself is never written to the settings file.
+//! variable. The key itself is never written to the settings file. The
+//! Agent tab sends a prompt to the agent's command-line tool, run in the
+//! project.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
-use eframe::egui::{self, Color32, Ui};
+use eframe::egui::{self, Color32, Key, Ui};
 use serde::{Deserialize, Serialize};
 
-use crate::{panels, process};
+use crate::{
+    panels,
+    process::{self, CliProcess, Output},
+};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Provider {
@@ -113,6 +119,167 @@ impl AgentSettings {
             .cloned()
             .unwrap_or_else(|| provider.default_setting())
     }
+
+    /// The program and arguments that run the chosen agent headless in the
+    /// project with the prompt on stdin, or why it cannot run.
+    pub fn invocation(&self) -> Result<(String, Vec<String>), &'static str> {
+        if self.access == Access::Api {
+            return Err(
+                "Sending with an API key is not supported yet. Choose the command-line tool in File > Agent Settings.",
+            );
+        }
+        let setting = self.setting(self.provider);
+        // Nobody can answer a permission prompt, so each may edit files in
+        // the project without asking and nothing more.
+        let args: &[&str] = match self.provider {
+            Provider::Claude => &["-p", "--permission-mode", "acceptEdits"],
+            Provider::OpenAi => &[
+                "exec",
+                "--sandbox",
+                "workspace-write",
+                "--skip-git-repo-check",
+            ],
+            // The prompt flag makes it headless; stdin comes before it.
+            Provider::Gemini => &["--prompt", "", "--approval-mode", "auto_edit"],
+        };
+        let mut args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        let model = setting.model.trim();
+        if !model.is_empty() {
+            args.extend(["--model".into(), model.into()]);
+        }
+        Ok((setting.command.trim().into(), args))
+    }
+}
+
+/// The Agent tab: a prompt box and the latest run's output.
+#[derive(Default)]
+pub struct AgentPanel {
+    prompt: String,
+    run: Option<CliProcess>,
+    output: VecDeque<String>,
+    /// A file the run may change, and when it was changed before the run.
+    watched: Option<(PathBuf, Option<SystemTime>)>,
+}
+
+impl AgentPanel {
+    pub fn running(&self) -> bool {
+        self.run.is_some()
+    }
+
+    /// Runs the agent on `prompt` in `directory`. `poll` tells once it
+    /// exits whether it changed `watch`.
+    pub fn start(
+        &mut self,
+        settings: &AgentSettings,
+        prompt: &str,
+        directory: &Path,
+        watch: PathBuf,
+        ctx: &egui::Context,
+    ) {
+        self.output.clear();
+        self.output
+            .extend(prompt.lines().map(|line| format!("> {line}")));
+        let (program, args) = match settings.invocation() {
+            Ok(invocation) => invocation,
+            Err(reason) => return self.output.push_back(reason.into()),
+        };
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        match CliProcess::start(directory, &program, &args, &[], ctx) {
+            Ok(mut run) => {
+                run.send(prompt);
+                run.end_input();
+                self.watched = Some((watch.clone(), modified(&watch)));
+                self.run = Some(run);
+            }
+            Err(error) => self
+                .output
+                .push_back(format!("Could not start {program}: {error}")),
+        }
+    }
+
+    /// Takes what the run wrote. Once it exits, returns whether it changed
+    /// the watched file.
+    pub fn poll(&mut self) -> Option<bool> {
+        for output in self.run.as_ref()?.poll() {
+            match output {
+                Output::Line(line) => self.output.push_back(line),
+                Output::Exit(code) => {
+                    self.output.push_back(match code {
+                        0 => "Done.".into(),
+                        code => format!("Exited with code {code}."),
+                    });
+                    self.run = None;
+                    let (file, before) = self.watched.take()?;
+                    return Some(modified(&file) != before);
+                }
+            }
+        }
+        None
+    }
+
+    /// Shows the tab. Returns the prompt to send, unless `blocked` says why
+    /// it cannot go.
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        settings: &AgentSettings,
+        blocked: Option<&str>,
+    ) -> Option<String> {
+        let mut send = None;
+        egui::Panel::bottom("agent_prompt").show(ui, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let can_send =
+                    blocked.is_none() && !self.running() && !self.prompt.trim().is_empty();
+                let button = ui.add_enabled(can_send, egui::Button::new("Send"));
+                let field = ui.add(
+                    egui::TextEdit::multiline(&mut self.prompt)
+                        .desired_rows(2)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Ask the agent to change the project. Ctrl+Enter sends."),
+                );
+                let shortcut = field.has_focus()
+                    && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
+                if can_send && (button.clicked() || shortcut) {
+                    send = Some(std::mem::take(&mut self.prompt).trim().to_string());
+                }
+            });
+            ui.horizontal(|ui| {
+                let access = match settings.access {
+                    Access::Cli => "command-line tool",
+                    Access::Api => "API key",
+                };
+                let label = format!("{} with its {access}", settings.provider.label());
+                ui.label(egui::RichText::new(label).color(panels::MUTED).small());
+                if let Some(run) = &self.run {
+                    ui.spinner();
+                    if ui.small_button("Stop").clicked() {
+                        run.stop();
+                    }
+                }
+                if let Some(reason) = blocked {
+                    ui.colored_label(panels::WARNING, reason);
+                }
+            });
+        });
+        panels::log(ui, &self.output);
+        send
+    }
+}
+
+/// Closing the project stops the agent rather than let it edit on unseen.
+impl Drop for AgentPanel {
+    fn drop(&mut self) {
+        if let Some(run) = &self.run {
+            run.stop();
+        }
+    }
+}
+
+fn modified(file: &Path) -> Option<SystemTime> {
+    fs::metadata(file)
+        .and_then(|metadata| metadata.modified())
+        .ok()
 }
 
 /// Shows the settings window while `open`. Returns true when a value
@@ -231,6 +398,70 @@ mod tests {
         let text = ron::to_string(&settings).unwrap();
         let back: AgentSettings = ron::from_str(&text).unwrap();
         assert_eq!(back, settings);
+    }
+
+    #[test]
+    fn runs_each_cli_headless_with_the_model_when_one_is_set() {
+        let mut settings = AgentSettings::default();
+        let (program, args) = settings.invocation().unwrap();
+        assert_eq!(program, "claude");
+        assert_eq!(
+            args,
+            [
+                "-p",
+                "--permission-mode",
+                "acceptEdits",
+                "--model",
+                "claude-sonnet-5-5"
+            ]
+        );
+
+        settings.provider = Provider::Gemini;
+        let (program, args) = settings.invocation().unwrap();
+        assert_eq!(program, "gemini");
+        assert_eq!(args, ["--prompt", "", "--approval-mode", "auto_edit"]);
+
+        settings.provider = Provider::OpenAi;
+        assert_eq!(settings.invocation().unwrap().1[0], "exec");
+
+        settings.access = Access::Api;
+        assert!(settings.invocation().is_err());
+    }
+
+    #[test]
+    fn sends_the_prompt_only_when_nothing_blocks_it() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        struct State {
+            panel: AgentPanel,
+            blocked: Option<&'static str>,
+            sent: Option<String>,
+        }
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, state: &mut State| {
+                let settings = AgentSettings::default();
+                if let Some(prompt) = state.panel.ui(ui, &settings, state.blocked) {
+                    state.sent = Some(prompt);
+                }
+            },
+            State {
+                panel: AgentPanel::default(),
+                blocked: Some("Save the scene first."),
+                sent: None,
+            },
+        );
+        harness.state_mut().panel.prompt = "Add a red cube.\n".into();
+        harness.run();
+        harness.get_by_label("Send").click();
+        harness.run();
+        assert_eq!(harness.state().sent, None);
+
+        harness.state_mut().blocked = None;
+        harness.run();
+        harness.get_by_label("Send").click();
+        harness.run();
+        assert_eq!(harness.state().sent.as_deref(), Some("Add a red cube."));
+        assert!(harness.state().panel.prompt.is_empty());
     }
 
     #[test]

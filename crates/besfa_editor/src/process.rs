@@ -52,18 +52,23 @@ pub fn find_program_on_path(program: &str) -> Option<PathBuf> {
 }
 
 /// The first `program` in `dirs`, skipping `own` and the folders in it.
+/// npm installs tools like `gemini` as a `.cmd` script, not an `.exe`.
 fn find_program(
     program: &str,
     dirs: impl IntoIterator<Item = PathBuf>,
     own: Option<&Path>,
 ) -> Option<PathBuf> {
-    let file = format!("{program}{}", std::env::consts::EXE_SUFFIX);
+    let files = [format!("{program}.exe"), format!("{program}.cmd")];
     // Windows paths ignore case.
     let lower = |path: &Path| PathBuf::from(path.to_string_lossy().to_lowercase());
     dirs.into_iter()
         .filter(|dir| !own.is_some_and(|own| lower(dir).starts_with(lower(own))))
-        .map(|dir| dir.join(&file))
-        .find(|path| path.is_file())
+        .find_map(|dir| {
+            files
+                .iter()
+                .map(|file| dir.join(file))
+                .find(|path| path.is_file())
+        })
 }
 
 impl CliProcess {
@@ -115,6 +120,11 @@ impl CliProcess {
         if let Some(stdin) = &mut self.stdin {
             let _ = stdin.write_all(format!("{line}\n").as_bytes());
         }
+    }
+
+    /// Closes the process's stdin, for programs that read it to the end.
+    pub fn end_input(&mut self) {
+        self.stdin = None;
     }
 
     /// Stops the process and everything it launched. Killing only cargo
