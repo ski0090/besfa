@@ -1,18 +1,28 @@
-//! Which AI agent the editor's prompts go to: a provider, reached through its
-//! command-line tool or through its API with a key from an environment
-//! variable. The key itself is never written to the settings file. The
-//! Agent tab sends a prompt to the agent's command-line tool, run in the
-//! project.
+//! The AI agent the editor's prompts go to. Each provider's command-line tool
+//! runs headless in the project, either logged in on its own or with an API
+//! key the editor keeps in the Windows Credential Manager, never in a file.
+//! The Agent tab picks the provider and model and sends the prompt.
 
 use std::{
     collections::{BTreeMap, VecDeque},
     fs,
     path::{Path, PathBuf},
+    process::Stdio,
+    sync::mpsc::{self, Receiver},
+    thread,
     time::SystemTime,
 };
 
-use eframe::egui::{self, Color32, Key, Ui};
+use eframe::egui::{self, Key, RichText, Ui};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use windows::{
+    Win32::Security::Credentials::{
+        CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree,
+        CredReadW, CredWriteW,
+    },
+    core::{HSTRING, PWSTR},
+};
 
 use crate::{
     panels,
@@ -33,60 +43,143 @@ impl Provider {
     pub fn label(self) -> &'static str {
         match self {
             Provider::Claude => "Claude",
-            Provider::OpenAi => "ChatGPT (OpenAI)",
+            Provider::OpenAi => "ChatGPT",
             Provider::Gemini => "Gemini",
         }
     }
 
-    fn default_setting(self) -> Setting {
-        let (command, key_env, model) = match self {
-            Provider::Claude => ("claude", "ANTHROPIC_API_KEY", "claude-sonnet-5-5"),
-            Provider::OpenAi => ("codex", "OPENAI_API_KEY", ""),
-            Provider::Gemini => ("gemini", "GEMINI_API_KEY", ""),
+    fn command(self) -> &'static str {
+        match self {
+            Provider::Claude => "claude",
+            Provider::OpenAi => "codex",
+            Provider::Gemini => "gemini",
+        }
+    }
+
+    /// The variable the CLI reads an API key from. `codex exec` ignores
+    /// `OPENAI_API_KEY`.
+    fn key_env(self) -> &'static str {
+        match self {
+            Provider::Claude => "ANTHROPIC_API_KEY",
+            Provider::OpenAi => "CODEX_API_KEY",
+            Provider::Gemini => "GEMINI_API_KEY",
+        }
+    }
+
+    /// Models to offer besides the CLI's default. Claude's aliases follow
+    /// its latest models; the others are left to the CLI's own setting.
+    fn models(self) -> &'static [&'static str] {
+        match self {
+            Provider::Claude => &["fable", "opus", "sonnet", "haiku"],
+            Provider::OpenAi | Provider::Gemini => &[],
+        }
+    }
+
+    /// Headless, with the prompt on stdin. Nobody can answer a permission
+    /// prompt, so each may edit files in the project without asking and
+    /// nothing more.
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            Provider::Claude => &["-p", "--permission-mode", "acceptEdits"],
+            Provider::OpenAi => &[
+                "exec",
+                "--sandbox",
+                "workspace-write",
+                "--skip-git-repo-check",
+            ],
+            // The prompt flag makes it headless; stdin comes before it.
+            Provider::Gemini => &["--prompt", "", "--approval-mode", "auto_edit"],
+        }
+    }
+
+    /// Whether the CLI is logged in on its own. Run off the UI thread.
+    fn check(self) -> Cli {
+        if process::find_program_on_path(self.command()).is_none() {
+            return Cli::Missing;
+        }
+        let output = |args: &[&str]| {
+            process::command(self.command())
+                .args(args)
+                .stdin(Stdio::null())
+                .output()
+                .ok()
         };
-        Setting {
-            command: command.into(),
-            key_env: key_env.into(),
-            model: model.into(),
+        let logged_in = match self {
+            Provider::Claude => output(&["auth", "status"]).is_some_and(|output| {
+                serde_json::from_slice::<Value>(&output.stdout)
+                    .is_ok_and(|status| status["loggedIn"] == true)
+            }),
+            Provider::OpenAi => {
+                output(&["login", "status"]).is_some_and(|output| output.status.success())
+            }
+            // ponytail: no status command; a saved Google login can still be
+            // refused when the request goes out.
+            Provider::Gemini => std::env::var("USERPROFILE")
+                .is_ok_and(|home| Path::new(&home).join(".gemini/oauth_creds.json").is_file()),
+        };
+        if logged_in {
+            Cli::LoggedIn
+        } else {
+            Cli::LoggedOut
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Access {
-    #[default]
+/// Where a provider's command-line tool stands on this machine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cli {
+    Checking,
+    Missing,
+    LoggedOut,
+    LoggedIn,
+}
+
+/// How a prompt reaches the provider.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Route {
+    /// The CLI's own login.
     Cli,
-    Api,
+    /// The CLI with this API key.
+    Key(String),
 }
 
+/// The CLI's own login wins; a saved key covers a CLI that is not logged in.
+fn route(cli: Cli, key: &str) -> Result<Route, &'static str> {
+    match cli {
+        Cli::Checking => Err("Checking the command-line tool."),
+        Cli::Missing => Err("Install its command-line tool first."),
+        Cli::LoggedIn => Ok(Route::Cli),
+        Cli::LoggedOut if key.trim().is_empty() => {
+            Err("Log in to its command-line tool or enter an API key in File > Agent Settings.")
+        }
+        Cli::LoggedOut => Ok(Route::Key(key.trim().into())),
+    }
+}
+
+/// The program, arguments and environment that send a prompt.
+pub fn invocation(
+    provider: Provider,
+    route: &Route,
+    model: &str,
+) -> (String, Vec<String>, Vec<(String, String)>) {
+    let mut args: Vec<String> = provider.args().iter().map(|arg| arg.to_string()).collect();
+    if !model.is_empty() {
+        args.extend(["--model".into(), model.into()]);
+    }
+    let env = match route {
+        Route::Cli => Vec::new(),
+        Route::Key(key) => vec![(provider.key_env().into(), key.clone())],
+    };
+    (provider.command().into(), args, env)
+}
+
+/// What the Agent tab last picked: the provider, and each provider's model,
+/// empty for the CLI's default.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-#[serde(default)]
-pub struct Setting {
-    /// The command-line program that runs the agent.
-    pub command: String,
-    /// The environment variable that holds the API key.
-    pub key_env: String,
-    /// The model to ask for; empty for the provider's default.
-    pub model: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentSettings {
     pub provider: Provider,
-    pub access: Access,
-    /// Per-provider settings. A provider missing here uses its defaults.
-    pub settings: BTreeMap<Provider, Setting>,
-}
-
-impl Default for AgentSettings {
-    fn default() -> Self {
-        Self {
-            provider: Provider::default(),
-            access: Access::default(),
-            settings: BTreeMap::new(),
-        }
-    }
+    pub models: BTreeMap<Provider, String>,
 }
 
 impl AgentSettings {
@@ -112,43 +205,206 @@ impl AgentSettings {
         fs::write(file, text).map_err(|error| error.to_string())
     }
 
-    /// `provider`'s settings as they are, filled in with the defaults.
-    pub fn setting(&self, provider: Provider) -> Setting {
-        self.settings
-            .get(&provider)
-            .cloned()
-            .unwrap_or_else(|| provider.default_setting())
+    pub fn model(&self, provider: Provider) -> &str {
+        self.models.get(&provider).map_or("", String::as_str)
+    }
+}
+
+/// Each provider's CLI state and saved API key.
+pub struct Agents {
+    cli: BTreeMap<Provider, Cli>,
+    keys: BTreeMap<Provider, String>,
+    checks: Option<Receiver<(Provider, Cli)>>,
+    /// Why the last key could not be saved.
+    key_error: Option<String>,
+}
+
+impl Agents {
+    /// The saved keys, with the CLIs still to check.
+    pub fn load() -> Self {
+        Self {
+            cli: Provider::ALL
+                .map(|provider| (provider, Cli::Checking))
+                .into(),
+            keys: Provider::ALL
+                .map(|provider| {
+                    (
+                        provider,
+                        read_secret(&key_target(provider)).unwrap_or_default(),
+                    )
+                })
+                .into(),
+            checks: None,
+            key_error: None,
+        }
     }
 
-    /// The program and arguments that run the chosen agent headless in the
-    /// project with the prompt on stdin, or why it cannot run.
-    pub fn invocation(&self) -> Result<(String, Vec<String>), &'static str> {
-        if self.access == Access::Api {
-            return Err(
-                "Sending with an API key is not supported yet. Choose the command-line tool in File > Agent Settings.",
-            );
+    /// Checks every CLI again in the background.
+    pub fn check(&mut self, ctx: &egui::Context) {
+        let (sender, receiver) = mpsc::channel();
+        for provider in Provider::ALL {
+            self.cli.insert(provider, Cli::Checking);
+            let (sender, ctx) = (sender.clone(), ctx.clone());
+            thread::spawn(move || {
+                let _ = sender.send((provider, provider.check()));
+                ctx.request_repaint();
+            });
         }
-        let setting = self.setting(self.provider);
-        // Nobody can answer a permission prompt, so each may edit files in
-        // the project without asking and nothing more.
-        let args: &[&str] = match self.provider {
-            Provider::Claude => &["-p", "--permission-mode", "acceptEdits"],
-            Provider::OpenAi => &[
-                "exec",
-                "--sandbox",
-                "workspace-write",
-                "--skip-git-repo-check",
-            ],
-            // The prompt flag makes it headless; stdin comes before it.
-            Provider::Gemini => &["--prompt", "", "--approval-mode", "auto_edit"],
-        };
-        let mut args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
-        let model = setting.model.trim();
-        if !model.is_empty() {
-            args.extend(["--model".into(), model.into()]);
-        }
-        Ok((setting.command.trim().into(), args))
+        self.checks = Some(receiver);
     }
+
+    /// Checks the CLIs unless they were checked already.
+    pub fn check_once(&mut self, ctx: &egui::Context) {
+        if self.checks.is_none() {
+            self.check(ctx);
+        }
+    }
+
+    pub fn poll(&mut self) {
+        if let Some(checks) = &self.checks {
+            self.cli.extend(checks.try_iter());
+        }
+    }
+
+    fn cli(&self, provider: Provider) -> Cli {
+        self.cli.get(&provider).copied().unwrap_or(Cli::Checking)
+    }
+
+    pub fn route(&self, provider: Provider) -> Result<Route, &'static str> {
+        route(
+            self.cli(provider),
+            self.keys.get(&provider).map_or("", String::as_str),
+        )
+    }
+
+    /// How the provider would be reached, in a word or two.
+    fn summary(&self, provider: Provider) -> &'static str {
+        match (self.cli(provider), self.route(provider)) {
+            (Cli::Checking, _) => "checking",
+            (_, Ok(Route::Cli)) => "uses CLI",
+            (_, Ok(Route::Key(_))) => "uses API key",
+            (_, Err(_)) => "can't send yet",
+        }
+    }
+}
+
+fn key_target(provider: Provider) -> String {
+    format!("Besfa/agent/{}", provider.command())
+}
+
+/// A generic credential's secret, if the Credential Manager has one.
+fn read_secret(target: &str) -> Option<String> {
+    let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
+    unsafe {
+        CredReadW(
+            &HSTRING::from(target),
+            CRED_TYPE_GENERIC,
+            None,
+            &mut credential,
+        )
+        .ok()?;
+        let blob = std::slice::from_raw_parts(
+            (*credential).CredentialBlob,
+            (*credential).CredentialBlobSize as usize,
+        );
+        let secret = String::from_utf8(blob.to_vec()).ok();
+        CredFree(credential as *const _);
+        secret
+    }
+}
+
+/// Saves `secret` under `target` for this Windows user, or removes it when
+/// empty.
+fn write_secret(target: &str, secret: &str) -> Result<(), String> {
+    if secret.is_empty() {
+        // Nothing saved is as good as removed.
+        let _ = unsafe { CredDeleteW(&HSTRING::from(target), CRED_TYPE_GENERIC, None) };
+        return Ok(());
+    }
+    let mut name: Vec<u16> = target.encode_utf16().chain([0]).collect();
+    let mut blob = secret.as_bytes().to_vec();
+    let credential = CREDENTIALW {
+        Type: CRED_TYPE_GENERIC,
+        TargetName: PWSTR(name.as_mut_ptr()),
+        CredentialBlobSize: blob.len() as u32,
+        CredentialBlob: blob.as_mut_ptr(),
+        Persist: CRED_PERSIST_LOCAL_MACHINE,
+        ..Default::default()
+    };
+    unsafe { CredWriteW(&credential, 0) }.map_err(|error| error.to_string())
+}
+
+/// Shows the settings window while `open`: every provider with its CLI's
+/// state and an API key box.
+pub fn window(ctx: &egui::Context, open: &mut bool, agents: &mut Agents) {
+    egui::Window::new("Agent Settings")
+        .open(open)
+        .resizable(false)
+        .show(ctx, |ui| show(ui, agents));
+}
+
+fn show(ui: &mut Ui, agents: &mut Agents) {
+    ui.set_width(420.0);
+    for provider in Provider::ALL {
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.strong(provider.label());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let summary = agents.summary(provider);
+                    let color = match agents.route(provider) {
+                        Ok(_) => panels::GOOD,
+                        Err(_) if summary == "checking" => panels::MUTED,
+                        Err(_) => panels::WARNING,
+                    };
+                    ui.colored_label(color, summary);
+                });
+            });
+            ui.horizontal(|ui| {
+                let command = provider.command();
+                let (installed, logged_in) = match agents.cli(provider) {
+                    Cli::Checking => ("checking", ""),
+                    Cli::Missing => ("not installed", ""),
+                    Cli::LoggedOut => ("installed", "not logged in"),
+                    Cli::LoggedIn => ("installed", "logged in"),
+                };
+                let line = match logged_in {
+                    "" => format!("CLI `{command}`: {installed}"),
+                    _ => format!("CLI `{command}`: {installed}, {logged_in}"),
+                };
+                ui.label(RichText::new(line).color(panels::MUTED).small());
+            });
+            if agents.cli(provider) == Cli::LoggedOut {
+                let hint = format!("Run `{}` in a terminal to log in.", provider.command());
+                ui.label(RichText::new(hint).color(panels::MUTED).small());
+            }
+            let key = agents.keys.entry(provider).or_default();
+            let field = ui.add(
+                egui::TextEdit::singleline(key)
+                    .password(true)
+                    .hint_text(format!("{} API key", provider.label()))
+                    .desired_width(f32::INFINITY),
+            );
+            if field.lost_focus() {
+                agents.key_error = write_secret(&key_target(provider), key.trim()).err();
+            }
+        });
+    }
+    if let Some(error) = &agents.key_error {
+        ui.colored_label(panels::ERROR, format!("Could not save the key: {error}"));
+    }
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("Keys stay in the Windows Credential Manager.")
+                .color(panels::MUTED)
+                .small(),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Check again").clicked() {
+                agents.check(ui.ctx());
+            }
+        });
+    });
 }
 
 /// The Agent tab: a prompt box and the latest run's output.
@@ -166,11 +422,11 @@ impl AgentPanel {
         self.run.is_some()
     }
 
-    /// Runs the agent on `prompt` in `directory`. `poll` tells once it
+    /// Runs `invocation` on `prompt` in `directory`. `poll` tells once it
     /// exits whether it changed `watch`.
     pub fn start(
         &mut self,
-        settings: &AgentSettings,
+        (program, args, env): (String, Vec<String>, Vec<(String, String)>),
         prompt: &str,
         directory: &Path,
         watch: PathBuf,
@@ -179,12 +435,12 @@ impl AgentPanel {
         self.output.clear();
         self.output
             .extend(prompt.lines().map(|line| format!("> {line}")));
-        let (program, args) = match settings.invocation() {
-            Ok(invocation) => invocation,
-            Err(reason) => return self.output.push_back(reason.into()),
-        };
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        match CliProcess::start(directory, &program, &args, &[], ctx) {
+        let env: Vec<(&str, &str)> = env
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        match CliProcess::start(directory, &program, &args, &env, ctx) {
             Ok(mut run) => {
                 run.send(prompt);
                 run.end_input();
@@ -217,12 +473,13 @@ impl AgentPanel {
         None
     }
 
-    /// Shows the tab. Returns the prompt to send, unless `blocked` says why
-    /// it cannot go.
+    /// Shows the tab, where the provider and model are picked too. Returns
+    /// the prompt to send, unless `blocked` says why it cannot go.
     pub fn ui(
         &mut self,
         ui: &mut Ui,
-        settings: &AgentSettings,
+        settings: &mut AgentSettings,
+        agents: &Agents,
         blocked: Option<&str>,
     ) -> Option<String> {
         let mut send = None;
@@ -245,12 +502,7 @@ impl AgentPanel {
                 }
             });
             ui.horizontal(|ui| {
-                let access = match settings.access {
-                    Access::Cli => "command-line tool",
-                    Access::Api => "API key",
-                };
-                let label = format!("{} with its {access}", settings.provider.label());
-                ui.label(egui::RichText::new(label).color(panels::MUTED).small());
+                model_picker(ui, settings, agents);
                 if let Some(run) = &self.run {
                     ui.spinner();
                     if ui.small_button("Stop").clicked() {
@@ -265,6 +517,38 @@ impl AgentPanel {
         panels::log(ui, &self.output);
         send
     }
+}
+
+fn model_label(model: &str) -> &str {
+    if model.is_empty() { "Default" } else { model }
+}
+
+/// One list of every provider's models, each provider headed by how it
+/// would be reached.
+fn model_picker(ui: &mut Ui, settings: &mut AgentSettings, agents: &Agents) {
+    let provider = settings.provider;
+    let selected = format!(
+        "{} · {}",
+        provider.label(),
+        model_label(settings.model(provider))
+    );
+    egui::ComboBox::from_id_salt("agent_model")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            for provider in Provider::ALL {
+                let heading = format!("{} · {}", provider.label(), agents.summary(provider));
+                ui.label(RichText::new(heading).color(panels::MUTED).small());
+                for model in std::iter::once("").chain(provider.models().iter().copied()) {
+                    let current =
+                        settings.provider == provider && settings.model(provider) == model;
+                    let label = format!("{} {}", provider.label(), model_label(model));
+                    if ui.selectable_label(current, label).clicked() {
+                        settings.provider = provider;
+                        settings.models.insert(provider, model.into());
+                    }
+                }
+            }
+        });
 }
 
 /// Closing the project stops the agent rather than let it edit on unseen.
@@ -282,174 +566,100 @@ fn modified(file: &Path) -> Option<SystemTime> {
         .ok()
 }
 
-/// Shows the settings window while `open`. Returns true when a value
-/// changed, so the caller saves the file.
-pub fn window(ctx: &egui::Context, open: &mut bool, settings: &mut AgentSettings) -> bool {
-    let mut changed = false;
-    egui::Window::new("Agent Settings")
-        .open(open)
-        .resizable(false)
-        .show(ctx, |ui| {
-            changed = show(ui, settings);
-        });
-    changed
-}
-
-fn show(ui: &mut Ui, settings: &mut AgentSettings) -> bool {
-    let before = settings.clone();
-    ui.horizontal(|ui| {
-        ui.label("Provider");
-        for provider in Provider::ALL {
-            ui.radio_value(&mut settings.provider, provider, provider.label());
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.label("Connect with");
-        ui.radio_value(&mut settings.access, Access::Cli, "Command-line tool");
-        ui.radio_value(&mut settings.access, Access::Api, "API key");
-    });
-    ui.separator();
-
-    let provider = settings.provider;
-    let mut setting = settings.setting(provider);
-    egui::Grid::new("agent_setting")
-        .num_columns(2)
-        .show(ui, |ui| {
-            ui.label("CLI command");
-            ui.add(egui::TextEdit::singleline(&mut setting.command).desired_width(260.0));
-            ui.end_row();
-            ui.label("");
-            cli_status(ui, &setting.command);
-            ui.end_row();
-
-            ui.label("API key variable");
-            ui.add(egui::TextEdit::singleline(&mut setting.key_env).desired_width(260.0));
-            ui.end_row();
-            ui.label("");
-            key_status(ui, &setting.key_env);
-            ui.end_row();
-
-            ui.label("Model");
-            ui.add(
-                egui::TextEdit::singleline(&mut setting.model)
-                    .hint_text("empty for the default")
-                    .desired_width(260.0),
-            );
-            ui.end_row();
-        });
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(
-            "The API key is read from that environment variable when a prompt is sent. It is not saved here.",
-        )
-        .color(panels::MUTED)
-        .small(),
-    );
-
-    settings.settings.insert(provider, setting);
-    *settings != before
-}
-
-fn cli_status(ui: &mut Ui, command: &str) {
-    let found = process::find_program_on_path(command.trim()).is_some();
-    status(ui, found, "found on PATH", "not found on PATH");
-}
-
-fn key_status(ui: &mut Ui, key_env: &str) {
-    let set = std::env::var(key_env.trim()).is_ok_and(|value| !value.is_empty());
-    status(ui, set, "set", "not set");
-}
-
-fn status(ui: &mut Ui, good: bool, yes: &str, no: &str) {
-    let (text, color): (&str, Color32) = if good {
-        (yes, panels::GOOD)
-    } else {
-        (no, panels::WARNING)
-    };
-    ui.colored_label(color, text);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
 
     #[test]
-    fn a_missing_provider_falls_back_to_its_defaults() {
-        let settings = AgentSettings::default();
-        assert_eq!(settings.setting(Provider::Claude).command, "claude");
-        assert_eq!(settings.setting(Provider::Gemini).key_env, "GEMINI_API_KEY");
+    fn prefers_the_cli_login_and_falls_back_to_a_saved_key() {
+        assert_eq!(route(Cli::LoggedIn, "sk"), Ok(Route::Cli));
+        assert_eq!(route(Cli::LoggedOut, " sk "), Ok(Route::Key("sk".into())));
+        assert!(route(Cli::LoggedOut, "").is_err());
+        assert!(route(Cli::Missing, "sk").is_err());
+        assert!(route(Cli::Checking, "sk").is_err());
     }
 
     #[test]
-    fn keeps_the_choices_and_settings_across_a_restart() {
-        let mut settings = AgentSettings {
-            provider: Provider::OpenAi,
-            access: Access::Api,
-            ..Default::default()
-        };
-        settings.settings.insert(
-            Provider::OpenAi,
-            Setting {
-                command: "codex".into(),
-                key_env: "MY_KEY".into(),
-                model: "m".into(),
-            },
-        );
-        let text = ron::to_string(&settings).unwrap();
-        let back: AgentSettings = ron::from_str(&text).unwrap();
-        assert_eq!(back, settings);
-    }
-
-    #[test]
-    fn runs_each_cli_headless_with_the_model_when_one_is_set() {
-        let mut settings = AgentSettings::default();
-        let (program, args) = settings.invocation().unwrap();
+    fn passes_the_key_in_the_variable_each_cli_reads() {
+        let (program, args, env) = invocation(Provider::Claude, &Route::Cli, "opus");
         assert_eq!(program, "claude");
         assert_eq!(
             args,
-            [
-                "-p",
-                "--permission-mode",
-                "acceptEdits",
-                "--model",
-                "claude-sonnet-5-5"
-            ]
+            ["-p", "--permission-mode", "acceptEdits", "--model", "opus"]
         );
+        assert!(env.is_empty());
 
-        settings.provider = Provider::Gemini;
-        let (program, args) = settings.invocation().unwrap();
-        assert_eq!(program, "gemini");
+        let (program, args, env) = invocation(Provider::OpenAi, &Route::Key("sk".into()), "");
+        assert_eq!(program, "codex");
+        assert_eq!(args[0], "exec");
+        assert_eq!(env, [("CODEX_API_KEY".to_string(), "sk".to_string())]);
+
+        let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "");
         assert_eq!(args, ["--prompt", "", "--approval-mode", "auto_edit"]);
+    }
 
-        settings.provider = Provider::OpenAi;
-        assert_eq!(settings.invocation().unwrap().1[0], "exec");
+    #[test]
+    fn keeps_the_provider_and_models_across_a_restart() {
+        let mut settings = AgentSettings {
+            provider: Provider::OpenAi,
+            ..Default::default()
+        };
+        settings.models.insert(Provider::Claude, "opus".into());
+        let text = ron::to_string(&settings).unwrap();
+        let back: AgentSettings = ron::from_str(&text).unwrap();
+        assert_eq!(back, settings);
+        assert_eq!(back.model(Provider::Gemini), "");
+    }
 
-        settings.access = Access::Api;
-        assert!(settings.invocation().is_err());
+    #[test]
+    fn keeps_a_key_in_the_credential_manager_until_it_is_cleared() {
+        let target = format!("Besfa/test/{}", std::process::id());
+        write_secret(&target, "sk-test").unwrap();
+        assert_eq!(read_secret(&target).as_deref(), Some("sk-test"));
+        write_secret(&target, "").unwrap();
+        assert_eq!(read_secret(&target), None);
+        write_secret(&target, "").unwrap();
+    }
+
+    fn agents(cli: Cli) -> Agents {
+        Agents {
+            cli: Provider::ALL.map(|provider| (provider, cli)).into(),
+            keys: BTreeMap::new(),
+            checks: None,
+            key_error: None,
+        }
+    }
+
+    struct Tab {
+        panel: AgentPanel,
+        settings: AgentSettings,
+        agents: Agents,
+        blocked: Option<&'static str>,
+        sent: Option<String>,
+    }
+
+    fn tab(blocked: Option<&'static str>) -> Harness<'static, Tab> {
+        Harness::builder().build_ui_state(
+            |ui, tab: &mut Tab| {
+                let blocked = tab.blocked;
+                if let Some(prompt) = tab.panel.ui(ui, &mut tab.settings, &tab.agents, blocked) {
+                    tab.sent = Some(prompt);
+                }
+            },
+            Tab {
+                panel: AgentPanel::default(),
+                settings: AgentSettings::default(),
+                agents: agents(Cli::LoggedIn),
+                blocked,
+                sent: None,
+            },
+        )
     }
 
     #[test]
     fn sends_the_prompt_only_when_nothing_blocks_it() {
-        use egui_kittest::{Harness, kittest::Queryable};
-
-        struct State {
-            panel: AgentPanel,
-            blocked: Option<&'static str>,
-            sent: Option<String>,
-        }
-        let mut harness = Harness::builder().build_ui_state(
-            |ui, state: &mut State| {
-                let settings = AgentSettings::default();
-                if let Some(prompt) = state.panel.ui(ui, &settings, state.blocked) {
-                    state.sent = Some(prompt);
-                }
-            },
-            State {
-                panel: AgentPanel::default(),
-                blocked: Some("Save the scene first."),
-                sent: None,
-            },
-        );
+        let mut harness = tab(Some("Save the scene first."));
         harness.state_mut().panel.prompt = "Add a red cube.\n".into();
         harness.run();
         harness.get_by_label("Send").click();
@@ -465,18 +675,20 @@ mod tests {
     }
 
     #[test]
-    fn picking_the_api_key_access_updates_the_settings() {
-        use egui_kittest::{Harness, kittest::Queryable};
+    fn picks_the_provider_and_model_next_to_the_prompt() {
+        let mut harness = tab(None);
+        harness.run();
+        harness.get_by_role(egui::accesskit::Role::ComboBox).click();
+        harness.run();
+        harness.get_by_label("Claude opus").click();
+        harness.run();
+        assert_eq!(harness.state().settings.model(Provider::Claude), "opus");
 
-        let mut harness = Harness::builder().build_ui_state(
-            |ui, settings: &mut AgentSettings| {
-                show(ui, settings);
-            },
-            AgentSettings::default(),
-        );
+        harness.get_by_role(egui::accesskit::Role::ComboBox).click();
         harness.run();
-        harness.get_by_label("API key").click();
+        harness.get_by_label("ChatGPT Default").click();
         harness.run();
-        assert_eq!(harness.state().access, Access::Api);
+        assert_eq!(harness.state().settings.provider, Provider::OpenAi);
+        assert_eq!(harness.state().settings.model(Provider::Claude), "opus");
     }
 }

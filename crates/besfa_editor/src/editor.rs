@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    agent::{self, AgentPanel, AgentSettings},
+    agent::{self, AgentPanel, AgentSettings, Agents},
     animation,
     inspector::{Action, Inspector, TRANSFORM},
     panels::{
@@ -194,8 +194,10 @@ pub struct Editor {
     /// The viewport shows the model preview instead of the scene.
     previewing: bool,
     dialog: Option<Dialog>,
-    /// Which agent prompts go to, and whether its settings window is open.
+    /// Which agent and model prompts go to, how each agent can be reached,
+    /// and whether the settings window is open.
     agent: AgentSettings,
+    agents: Agents,
     agent_open: bool,
     agent_panel: AgentPanel,
     /// The window may close: nothing is unsaved, or the user chose.
@@ -253,6 +255,7 @@ impl Editor {
             previewing: false,
             dialog: None,
             agent: AgentSettings::read(&AgentSettings::file()),
+            agents: Agents::load(),
             agent_open: false,
             agent_panel: AgentPanel::default(),
             closing: false,
@@ -412,6 +415,7 @@ impl Editor {
         self.poll_net();
         self.relaunch_when_exited(ctx);
         self.poll_update(ctx);
+        self.agents.poll();
         self.poll_agent(ctx);
     }
 
@@ -1325,6 +1329,7 @@ impl Editor {
                     }
                     if ui.button("Agent Settings...").clicked() {
                         self.agent_open = true;
+                        self.agents.check(ui.ctx());
                     }
                     if ui.button("Back to Project Hub").clicked() {
                         self.request_leave();
@@ -1612,15 +1617,29 @@ impl Editor {
     }
 
     fn agent_tab(&mut self, ui: &mut Ui, ctx: &egui::Context) {
-        let blocked = self.agent.invocation().err().or(self
+        self.agents.check_once(ctx);
+        let before = self.agent.clone();
+        let route = self.agents.route(self.agent.provider);
+        let blocked = route.as_ref().err().copied().or(self
             .scene
             .dirty
             .then_some("Save the scene first. The agent may change its file."));
-        if let Some(prompt) = self.agent_panel.ui(ui, &self.agent, blocked) {
+        let prompt = self
+            .agent_panel
+            .ui(ui, &mut self.agent, &self.agents, blocked);
+        if self.agent != before
+            && let Err(error) = self.agent.write(&AgentSettings::file())
+        {
+            self.log(format!("Could not save the agent settings: {error}"));
+        }
+        // The pick may have changed this frame, so the route is asked again.
+        if let (Some(prompt), Ok(route)) = (prompt, self.agents.route(self.agent.provider)) {
+            let provider = self.agent.provider;
+            let invocation = agent::invocation(provider, &route, self.agent.model(provider));
             let directory = self.project.file("");
             let scene = self.project.file(SCENE_FILE);
             self.agent_panel
-                .start(&self.agent, &prompt, &directory, scene, ctx);
+                .start(invocation, &prompt, &directory, scene, ctx);
         }
     }
 
@@ -1645,12 +1664,7 @@ impl Editor {
     }
 
     fn agent_window(&mut self, ctx: &egui::Context) {
-        if agent::window(ctx, &mut self.agent_open, &mut self.agent) {
-            let file = AgentSettings::file();
-            if let Err(error) = self.agent.write(&file) {
-                self.log(format!("Could not save the agent settings: {error}"));
-            }
-        }
+        agent::window(ctx, &mut self.agent_open, &mut self.agents);
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
