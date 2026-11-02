@@ -2293,9 +2293,7 @@ mod tests {
         editor.agent.access.insert(Provider::Gemini, Access::Key);
         editor.bottom_tab = BottomTab::Agent;
         harness.run_steps(4);
-        let model_list = || {
-            |node: &egui_kittest::Node| node.rect().min.y > BOTTOM_PANEL.min.y
-        };
+        let model_list = || |node: &egui_kittest::Node| node.rect().min.y > BOTTOM_PANEL.min.y;
         harness
             .get_all_by_role(egui::accesskit::Role::ComboBox)
             .find(model_list())
@@ -2307,7 +2305,7 @@ mod tests {
             &mut harness,
             "agent-tab",
             Some(egui::Rect::from_min_max(
-                egui::pos2(0.0, 520.0),
+                egui::pos2(0.0, 470.0),
                 BOTTOM_PANEL.max,
             )),
         );

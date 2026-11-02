@@ -566,11 +566,15 @@ impl AgentPanel {
 }
 
 fn model_label(model: &str) -> &str {
-    if model.is_empty() { "Default" } else { model }
+    if model.is_empty() {
+        "CLI default"
+    } else {
+        model
+    }
 }
 
-/// One list of every provider's models, each provider headed by how it
-/// would be reached.
+/// One list of every provider's models: each provider's name and how it
+/// would be reached, then its models by name alone.
 fn model_picker(ui: &mut Ui, settings: &mut AgentSettings, agents: &Agents) {
     let provider = settings.provider;
     let selected = format!(
@@ -580,26 +584,40 @@ fn model_picker(ui: &mut Ui, settings: &mut AgentSettings, agents: &Agents) {
     );
     egui::ComboBox::from_id_salt("agent_model")
         .selected_text(selected)
+        // Every provider's models at once, without scrolling.
+        .height(f32::INFINITY)
         .show_ui(ui, |ui| {
             for provider in Provider::ALL {
                 let access = settings.access(provider);
-                let how = match (agents.ready(provider, access), access) {
-                    (None, _) => "checking",
-                    (Some(false), _) => "can't send yet",
-                    (Some(true), Access::Cli) => "CLI",
-                    (Some(true), Access::Key) => "API key",
+                let (how, color) = match (agents.ready(provider, access), access) {
+                    (None, _) => ("checking", panels::MUTED),
+                    (Some(false), _) => ("can't send yet", panels::WARNING),
+                    (Some(true), Access::Cli) => ("CLI", panels::MUTED),
+                    (Some(true), Access::Key) => ("API key", panels::MUTED),
                 };
-                let heading = format!("{} · {how}", provider.label());
-                ui.label(RichText::new(heading).color(panels::MUTED).small());
-                for model in std::iter::once("").chain(provider.models().iter().copied()) {
-                    let current =
-                        settings.provider == provider && settings.model(provider) == model;
-                    let label = format!("{} {}", provider.label(), model_label(model));
-                    if ui.selectable_label(current, label).clicked() {
-                        settings.provider = provider;
-                        settings.models.insert(provider, model.into());
-                    }
+                let mut heading = egui::text::LayoutJob::default();
+                for text in [
+                    RichText::new(provider.label()).strong(),
+                    RichText::new(format!("  {how}")).color(color).small(),
+                ] {
+                    text.append_to(
+                        &mut heading,
+                        ui.style(),
+                        egui::FontSelection::Default,
+                        egui::Align::Center,
+                    );
                 }
+                ui.label(heading);
+                ui.indent(provider.label(), |ui| {
+                    for model in std::iter::once("").chain(provider.models().iter().copied()) {
+                        let current =
+                            settings.provider == provider && settings.model(provider) == model;
+                        if ui.selectable_label(current, model_label(model)).clicked() {
+                            settings.provider = provider;
+                            settings.models.insert(provider, model.into());
+                        }
+                    }
+                });
             }
         });
 }
@@ -765,13 +783,18 @@ mod tests {
         harness.run();
         harness.get_by_role(egui::accesskit::Role::ComboBox).click();
         harness.run();
-        harness.get_by_label("Claude opus").click();
+        harness.get_by_label("opus").click();
         harness.run();
         assert_eq!(harness.state().settings.model(Provider::Claude), "opus");
 
         harness.get_by_role(egui::accesskit::Role::ComboBox).click();
         harness.run();
-        harness.get_by_label("ChatGPT Default").click();
+        // Each provider lists its CLI default, in `Provider::ALL` order.
+        harness
+            .get_all_by_label("CLI default")
+            .nth(1)
+            .unwrap()
+            .click();
         harness.run();
         assert_eq!(harness.state().settings.provider, Provider::OpenAi);
         assert_eq!(harness.state().settings.model(Provider::Claude), "opus");
