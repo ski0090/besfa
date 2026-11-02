@@ -569,9 +569,11 @@ impl Fields<'_> {
                         row(ui, Some(&name), remove_button);
                         ui.indent(&name, |ui| self.node(ui, item, path, Some("items")));
                     }
+                    // The 🗙 first: the field fills the row, and what comes
+                    // after it would widen the panel each frame.
                     _ => row(ui, Some(&name), |ui| {
-                        self.leaf(ui, item, path);
                         remove_button(ui);
+                        self.leaf(ui, item, path);
                     }),
                 }
                 if remove {
@@ -636,8 +638,8 @@ impl Fields<'_> {
                         ui.indent(key, |ui| self.node(ui, value, path, Some("items")));
                     }
                     _ => row(ui, Some(key), |ui| {
-                        self.leaf(ui, value, path);
                         remove_button(ui);
+                        self.leaf(ui, value, path);
                     }),
                 }
                 if remove {
@@ -1193,5 +1195,40 @@ mod tests {
             "Enter commits"
         );
         assert_eq!(frame(vec![], &committed.unwrap()), None, "once");
+    }
+
+    #[test]
+    fn keeps_to_the_panels_width() {
+        // The placed zombie of the manual's screenshots: its AnimationParams'
+        // `floats` map widened the panel by a 🗙 every frame.
+        let report = include_str!("../screenshot_data/reports.txt")
+            .lines()
+            .find(|line| line.contains(r#""type":"entity","id":4294966789,"#))
+            .unwrap();
+        let report: Value = serde_json::from_str(report.trim_start_matches("@besfa ")).unwrap();
+        let components: Vec<ComponentData> =
+            serde_json::from_value(report["components"].clone()).unwrap();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .build_ui_state(
+                move |ui, width: &mut f32| {
+                    let scene = Inspected {
+                        selected: Some(4294966789),
+                        entity: None,
+                        placement: None,
+                        components: &components,
+                        systems: &[],
+                        addable: &[],
+                        crate_name: None,
+                    };
+                    let panel = egui::Panel::right("inspector")
+                        .default_size(320.0)
+                        .show(ui, |ui| Inspector::default().ui(ui, &scene, true));
+                    *width = panel.response.rect.width();
+                },
+                0.0,
+            );
+        harness.run_steps(10);
+        assert_eq!(*harness.state(), 320.0);
     }
 }

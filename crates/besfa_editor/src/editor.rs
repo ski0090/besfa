@@ -2185,11 +2185,7 @@ mod tests {
         editor.right_tab = RightTab::Animation;
         harness.run_steps(4);
         save(&mut harness, "animation-tab", Some(RIGHT_PANEL));
-        // ponytail: the Inspector widens each frame over the machine's nested
-        // lists; show the cube there until that is fixed.
-        let editor = &mut harness.state_mut().editor;
-        select(editor, CUBE);
-        editor.right_tab = RightTab::Inspector;
+        harness.state_mut().editor.right_tab = RightTab::Inspector;
 
         // The Assets tab, with the models' thumbnails.
         harness.state_mut().editor.assets_tab = true;
