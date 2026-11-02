@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    agent::{self, AgentSettings},
+    agent::{self, AgentPanel, AgentSettings, Agents, Route},
     animation,
     inspector::{Action, Inspector, TRANSFORM},
     panels::{
@@ -62,6 +62,8 @@ const RESET_PROTOCOL: u32 = 13;
 
 /// Where a project keeps the scene view's snapping, in the project.
 const SNAP_FILE: &str = "besfa/snap.besfa";
+/// The scene the editor edits, which the agent may change too.
+const SCENE_FILE: &str = "assets/scenes/main.scn.ron";
 
 /// The log keeps the latest lines.
 const MAX_LOG_LINES: usize = 2000;
@@ -105,6 +107,14 @@ enum RightTab {
     Inspector,
     Scatter,
     Animation,
+}
+
+/// What the bottom panel shows.
+#[derive(Clone, Copy, PartialEq)]
+enum BottomTab {
+    Log,
+    Assets,
+    Agent,
 }
 
 enum Dialog {
@@ -187,15 +197,18 @@ pub struct Editor {
     source: SourceWatch,
     inspector: Inspector,
     assets: AssetBrowser,
-    assets_tab: bool,
+    bottom_tab: BottomTab,
     /// The model preview's tab, while it is open.
     preview: Option<ModelPreview>,
     /// The viewport shows the model preview instead of the scene.
     previewing: bool,
     dialog: Option<Dialog>,
-    /// Which agent prompts go to, and whether its settings window is open.
+    /// Which agent and model prompts go to, how each agent can be reached,
+    /// and whether the settings window is open.
     agent: AgentSettings,
+    agents: Agents,
     agent_open: bool,
+    agent_panel: AgentPanel,
     /// The window may close: nothing is unsaved, or the user chose.
     closing: bool,
     leave: bool,
@@ -248,12 +261,14 @@ impl Editor {
             code_changed: false,
             save_after_ui: false,
             inspector: Inspector::default(),
-            assets_tab: false,
+            bottom_tab: BottomTab::Log,
             preview: None,
             previewing: false,
             dialog: None,
             agent: AgentSettings::read(&AgentSettings::file()),
+            agents: Agents::load(),
             agent_open: false,
+            agent_panel: AgentPanel::default(),
             closing: false,
             leave: false,
         };
@@ -317,20 +332,21 @@ impl Editor {
             .resizable(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.assets_tab, false, "Log");
-                    ui.selectable_value(&mut self.assets_tab, true, "Assets");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Log, "Log");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Assets, "Assets");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Agent, "Agent");
                 });
                 ui.separator();
-                if !self.assets_tab {
-                    panels::log(ui, &self.logs);
-                } else {
-                    match self.assets.ui(ui, !self.playing) {
+                match self.bottom_tab {
+                    BottomTab::Log => panels::log(ui, &self.logs),
+                    BottomTab::Assets => match self.assets.ui(ui, !self.playing) {
                         Some(AssetAction::Add(path)) => {
                             self.instantiate(path, self.viewport_middle())
                         }
                         Some(AssetAction::Preview(path)) => self.open_preview(path),
                         None => {}
-                    }
+                    },
+                    BottomTab::Agent => self.agent_tab(ui, &ctx),
                 }
             });
         egui::Panel::left("hierarchy")
@@ -412,6 +428,8 @@ impl Editor {
         self.poll_net();
         self.relaunch_when_exited(ctx);
         self.poll_update(ctx);
+        self.agents.poll();
+        self.poll_agent(ctx);
     }
 
     /// Reports from the game go to the scene, everything else to the log.
@@ -1365,6 +1383,7 @@ impl Editor {
                     }
                     if ui.button("Agent Settings...").clicked() {
                         self.agent_open = true;
+                        self.agents.check(ui.ctx());
                     }
                     if ui.button("Back to Project Hub").clicked() {
                         self.request_leave();
@@ -1656,12 +1675,64 @@ impl Editor {
         }
     }
 
+    fn agent_tab(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        self.agents.check_once(ctx);
+        let before = self.agent.clone();
+        let route = self.agent_route();
+        let blocked = route.as_ref().err().copied().or(self
+            .scene
+            .dirty
+            .then_some("Save the scene first. The agent may change its file."));
+        let prompt = self
+            .agent_panel
+            .ui(ui, &mut self.agent, &self.agents, blocked);
+        if self.agent != before
+            && let Err(error) = self.agent.write(&AgentSettings::file())
+        {
+            self.log(format!("Could not save the agent settings: {error}"));
+        }
+        // The pick may have changed this frame, so the route is asked again.
+        if let (Some(prompt), Ok(route)) = (prompt, self.agent_route()) {
+            let provider = self.agent.provider;
+            let invocation = agent::invocation(provider, &route, self.agent.model(provider));
+            let directory = self.project.file("");
+            let scene = self.project.file(SCENE_FILE);
+            self.agent_panel
+                .start(invocation, &prompt, &directory, scene, ctx);
+        }
+    }
+
+    /// Reloads the scene the agent changed, unless that would throw away
+    /// edits made while it ran.
+    fn poll_agent(&mut self, ctx: &egui::Context) {
+        let Some(scene_changed) = self.agent_panel.poll() else {
+            return;
+        };
+        self.log("The agent finished.");
+        if !scene_changed {
+            return;
+        }
+        if self.scene.dirty {
+            self.log(format!(
+                "The agent changed {SCENE_FILE} while the scene had unsaved changes. Saving them overwrites the agent's."
+            ));
+        } else if !self.playing && !self.starting {
+            self.log("The agent changed the scene; reloading it.");
+            self.restart(false, ctx);
+        }
+    }
+
+    /// How a prompt to the picked provider would go out, or why it cannot.
+    fn agent_route(&self) -> Result<Route, &'static str> {
+        let provider = self.agent.provider;
+        self.agents.route(provider, self.agent.access(provider))
+    }
+
     fn agent_window(&mut self, ctx: &egui::Context) {
-        if agent::window(ctx, &mut self.agent_open, &mut self.agent) {
-            let file = AgentSettings::file();
-            if let Err(error) = self.agent.write(&file) {
-                self.log(format!("Could not save the agent settings: {error}"));
-            }
+        if agent::window(ctx, &mut self.agent_open, &mut self.agent, &mut self.agents)
+            && let Err(error) = self.agent.write(&AgentSettings::file())
+        {
+            self.log(format!("Could not save the agent settings: {error}"));
         }
     }
 
@@ -1888,6 +1959,7 @@ fn rust_files(directory: &Path) -> Vec<(PathBuf, SystemTime)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::{Access, Cli, Provider};
 
     #[test]
     fn notices_a_source_change_once_it_settles() {
@@ -2365,11 +2437,58 @@ mod tests {
         harness.state_mut().editor.right_tab = RightTab::Inspector;
 
         // The Assets tab, with the models' thumbnails.
-        harness.state_mut().editor.assets_tab = true;
+        harness.state_mut().editor.bottom_tab = BottomTab::Assets;
         harness.run_steps(4);
         save(&mut harness, "assets-tab", Some(BOTTOM_PANEL));
 
-        harness.state_mut().editor.assets_tab = false;
+        // The Agent tab with its model list open: Claude's CLI is not
+        // logged in, ChatGPT's is, and Gemini goes with a key.
+        let editor = &mut harness.state_mut().editor;
+        editor.agents = Agents::fixed(
+            [Cli::LoggedOut, Cli::LoggedIn, Cli::LoggedIn],
+            &[(Provider::Gemini, "gemini-key")],
+        );
+        editor.agent.access.insert(Provider::Gemini, Access::Key);
+        editor.bottom_tab = BottomTab::Agent;
+        harness.run_steps(4);
+        let model_list = || |node: &egui_kittest::Node| node.rect().min.y > BOTTOM_PANEL.min.y;
+        harness
+            .get_all_by_role(egui::accesskit::Role::ComboBox)
+            .find(model_list())
+            .unwrap()
+            .click();
+        harness.remove_cursor();
+        harness.run_steps(4);
+        save(
+            &mut harness,
+            "agent-tab",
+            Some(egui::Rect::from_min_max(
+                egui::pos2(0.0, 470.0),
+                BOTTOM_PANEL.max,
+            )),
+        );
+        harness
+            .get_all_by_role(egui::accesskit::Role::ComboBox)
+            .find(model_list())
+            .unwrap()
+            .click();
+        harness.run_steps(4);
+
+        // Agent Settings, each provider showing what its choice needs.
+        harness.state_mut().editor.agent_open = true;
+        harness.run_steps(4);
+        let title = harness.get_by_label("Agent Settings").rect();
+        save(
+            &mut harness,
+            "agent-settings",
+            Some(egui::Rect::from_min_size(
+                title.min - egui::vec2(12.0, 8.0),
+                egui::vec2(460.0, 230.0),
+            )),
+        );
+        let editor = &mut harness.state_mut().editor;
+        editor.agent_open = false;
+        editor.bottom_tab = BottomTab::Log;
         harness.run_steps(4);
 
         // Who Play starts.
