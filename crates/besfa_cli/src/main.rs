@@ -1,4 +1,5 @@
 mod cli;
+mod game;
 mod output;
 mod project_creation;
 
@@ -38,6 +39,10 @@ fn main() -> ExitCode {
             besfa_mcp::serve();
             ExitCode::SUCCESS
         }
+        // Exit codes on Windows go past 255, which ExitCode cannot carry.
+        Commands::Build { args } => std::process::exit(game::cargo("build", &args.all())),
+        Commands::Test { args } => std::process::exit(game::cargo("test", &args.all())),
+        Commands::Run { args } => std::process::exit(game::cargo("run", &args.all())),
         Commands::Validate { directory } => {
             eprintln!(
                 "Validating '{}' is not implemented yet.",

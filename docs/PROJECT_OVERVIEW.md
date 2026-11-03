@@ -62,6 +62,7 @@ Besfa 프로젝트 자동화를 위한 Rust 바이너리 crate다.
 ```text
 besfa new <DIRECTORY> [--template <TEMPLATE>]
 besfa validate [DIRECTORY]
+besfa build | test | run [CARGO_ARGS]... [-- ARGS]...
 besfa --help
 besfa --version
 ```
