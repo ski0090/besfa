@@ -22,6 +22,11 @@ pub(crate) enum Commands {
         #[arg(value_name = "DIRECTORY")]
         directory: PathBuf,
 
+        /// Also add Claude Code Game Studios: agents, skills and hooks for
+        /// making the game with Claude Code. Needs Git and the network.
+        #[arg(long)]
+        ccgs: bool,
+
         /// Format used to print the result.
         #[arg(long, value_enum)]
         output: Option<OutputFormat>,
@@ -98,12 +103,21 @@ mod tests {
             .expect("the new command should parse");
 
         match cli.command {
-            Commands::New { directory, output } => {
+            Commands::New {
+                directory,
+                ccgs,
+                output,
+            } => {
                 assert_eq!(directory, PathBuf::from("projects/demo"));
+                assert!(!ccgs, "CCGS is opt-in");
                 assert!(matches!(output, Some(OutputFormat::Json)));
             }
             _ => panic!("expected the new command"),
         }
+
+        let cli =
+            Cli::try_parse_from(["besfa", "new", "demo", "--ccgs"]).expect("--ccgs should parse");
+        assert!(matches!(cli.command, Commands::New { ccgs: true, .. }));
     }
 
     #[test]

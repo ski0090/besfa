@@ -7,7 +7,7 @@
 ## 명령
 
 ```text
-besfa new <DIRECTORY> --output json
+besfa new <DIRECTORY> [--ccgs] --output json
 ```
 
 `DIRECTORY`는 생성될 게임 프로젝트의 최종 루트 디렉터리다.
@@ -29,6 +29,13 @@ cargo new --bin <프로젝트 이름>
 
 - `.cargo/config.toml`에 `target-dir = "%LOCALAPPDATA%/Besfa/target"`을 쓴다.
 - `%LOCALAPPDATA%/Besfa/prebuild/Cargo.lock`이 있으면 새 프로젝트로 복사해, 의존성 버전을 미리 빌드된 것과 맞춘다.
+
+`--ccgs`를 주면 [Claude Code Game Studios](https://github.com/ski0090/Claude-Code-Game-Studios)(CCGS: Claude Code로 게임을 만드는 에이전트, 스킬, 훅)를 프로젝트에 더한다. 에디터 허브의 **Add Claude Code Game Studios** 체크박스가 이 옵션이다.
+
+- Git으로 `crates/besfa_cli/src/project_creation.rs`의 `CCGS_COMMIT`에 고정된 커밋 하나만 받아, `CCGS_PATHS`(`.claude/`, `CLAUDE.md`, `project.yaml`, `design/`, `production/`, 프레임워크 문서, 그리고 엔진 레퍼런스 중 Bevy 것만)를 저장소에 커밋된 그대로(LF) 복사한다. CCGS 버전을 올리려면 `CCGS_COMMIT`을 바꾼다.
+- `CLAUDE.md`의 엔진 레퍼런스 import를 Bevy의 `VERSION.md`로 바꾸고, CCGS의 MIT 고지를 `.claude/CCGS-LICENSE`에 쓰며, CCGS가 쓰는 개인 설정과 세션 상태 파일을 `.gitignore`에 더한다.
+- 엔진 설정(`project.yaml`의 `engine`)은 쓰지 않는다. 프로젝트 폴더에서 Claude Code를 열고 `/start`, `/setup-engine bevy 0.20`을 실행한다.
+- Git은 로그인을 묻지 않고, 30초 넘게 초당 1000바이트보다 느리면 받기를 포기한다. Git이 없거나, 받기에 실패하거나, 받은 `CLAUDE.md`에 바꿀 import가 없으면 프로젝트를 만들지 않고 종료 코드 `30`, `code`는 `ccgs_failed`를 반환한다. Git의 진단은 표준 오류로 나간다.
 
 ```text
 besfa prebuild
@@ -56,7 +63,7 @@ besfa run [CARGO_ARGS]... [-- GAME_ARGS]...
 
 `--` 앞의 인자는 두 단계의 cargo에 모두, `--`와 그 뒤는 실행 단계에만 넘긴다. Cargo의 출력은 바꾸지 않고 그대로 낸다(CCGS의 `test-run.sh`가 `test result:`와 `error[E...]` 줄을 읽는다). 빌드 단계가 실패하거나 Cargo를 시작하지 못하면 종료 코드 `30`, 그 밖에는 실행 단계의 코드를 그대로 돌려준다: `test`는 테스트가 실패하면 Cargo의 `101`, `run`은 게임의 종료 코드다.
 
-생성 시점에는 네트워크를 쓰지 않는다. 의존성은 게임을 처음 빌드할 때 받는다. 모든 단계가 성공한 경우에만 결과물을 최종 루트 디렉터리로 이동한다. `besfa/` 또는 `.besfa/` 데이터 경로와 초기 데이터 파일 생성은 데이터 포맷 계약을 확정한 뒤 추가한다.
+생성 시점에는 `--ccgs`가 CCGS를 받는 것 말고는 네트워크를 쓰지 않는다. 의존성은 게임을 처음 빌드할 때 받는다. 모든 단계가 성공한 경우에만 결과물을 최종 루트 디렉터리로 이동한다. `besfa/` 또는 `.besfa/` 데이터 경로와 초기 데이터 파일 생성은 데이터 포맷 계약을 확정한 뒤 추가한다.
 
 초기 구현은 Cargo의 기본 VCS 및 Rust edition 설정을 그대로 따른다. 게임 프로젝트의 VCS 설정 선택은 추후 에디터 UI에서 제공한다.
 
@@ -92,7 +99,7 @@ besfa run [CARGO_ARGS]... [-- GAME_ARGS]...
 | `10` | 대상 디렉터리가 이미 존재함 |
 | `11` | Cargo가 거부한 유효하지 않은 프로젝트 이름 또는 요청 |
 | `20` | 파일 시스템 오류 |
-| `30` | 예상하지 못한 내부 오류 |
+| `30` | Cargo나 Git 실행 실패(`ccgs_failed` 포함), 또는 예상하지 못한 내부 오류 |
 
 Cargo가 프로젝트 이름 때문에 생성에 실패하면, `besfa`는 Cargo의 진단을 표준 오류로 전달하고 종료 코드 `11`을 반환한다. UI는 이 진단을 사용자에게 표시할 수 있다.
 
