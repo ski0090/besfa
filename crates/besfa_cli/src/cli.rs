@@ -124,6 +124,11 @@ mod tests {
 
         assert!(args(&["besfa", "build"]).is_empty());
         assert_eq!(args(&["besfa", "build", "--release"]), ["--release"]);
+        // CCGS's smoke command.
+        assert_eq!(
+            args(&["besfa", "build", "--all-targets"]),
+            ["--all-targets"]
+        );
         assert_eq!(args(&["besfa", "test", "spawns"]), ["spawns"]);
         assert_eq!(
             args(&["besfa", "test", "--lib", "--", "--nocapture"]),
@@ -133,6 +138,17 @@ mod tests {
             args(&["besfa", "run", "--", "--level", "shop"]),
             ["--", "--level", "shop"]
         );
+    }
+
+    #[test]
+    fn answers_help_instead_of_passing_it_to_cargo() {
+        // CCGS asks `besfa test --help` whether this besfa has the command.
+        for command in ["build", "test", "run"] {
+            let error = Cli::try_parse_from(["besfa", command, "--help"])
+                .expect_err("--help prints help and exits");
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+            assert_eq!(error.exit_code(), 0);
+        }
     }
 
     #[test]
