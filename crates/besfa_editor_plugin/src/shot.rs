@@ -1,6 +1,7 @@
 //! Pictures of the scene for an agent, which has no other way to see it. A
 //! camera of its own renders the scene off screen the way the scene view
 //! shows it, without the grid and handles and, unless asked, the markers,
+//! or the game's own cameras draw into the picture what the player sees,
 //! and the picture goes to a PNG file; one picture at a time, once the
 //! scene's models have loaded.
 
@@ -15,12 +16,13 @@ use bevy::{
         render_resource::TextureFormat,
         view::screenshot::{Screenshot, ScreenshotCaptured},
     },
+    ui::IsDefaultUiCamera,
     world_serialization::{DynamicWorldRoot, WorldAssetRoot, WorldInstance, WorldInstanceSpawner},
 };
 
 use crate::{
     inspect::send_report,
-    scene_view::{EditorOnly, MARKER_LAYER},
+    scene_view::{EditorCamera, EditorOnly, MARKER_LAYER, Parked},
     thumbnail::{Compiling, IDLE_FRAMES, LOAD_FRAMES, RENDER_FRAMES, save},
 };
 
@@ -47,6 +49,8 @@ pub(crate) struct Shot {
     size: UVec2,
     /// Whether it draws the markers too.
     markers: bool,
+    /// Whether the game's cameras draw it instead, from where they are.
+    game: bool,
 }
 
 impl Shot {
@@ -94,18 +98,35 @@ impl Shot {
         };
         let width = width.unwrap_or(1024);
         let height = height.unwrap_or(if top.is_some() { width } else { 768 });
-        if !(1..=MAX_SIZE).contains(&width) || !(1..=MAX_SIZE).contains(&height) {
-            return Err(format!(
-                "a picture is 1 to {MAX_SIZE} pixels a side, not {width} by {height}"
-            ));
-        }
         Ok(Self {
             transform,
             projection,
-            size: UVec2::new(width, height),
+            size: size(width, height)?,
             markers,
+            game: false,
         })
     }
+
+    /// What the player sees: the game's cameras that draw to the window,
+    /// with the game's UI, 1280 by 720 by default, Bevy's window size.
+    pub(crate) fn game(width: Option<u32>, height: Option<u32>) -> Result<Self, String> {
+        Ok(Self {
+            transform: Transform::default(),
+            projection: Projection::default(),
+            size: size(width.unwrap_or(1280), height.unwrap_or(720))?,
+            markers: false,
+            game: true,
+        })
+    }
+}
+
+fn size(width: u32, height: u32) -> Result<UVec2, String> {
+    if !(1..=MAX_SIZE).contains(&width) || !(1..=MAX_SIZE).contains(&height) {
+        return Err(format!(
+            "a picture is 1 to {MAX_SIZE} pixels a side, not {width} by {height}"
+        ));
+    }
+    Ok(UVec2::new(width, height))
 }
 
 #[derive(Resource, Default)]
@@ -119,7 +140,11 @@ pub(crate) struct Shots {
 struct Job {
     path: String,
     file: PathBuf,
-    camera: Entity,
+    /// The camera made for the picture, unless the game's draw it.
+    camera: Option<Entity>,
+    /// The game's cameras drawing it, to be given back.
+    borrowed: Vec<Borrowed>,
+    target: RenderTarget,
     frames: u32,
     /// Frames in a row nothing loaded or compiled.
     idle: u32,
@@ -150,29 +175,45 @@ fn work(world: &mut World) {
             None,
         );
         let image = world.resource_mut::<Assets<Image>>().add(image);
-        let camera = world
-            .spawn((
-                Name::new("Screenshot camera"),
-                EditorOnly,
-                Camera3d::default(),
-                Camera {
-                    order: -90,
-                    ..default()
-                },
-                RenderTarget::Image(image.into()),
-                shot.projection,
-                shot.transform,
-            ))
-            .id();
-        if shot.markers {
-            world
-                .entity_mut(camera)
-                .insert(RenderLayers::default().with(MARKER_LAYER));
-        }
+        let target = RenderTarget::Image(image.into());
+        let (camera, borrowed) = if shot.game {
+            let borrowed = borrow_game_cameras(world, &target);
+            if borrowed.is_empty() {
+                send_report(&Report::Screenshot {
+                    path,
+                    error: Some("No game camera draws to the window.".into()),
+                });
+                return;
+            }
+            (None, borrowed)
+        } else {
+            let camera = world
+                .spawn((
+                    Name::new("Screenshot camera"),
+                    EditorOnly,
+                    Camera3d::default(),
+                    Camera {
+                        order: -90,
+                        ..default()
+                    },
+                    target.clone(),
+                    shot.projection,
+                    shot.transform,
+                ))
+                .id();
+            if shot.markers {
+                world
+                    .entity_mut(camera)
+                    .insert(RenderLayers::default().with(MARKER_LAYER));
+            }
+            (Some(camera), Vec::new())
+        };
         world.resource_mut::<Shots>().job = Some(Job {
             path,
             file,
             camera,
+            borrowed,
+            target,
             frames: 0,
             idle: 0,
             capturing: false,
@@ -187,9 +228,84 @@ fn work(world: &mut World) {
         return;
     }
     job.capturing = true;
-    let camera = job.camera;
-    let target = world.get::<RenderTarget>(camera).unwrap().clone();
+    let target = job.target.clone();
     world.spawn(Screenshot(target)).observe(captured);
+}
+
+/// A game camera drawing a picture, and what it gets back afterwards.
+struct Borrowed {
+    camera: Entity,
+    target: RenderTarget,
+    /// The switch the game set, which a parked camera gets back on play.
+    active: bool,
+    /// Whether it was made the UI's camera for the picture.
+    ui: bool,
+}
+
+/// Points the game's cameras that draw where the player looks, the window
+/// or the editor's viewport, at `target`, switched on as the game set
+/// them. The UI goes with the last of them to draw, the one Bevy gives it
+/// in a window, unless the game picked its UI camera itself.
+fn borrow_game_cameras(world: &mut World, target: &RenderTarget) -> Vec<Borrowed> {
+    let has_ui_camera = world
+        .query_filtered::<(), (With<Camera>, With<IsDefaultUiCamera>)>()
+        .iter(world)
+        .next()
+        .is_some();
+    let mut borrowed: Vec<(Borrowed, isize)> = world
+        .query_filtered::<
+            (Entity, &Camera, &RenderTarget, Option<&Parked>),
+            (Without<EditorCamera>, Without<EditorOnly>),
+        >()
+        .iter(world)
+        .filter(|(_, _, target, _)| {
+            matches!(target, RenderTarget::Window(_) | RenderTarget::TextureView(_))
+        })
+        .map(|(camera, settings, target, parked)| {
+            let borrowed = Borrowed {
+                camera,
+                target: target.clone(),
+                active: parked.map_or(settings.is_active, |parked| parked.active),
+                ui: false,
+            };
+            (borrowed, settings.order)
+        })
+        .collect();
+    if !has_ui_camera
+        && let Some((ui, _)) = borrowed
+            .iter_mut()
+            .filter(|(borrowed, _)| borrowed.active)
+            .max_by_key(|(borrowed, order)| (*order, borrowed.camera))
+    {
+        ui.ui = true;
+    }
+    for (borrowed, _) in &borrowed {
+        let mut camera = world.entity_mut(borrowed.camera);
+        camera.insert(target.clone());
+        camera.get_mut::<Camera>().unwrap().is_active = borrowed.active;
+        if borrowed.ui {
+            camera.insert(IsDefaultUiCamera);
+        }
+    }
+    borrowed.into_iter().map(|(borrowed, _)| borrowed).collect()
+}
+
+/// Gives the game's cameras back what [`borrow_game_cameras`] took, off if
+/// the editor parked them meanwhile, as it does until the game plays.
+fn give_back(world: &mut World, borrowed: Vec<Borrowed>) {
+    for borrowed in borrowed {
+        let Ok(mut camera) = world.get_entity_mut(borrowed.camera) else {
+            continue;
+        };
+        let parked = camera.contains::<Parked>();
+        camera.insert(borrowed.target);
+        if let Some(mut settings) = camera.get_mut::<Camera>() {
+            settings.is_active = borrowed.active && !parked;
+        }
+        if borrowed.ui {
+            camera.remove::<IsDefaultUiCamera>();
+        }
+    }
 }
 
 /// Placed models and prefabs still loading or spawning, which a picture
@@ -214,15 +330,18 @@ fn loading(world: &mut World) -> bool {
     })
 }
 
-/// Writes the picture, drops its camera, whose image goes with it, and
-/// reports it.
+/// Writes the picture, drops its camera, whose image goes with it, or
+/// gives the game's back, and reports it.
 fn captured(capture: On<ScreenshotCaptured>, mut commands: Commands) {
     let image = capture.image.clone();
     commands.queue(move |world: &mut World| {
         let Some(job) = world.resource_mut::<Shots>().job.take() else {
             return;
         };
-        world.despawn(job.camera);
+        if let Some(camera) = job.camera {
+            world.despawn(camera);
+        }
+        give_back(world, job.borrowed);
         let error = save(&image, &job.file, false).err();
         match &error {
             Some(error) => warn!("Could not save {}: {error}", job.path),

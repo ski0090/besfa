@@ -43,7 +43,8 @@ use serde_json::Value;
 ///     [`Command::Ghost`], and snapping handles, [`Command::Snap`].
 /// 12. Markers in pictures of the scene, [`Command::Screenshot`]'s `markers`.
 /// 13. [`Command::Reset`].
-pub const VERSION: u32 = 13;
+/// 14. Pictures of what the player sees, [`Command::Screenshot`]'s `game`.
+pub const VERSION: u32 = 14;
 
 /// The game's cargo feature that brings in `besfa_editor_plugin`, in games
 /// that depend on `besfa_components` and leave the editor out of release
@@ -375,16 +376,21 @@ pub enum Command {
     /// asked, once the scene's models have loaded.
     Screenshot {
         file: String,
+        #[serde(default)]
         target: [f32; 3],
         eye: Option<[f32; 3]>,
         top: Option<f32>,
         /// Pixels; 1024 wide by default, and 768 high, or as high as wide
-        /// with `top`.
+        /// with `top`; 1280 by 720 with `game`.
         width: Option<u32>,
         height: Option<u32>,
         /// Also the icons and rings the scene view draws for what has no
         /// mesh to show it, as spawn points; since protocol 12.
         markers: Option<bool>,
+        /// What the player sees instead: the game's cameras that draw to
+        /// the window draw into the picture, with the game's UI, and the
+        /// view fields are left unused; since protocol 14.
+        game: Option<bool>,
     },
 }
 
@@ -1054,8 +1060,18 @@ mod tests {
                 width: None,
                 height: None,
                 markers: None,
+                game: None,
             }
         );
+        let game = request(r#"{"command":"screenshot","file":"shot.png","game":true}"#).command;
+        assert!(matches!(
+            game,
+            Command::Screenshot {
+                target: [0.0, 0.0, 0.0],
+                game: Some(true),
+                ..
+            }
+        ));
     }
 
     #[test]
