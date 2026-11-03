@@ -154,7 +154,7 @@ besfa new C:\Projects\my_game --ccgs
 | `assets/` | 모델, 프리팹 같은 에셋을 넣는 폴더. [에셋과 프리팹](07-assets-prefabs.md) 참고. |
 | `.cargo/config.toml` | 미리 빌드한 Bevy를 같이 쓰게 하는 설정. |
 | `.mcp.json` | Claude Code가 이 프로젝트를 다룰 때 쓰는 설정. [Claude Code로 다루기](14-claude-code.md) 참고. |
-| `.claude/`, `CLAUDE.md`, `project.yaml`, `design/`, `production/`, `docs/` | **Add Claude Code Game Studios**(`--ccgs`)를 켰을 때만. Claude Code Game Studios의 에이전트, 스킬, 설정. [Claude Code Game Studios 더하기](14-claude-code.md#claude-code-game-studios-더하기) 참고. |
+| `.ccg/`, `.claude/`, `CLAUDE.md`, `project.yaml`, `design/`, `production/`, `docs/` | **Add Claude Code Game Studios**(`--ccgs`)를 켰을 때만. Claude Code Game Studios(`.ccg` 서브모듈)와 그리로 가는 링크, 프로젝트의 설정. [Claude Code Game Studios 더하기](14-claude-code.md#claude-code-game-studios-더하기) 참고. |
 
 에디터를 쓰다 보면 다음도 생깁니다.
 

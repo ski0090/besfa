@@ -160,8 +160,8 @@ pub fn reveal(directory: &str) {
 /// what Bevy has for Unity's Asset Store.
 pub const BEVY_ASSETS: &str = "https://bevy.org/assets/";
 
-/// Claude Code Game Studios, which `besfa new --ccgs` copies from.
-pub const CCGS: &str = "https://github.com/ski0090/Claude-Code-Game-Studios";
+/// Claude Code Game Studios, whose `besfa` branch `besfa new --ccgs` adds.
+pub const CCGS: &str = "https://github.com/ski0090/Claude-Code-Game-Studios/tree/besfa";
 
 /// Hands `target`, a URL or a folder, to Explorer, which opens the default
 /// browser or a window, outside the editor's job so it stays open when the
