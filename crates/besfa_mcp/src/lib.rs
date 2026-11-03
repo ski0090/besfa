@@ -30,6 +30,7 @@ const ERROR_LINES: usize = 10;
 /// Answers MCP requests on stdin until the client closes it, then stops
 /// the game it started.
 pub fn serve() {
+    stop_other_servers();
     let mut game = None;
     let mut stdout = io::stdout();
     // Stdout carries only JSON-RPC lines; the game's output is piped.
@@ -92,6 +93,23 @@ pub fn screenshot(
     } else {
         Ok(file)
     }
+}
+
+/// Ends every other server of this program and the games they started, so
+/// a new one replaces what an earlier session left running.
+fn stop_other_servers() {
+    let Some(name) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.file_name().map(|name| name.to_string_lossy().into_owned()))
+    else {
+        return;
+    };
+    let _ = quiet("taskkill")
+        .args(["/F", "/T", "/FI", &format!("IMAGENAME eq {name}")])
+        .args(["/FI", &format!("PID ne {}", std::process::id())])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// The result of the JSON-RPC request `message`, or its error object.
