@@ -32,10 +32,12 @@ cargo new --bin <프로젝트 이름>
 
 `--ccgs`를 주면 [Claude Code Game Studios](https://github.com/ski0090/Claude-Code-Game-Studios)(CCGS: Claude Code로 게임을 만드는 에이전트, 스킬, 훅)를 프로젝트에 더한다. 에디터 허브의 **Add Claude Code Game Studios** 체크박스가 이 옵션이다.
 
-- Git으로 `crates/besfa_cli/src/project_creation.rs`의 `CCGS_COMMIT`에 고정된 커밋 하나만 받아, `CCGS_PATHS`(`.claude/`, `CLAUDE.md`, `project.yaml`, `design/`, `production/`, 프레임워크 문서, 그리고 엔진 레퍼런스 중 Bevy 것만)를 저장소에 커밋된 그대로(LF) 복사한다. CCGS 버전을 올리려면 `CCGS_COMMIT`을 바꾼다.
-- `CLAUDE.md`의 엔진 레퍼런스 import를 Bevy의 `VERSION.md`로 바꾸고, CCGS의 MIT 고지를 `.claude/CCGS-LICENSE`에 쓰며, CCGS가 쓰는 개인 설정과 세션 상태 파일을 `.gitignore`에 더한다.
+- 프로젝트에 git 저장소가 없으면(`cargo new`는 다른 저장소 안에서 만들지 않는다) `git init`하고, `core.symlinks`를 켠 뒤 CCGS의 `besfa` 브랜치를 `.ccg`에 서브모듈로 더한다(`git submodule add -b besfa`). 서브모듈은 그때의 브랜치 끝을 가리키고, CCGS를 올리려면 게임에서 `git submodule update --remote .ccg`를 한다.
+- Claude Code가 읽는 자리에 서브모듈로 가는 상대 심볼릭 링크를 둔다: `.claude/` 아래 폴더마다(`skills`는 스킬마다 하나씩, 게임의 스킬이 그 옆에 놓이도록), `docs/engine-reference`, `docs/CLAUDE.md`, `design/CLAUDE.md`. 폴더 링크는 `.gitattributes`에 `symlink=dir`로 적는다. 없으면 Git for Windows가 파일 링크로 체크아웃하고, 그러면 Claude Code가 에이전트를 읽지 못한다. Windows는 개발자 모드에서만 링크를 만든다.
+- 게임이 고치는 파일은 서브모듈에서 복사한다: `.claude/` 바로 아래의 파일(`settings.json` 등), `.gitattributes`, `.worktreeinclude`, `CLAUDE.md`, `project.yaml`, `design/`, `production/`, `src/CLAUDE.md`, `docs/`의 프레임워크 문서와 `architecture/`, `registry/`. 레이아웃은 ski0090/duskhold#68과 같다.
+- `CLAUDE.md`의 엔진 레퍼런스 import를 Bevy의 `VERSION.md`로 바꾸고, CCGS가 쓰는 개인 설정과 세션 상태 파일을 `.gitignore`에 더한다. CCGS의 라이선스는 서브모듈에 있다.
 - 엔진 설정(`project.yaml`의 `engine`)은 쓰지 않는다. 프로젝트 폴더에서 Claude Code를 열고 `/start`, `/setup-engine bevy 0.20`을 실행한다.
-- Git이 없거나 받기에 실패하면 프로젝트를 만들지 않고 종료 코드 `30`, `code`는 `ccgs_failed`를 반환한다. Git의 진단은 표준 오류로 나간다.
+- Git이 없거나 받기에 실패하거나, 개발자 모드가 꺼져 링크를 만들지 못하면 프로젝트를 만들지 않고 종료 코드 `30`, `code`는 `ccgs_failed`를 반환한다. Git의 진단은 표준 오류로 나간다.
 
 ```text
 besfa prebuild

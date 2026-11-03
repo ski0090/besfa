@@ -22,6 +22,8 @@
 
 - 허브에서 새 프로젝트를 만들 때 **Add Claude Code Game Studios**를 켜거나, 터미널에서 `besfa new <폴더> --ccgs`로 만듭니다.
 - **Git**이 있어야 하고, 만들 때 인터넷으로 CCGS를 받습니다. 받지 못하면 프로젝트를 만들지 않고 이유를 보여 줍니다.
+- CCGS는 프로젝트의 `.ccg` 폴더에 git 서브모듈로 들어가고, `.claude/` 등에는 그리로 가는 링크가 생깁니다. Windows에서 링크를 만들려면 **개발자 모드**가 켜져 있어야 합니다(설정 > 시스템 > 개발자용).
+- 이 프로젝트를 다른 PC에서 받을 때는 `git clone --recurse-submodules`로 받습니다. CCGS를 새 버전으로 올리려면 `git submodule update --remote .ccg`를 실행하고 커밋합니다.
 - 만든 뒤 프로젝트 폴더에서 Claude Code를 열고 `/start`, 이어서 `/setup-engine bevy 0.20`을 실행하면 설정이 끝납니다.
 
 ## 쓰는 법

@@ -189,7 +189,7 @@ fn create_project_with(
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(error);
     }
-    if ccgs && let Err(error) = add_ccgs(&staged_project, CCGS_REPOSITORY, CCGS_COMMIT) {
+    if ccgs && let Err(error) = add_ccgs(&staged_project, CCGS_REPOSITORY) {
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(error);
     }
@@ -332,14 +332,16 @@ fn cargo_config(target_dir: &Path) -> String {
 }
 
 /// Claude Code Game Studios: agents, skills and hooks for making the game
-/// with Claude Code, at the commit new games get.
+/// with Claude Code. Games follow its `besfa` branch as a Git submodule.
 const CCGS_REPOSITORY: &str = "https://github.com/ski0090/Claude-Code-Game-Studios.git";
-const CCGS_COMMIT: &str = "3a41fdc023077dceff0b05a5187ded7d38018b5a";
+const CCGS_BRANCH: &str = "besfa";
+/// Where the submodule goes in the game.
+const CCGS_DIR: &str = ".ccg";
 
-/// What a game takes from it: the framework, and of the engine references
-/// only Bevy's. A trailing `/` marks a directory.
-const CCGS_PATHS: [&str; 15] = [
-    ".claude/",
+/// What the game owns and changes, copied out of the submodule: its
+/// instructions and settings, and the documents CCGS writes. The files
+/// right in `.claude/` are copied too. A trailing `/` marks a directory.
+const CCGS_COPIES: [&str; 11] = [
     ".gitattributes",
     ".worktreeinclude",
     "CLAUDE.md",
@@ -347,19 +349,24 @@ const CCGS_PATHS: [&str; 15] = [
     "design/",
     "production/",
     "src/CLAUDE.md",
-    "docs/CLAUDE.md",
     "docs/COLLABORATIVE-DESIGN-PRINCIPLE.md",
     "docs/WORKFLOW-GUIDE.md",
     "docs/architecture/",
     "docs/registry/",
-    "docs/engine-reference/README.md",
-    "docs/engine-reference/bevy/",
+];
+
+/// Linked into the submodule besides the folders in `.claude/` and each
+/// skill, so updating the submodule updates them.
+const CCGS_LINKS: [&str; 3] = [
+    "docs/engine-reference",
+    "docs/CLAUDE.md",
+    "design/CLAUDE.md",
 ];
 
 /// Its per-developer and per-session files, kept out of the game's commits.
 const CCGS_GITIGNORE: &str = "\n\
-# Claude Code Game Studios (.claude/CCGS-LICENSE): per-developer config,\n\
-# per-session state and agent worktrees.\n\
+# Claude Code Game Studios (.ccg): per-developer config, per-session state\n\
+# and agent worktrees.\n\
 .claude/settings.local.json\n\
 CLAUDE.local.md\n\
 project.local.yaml\n\
@@ -370,33 +377,103 @@ production/session-state/\n\
 .claude/worktrees/\n\
 docs/consistency-failures.md\n";
 
-/// Copies Claude Code Game Studios at `revision` of `repository` into
-/// `project`, pointed at Bevy, with its MIT notice in `.claude/CCGS-LICENSE`.
-fn add_ccgs(project: &Path, repository: &str, revision: &str) -> Result<(), CreateError> {
-    // A throwaway repository beside the project, so only the files land in it.
-    let git_dir = project.with_file_name(".ccgs.git");
+/// Adds Claude Code Game Studios from `repository` to `project` as the
+/// `.ccg` submodule on its `besfa` branch, then [`install_ccgs`].
+fn add_ccgs(project: &Path, repository: &str) -> Result<(), CreateError> {
     let git = || {
         let mut command = Command::new("git");
-        command.arg("--git-dir").arg(&git_dir);
+        command.arg("-C").arg(project);
         command
     };
-    run_git(git().args(["init", "--bare", "--quiet"]))?;
-    run_git(git().args(["fetch", "--quiet", "--depth", "1", repository, revision]))?;
-    // As committed: its shell scripts must stay LF under core.autocrlf.
-    run_git(
-        git()
-            .args(["-c", "core.autocrlf=false", "--work-tree"])
-            .arg(project)
-            .args(["checkout", "FETCH_HEAD", "--"])
-            .args(CCGS_PATHS),
-    )?;
-    let license = run_git(git().args(["show", "FETCH_HEAD:LICENSE"]))?;
-    fs::remove_dir_all(&git_dir)
-        .map_err(|error| filesystem_error("Failed to remove the CCGS download.", error))?;
+    // `cargo new` makes no repository inside another one.
+    if !project.join(".git").exists() {
+        run_git(git().args(["init", "--quiet"]))?;
+    }
+    // Clones and worktrees of the game check its links out as links.
+    run_git(git().args(["config", "core.symlinks", "true"]))?;
+    run_git(git().args([
+        "submodule",
+        "add",
+        "--quiet",
+        "-b",
+        CCGS_BRANCH,
+        repository,
+        CCGS_DIR,
+    ]))?;
+    install_ccgs(project)
+}
 
-    fs::write(project.join(".claude").join("CCGS-LICENSE"), license)
-        .map_err(|error| filesystem_error("Failed to write .claude/CCGS-LICENSE.", error))?;
-    // What /setup-engine would point it at; Godot's reference is not copied.
+/// Puts what Claude Code reads from the `.ccg` submodule where it looks:
+/// links to the framework, its `.claude/` folders, each skill on its own
+/// so the game's own skills sit beside them, and [`CCGS_LINKS`]; copies of
+/// what the game owns, pointed at Bevy.
+fn install_ccgs(project: &Path) -> Result<(), CreateError> {
+    let ccg = project.join(CCGS_DIR);
+    let entries = |dir: &Path| -> Result<Vec<(String, bool)>, CreateError> {
+        fs::read_dir(dir)
+            .and_then(|entries| {
+                entries
+                    .map(|entry| -> io::Result<(String, bool)> {
+                        let entry = entry?;
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        Ok((name, entry.file_type()?.is_dir()))
+                    })
+                    .collect()
+            })
+            .map_err(|error| filesystem_error(format!("Failed to list {}.", dir.display()), error))
+    };
+    let mut copies: Vec<String> = CCGS_COPIES.iter().map(|path| path.to_string()).collect();
+    let mut links: Vec<String> = CCGS_LINKS.iter().map(|path| path.to_string()).collect();
+    for (name, dir) in entries(&ccg.join(".claude"))? {
+        match (dir, name.as_str()) {
+            (true, "skills") => {
+                for (skill, _) in entries(&ccg.join(".claude/skills"))? {
+                    links.push(format!(".claude/skills/{skill}"));
+                }
+            }
+            (true, _) => links.push(format!(".claude/{name}")),
+            (false, _) => copies.push(format!(".claude/{name}")),
+        }
+    }
+
+    for path in &copies {
+        let from = ccg.join(path);
+        if from.exists() {
+            copy_tree(&from, &project.join(path)).map_err(|error| {
+                filesystem_error(format!("Failed to copy {path} from {CCGS_DIR}."), error)
+            })?;
+        }
+    }
+    let mut attributes = String::from(
+        "\n# Links into the .ccg submodule; Windows makes them with Developer Mode.\n",
+    );
+    for path in &links {
+        let link = project.join(path);
+        // Up to the game's root, then down into the submodule.
+        let mut target: PathBuf = Path::new(path).components().skip(1).map(|_| "..").collect();
+        target.push(CCGS_DIR);
+        // By component: Windows resolves no link whose target has `/`.
+        target.extend(Path::new(path));
+        let dir = ccg.join(path).is_dir();
+        // A copied folder may hold a file that is linked instead.
+        let _ = fs::remove_file(&link);
+        fs::create_dir_all(link.parent().expect("a link is inside the project"))
+            .and_then(|()| symlink(&target, &link, dir))
+            .map_err(|error| match error.raw_os_error() {
+                // ERROR_PRIVILEGE_NOT_HELD
+                Some(1314) => CreateError::new(
+                    30,
+                    "ccgs_failed",
+                    "Windows makes the links Claude Code Game Studios needs only with Developer Mode on (Settings > System > For developers).",
+                ),
+                _ => filesystem_error(format!("Failed to link {path}."), error),
+            })?;
+        if dir {
+            attributes += &format!("{path} symlink=dir\n");
+        }
+    }
+
+    // What /setup-engine would point it at.
     let claude_md = project.join("CLAUDE.md");
     let instructions = fs::read_to_string(&claude_md)
         .map_err(|error| filesystem_error("Failed to read CLAUDE.md.", error))?;
@@ -408,12 +485,47 @@ fn add_ccgs(project: &Path, repository: &str, revision: &str) -> Result<(), Crea
         ),
     )
     .map_err(|error| filesystem_error("Failed to write CLAUDE.md.", error))?;
-    fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(project.join(".gitignore"))
-        .and_then(|mut gitignore| gitignore.write_all(CCGS_GITIGNORE.as_bytes()))
-        .map_err(|error| filesystem_error("Failed to write .gitignore.", error))
+    let append = |file: &str, text: &str| {
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(project.join(file))
+            .and_then(|mut opened| opened.write_all(text.as_bytes()))
+            .map_err(|error| filesystem_error(format!("Failed to write {file}."), error))
+    };
+    // Without `symlink=dir` Git for Windows checks a folder link out as a
+    // file link, through which Claude Code loads no agents.
+    append(".gitattributes", &attributes)?;
+    append(".gitignore", CCGS_GITIGNORE)
+}
+
+/// Copies the file or folder `from` to `to`.
+fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
+    if !from.is_dir() {
+        fs::create_dir_all(to.parent().expect("a copy is inside the project"))?;
+        return fs::copy(from, to).map(drop);
+    }
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+    }
+    Ok(())
+}
+
+/// Makes `link` point at `target`, a folder when `dir`, as Windows tells
+/// the two apart.
+fn symlink(target: &Path, link: &Path, dir: bool) -> io::Result<()> {
+    #[cfg(windows)]
+    return if dir {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+    #[cfg(not(windows))]
+    {
+        let _ = dir;
+        std::os::unix::fs::symlink(target, link)
+    }
 }
 
 /// Runs `command` and returns its stdout.
@@ -423,7 +535,7 @@ fn run_git(command: &mut Command) -> Result<Vec<u8>, CreateError> {
         .output()
         .map_err(|e| error("Failed to start Git.").with_diagnostic(e.to_string()))?;
     if !output.status.success() {
-        return Err(error("Git could not get Claude Code Game Studios.")
+        return Err(error("Git could not add Claude Code Game Studios.")
             .with_diagnostic(String::from_utf8_lossy(&output.stderr).into_owned()));
     }
     Ok(output.stdout)
@@ -583,73 +695,100 @@ mod tests {
     }
 
     #[test]
-    fn adds_claude_code_game_studios_set_up_for_bevy() {
-        let parent = test_directory("ccgs");
-        let (source, project) = (parent.join("ccgs"), parent.join("demo_game"));
-        // A stand-in for its repository: one LF file at each copied path.
-        for path in CCGS_PATHS {
-            let file = match path.strip_suffix('/') {
-                Some(directory) => source.join(directory).join("hook.sh"),
-                None => source.join(path),
-            };
+    fn links_and_copies_claude_code_game_studios_from_the_submodule() {
+        let project = test_directory("ccgs");
+        let ccg = project.join(CCGS_DIR);
+        // A stand-in for the submodule's work tree.
+        for (path, text) in [
+            (".claude/agents/bevy-specialist.md", "agent"),
+            (".claude/hooks/session-start.sh", "hook\n"),
+            (".claude/skills/start/SKILL.md", "start"),
+            (".claude/skills/dev-story/SKILL.md", "dev-story"),
+            (".claude/settings.json", "{}"),
+            (".gitattributes", "*.sh text eol=lf\n"),
+            ("CLAUDE.md", "@docs/engine-reference/godot/VERSION.md\n"),
+            ("project.yaml", "engine: {}\n"),
+            ("design/CLAUDE.md", "design rules"),
+            ("design/gdd/README.md", "gdd"),
+            ("docs/CLAUDE.md", "docs rules"),
+            ("docs/engine-reference/bevy/VERSION.md", "0.20"),
+        ] {
+            let file = ccg.join(path);
             fs::create_dir_all(file.parent().unwrap()).expect("source dir should be created");
-            fs::write(&file, "line\nline\n").expect("source file should be written");
+            fs::write(&file, text).expect("source file should be written");
         }
-        let claude_md = "@docs/engine-reference/godot/VERSION.md\n";
-        fs::write(source.join("CLAUDE.md"), claude_md).expect("CLAUDE.md should be written");
-        fs::write(source.join("LICENSE"), "MIT License\n").expect("LICENSE should be written");
-        let git = |args: &[&str]| {
-            let status = Command::new("git")
-                .arg("-C")
-                .arg(&source)
-                .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
-                .args(["-c", "core.autocrlf=false"])
-                .args(args)
-                .status();
-            assert!(
-                status.is_ok_and(|s| s.success()),
-                "git {args:?} should succeed"
-            );
-        };
-        git(&["init", "--quiet"]);
-        git(&["add", "."]);
-        git(&["commit", "--quiet", "-m", "ccgs"]);
-        fs::create_dir_all(&project).expect("project should be created");
         fs::write(project.join(".gitignore"), "/target\n").expect(".gitignore should be written");
 
-        let result = add_ccgs(&project, &source.to_string_lossy(), "HEAD");
-        let read = |path: &str| fs::read_to_string(project.join(path));
-        let claude_md = read("CLAUDE.md");
-        let (hook, license, gitignore) = (
-            read(".claude/hook.sh"),
-            read(".claude/CCGS-LICENSE"),
+        let result = install_ccgs(&project);
+        let read = |path: &str| fs::read_to_string(project.join(path)).unwrap_or_default();
+        let linked = |path: &str| {
+            fs::symlink_metadata(project.join(path)).is_ok_and(|meta| meta.file_type().is_symlink())
+        };
+        let through_links = [
+            ".claude/agents/bevy-specialist.md",
+            ".claude/hooks/session-start.sh",
+            ".claude/skills/start/SKILL.md",
+            "design/CLAUDE.md",
+            "docs/CLAUDE.md",
+            "docs/engine-reference/bevy/VERSION.md",
+        ]
+        .map(read);
+        let links = [
+            ".claude/agents",
+            ".claude/skills/start",
+            ".claude/skills/dev-story",
+            "design/CLAUDE.md",
+            "docs/engine-reference",
+        ]
+        .map(linked);
+        let copies = [
+            ".claude/settings.json",
+            "project.yaml",
+            "design/gdd/README.md",
+        ]
+        .map(linked);
+        let (claude_md, attributes, gitignore) = (
+            read("CLAUDE.md"),
+            read(".gitattributes"),
             read(".gitignore"),
         );
-        let mut leftovers: Vec<_> = fs::read_dir(&parent)
-            .expect("test directory should be listed")
-            .map(|entry| entry.expect("entry should be read").file_name())
-            .collect();
-        leftovers.sort();
-        fs::remove_dir_all(&parent).expect("test directory should be removed");
+        let skills_linked = linked(".claude/skills");
+        fs::remove_dir_all(&project).expect("test directory should be removed");
 
-        result.expect("CCGS should be added");
+        result.expect("CCGS should be installed");
         assert_eq!(
-            claude_md.expect("CLAUDE.md should be copied"),
-            "@docs/engine-reference/bevy/VERSION.md\n"
+            through_links,
+            [
+                "agent",
+                "hook\n",
+                "start",
+                "design rules",
+                "docs rules",
+                "0.20"
+            ]
         );
-        assert_eq!(
-            hook.expect("files should be copied"),
-            "line\nline\n",
-            "LF kept"
+        assert_eq!(links, [true; 5]);
+        assert!(
+            !skills_linked,
+            "the game's own skills go beside the linked ones"
         );
-        assert_eq!(
-            license.expect("the license should be kept"),
-            "MIT License\n"
+        assert_eq!(copies, [false; 3], "the game owns these");
+        assert_eq!(claude_md, "@docs/engine-reference/bevy/VERSION.md\n");
+        assert!(attributes.starts_with("*.sh text eol=lf\n"), "{attributes}");
+        assert!(
+            attributes.contains("\n.claude/agents symlink=dir\n"),
+            "{attributes}"
         );
-        let gitignore = gitignore.expect(".gitignore should be kept");
+        assert!(
+            attributes.contains("\n.claude/skills/start symlink=dir\n"),
+            "{attributes}"
+        );
+        assert!(
+            !attributes.contains("docs/CLAUDE.md symlink"),
+            "a file link"
+        );
         assert!(gitignore.starts_with("/target\n"), "{gitignore}");
         assert!(gitignore.contains("\nproject.local.yaml\n"), "{gitignore}");
-        assert_eq!(leftovers, ["ccgs", "demo_game"], "the download is removed");
     }
 
     fn test_directory(label: &str) -> PathBuf {
