@@ -46,10 +46,30 @@ besfa prebuild
 `%LOCALAPPDATA%/Besfa/prebuild`를 `besfa new`와 같은 템플릿의 게임 프로젝트로 만들고(`Cargo.toml`, `src/main.rs`, `.cargo/config.toml`이 템플릿과 다를 때만 다시 써서, 바뀐 것이 없으면 다시 컴파일하지 않는다), 그 안에서 `cargo update -p besfa_editor_plugin`으로 플러그인을 최신 git 커밋으로 올린 뒤(에디터의 Run이 package cache 잠금을 기다리지 않도록 재시도 없이 요청당 10초만 기다리고, 실패하면 경고만 남기고 고정된 버전으로 계속한다) `cargo build --features bevy/dynamic_linking,besfa_editor`를 실행한다. 공유 target 디렉터리, 의존성, feature, 프로필이 에디터의 Run과 같으므로, 이후 게임의 첫 Run은 게임 코드만 컴파일한다. 빌드가 만든 `Cargo.lock`은 `besfa new`가 새 프로젝트로 복사한다. Cargo 출력은 그대로 표준 출력·오류로 나간다. `LOCALAPPDATA`가 없으면 종료 코드 `20`, Cargo 실행이나 빌드가 실패하면 `30`을 반환한다.
 
 ```text
+besfa screenshot <FILE> [--wait <SECONDS>] [-- GAME_ARGS]...
+```
+
+지금 폴더의 게임을 `besfa mcp`의 `start`처럼 창 없이 편집 상태로 띄우고(`GAME_ARGS`는 게임의 실행 인자), 씬 파일이 로드되면 `play`를 보내 `--wait`초(기본 0) 실행한 뒤, 플레이어가 보는 화면을 `screenshot`의 `game`으로 찍어 `FILE`에 쓰고 게임을 끈다. 게임 카메라와 UI가 담기고 크기는 1280×720이다. `FILE`은 절대 경로이거나 지금 폴더 기준이며 프로젝트 안의 `.png`여야 한다. 씬 파일은 쓰지 않는다. 성공하면 표준 출력에 `Screenshot saved to <FILE의 절대 경로>`를 쓰고 `0`을, 빌드 실패, 프로젝트 밖의 경로, 게임 카메라 없음, 프로토콜 14보다 오래된 플러그인이면 표준 오류에 원인(과 게임 로그)을 쓰고 `30`을 반환한다. CCGS의 실행·관찰 단계처럼 셸에서 증거 사진을 남기는 데 쓴다.
+
+```text
 besfa mcp
 ```
 
 표준 입출력으로 MCP 서버를 연다. 지금 폴더의 게임을 에디터의 Run처럼 창 없는 편집 상태로 띄우고(`start`에 `project`를 주면 그 폴더) `besfa_protocol` 명령을 전달한다. 도구와 명령은 [PROJECT_OVERVIEW.md](./PROJECT_OVERVIEW.md)의 `crates/besfa_mcp`와 [ARCHITECTURE.md](./ARCHITECTURE.md)를 따른다. 표준 출력에는 JSON-RPC 메시지만 쓰고, 클라이언트가 표준 입력을 닫으면 띄운 게임을 끄고 끝난다. 설치된 `besfa`가 아는 프로토콜보다 새 명령은 거절하므로, 플러그인을 올리면 CLI도 다시 설치한다.
+
+```text
+besfa build [CARGO_ARGS]...
+besfa test [CARGO_ARGS]... [-- TEST_ARGS]...
+besfa run [CARGO_ARGS]... [-- GAME_ARGS]...
+```
+
+지금 폴더의 게임을 에디터의 Run과 같은 feature(`besfa_protocol::run_features`: `bevy/dynamic_linking`, 게임이 선언했으면 `besfa_editor`도)로 빌드한다. 그래서 공유 target의 Bevy 빌드를 다시 쓰고, 에이전트(CCGS의 `commands.test`·`smoke`·`run`)가 Bevy를 한 벌 더 빌드하지 않는다. target 디렉터리는 게임의 `.cargo/config.toml`을 따른다. `cargo check`는 의존성을 빌드와 따로 검사해 에디터의 빌드를 다시 쓰지 못하므로 `check`는 두지 않고, 빌드 확인은 `build`가 맡는다.
+
+- `build`: `cargo build --features <features> CARGO_ARGS`.
+- `test`: `cargo test --no-run`으로 테스트를 빌드한 뒤 `cargo test`로 실행한다.
+- `run`: `cargo build`로 빌드한 뒤 `cargo run`으로 게임을 창으로 띄운다. 편집 상태가 아닌 보통 게임이다.
+
+`--` 앞의 인자는 두 단계의 cargo에 모두, `--`와 그 뒤는 실행 단계에만 넘긴다. Cargo의 출력은 바꾸지 않고 그대로 낸다(CCGS의 `test-run.sh`가 `test result:`와 `error[E...]` 줄을 읽는다). 빌드 단계가 실패하거나 Cargo를 시작하지 못하면 종료 코드 `30`, 그 밖에는 실행 단계의 코드를 그대로 돌려준다: `test`는 테스트가 실패하면 Cargo의 `101`, `run`은 게임의 종료 코드다.
 
 생성 시점에는 `--ccgs`가 CCGS를 받는 것 말고는 네트워크를 쓰지 않는다. 의존성은 게임을 처음 빌드할 때 받는다. 모든 단계가 성공한 경우에만 결과물을 최종 루트 디렉터리로 이동한다. `besfa/` 또는 `.besfa/` 데이터 경로와 초기 데이터 파일 생성은 데이터 포맷 계약을 확정한 뒤 추가한다.
 

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -33,15 +33,73 @@ pub(crate) enum Commands {
     },
     /// Build Bevy into the shared target directory, so games start fast.
     Prebuild,
+    /// Run the game in the current folder without a window, as `mcp` does,
+    /// play it and save what the player sees, its cameras and UI, to a PNG.
+    /// Exits 30 when no picture was saved.
+    Screenshot {
+        /// The .png file to write, inside the project.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        /// Seconds the game plays before the picture.
+        #[arg(long, default_value_t = 0.0, value_name = "SECONDS")]
+        wait: f64,
+        /// After `--`: the game's own launch arguments.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
     /// Serve the editor's commands to an agent, an MCP server on stdin and
     /// stdout that runs the game in the current folder.
     Mcp,
+    /// Build the game in the current folder with the features the editor
+    /// runs it with, so the shared Bevy build is reused. Exits 30 when it
+    /// does not build.
+    Build {
+        #[command(flatten)]
+        args: CargoArgs,
+    },
+    /// Build the game's tests as `build` does, then run them. Exits 30 when
+    /// they do not build and with cargo's code, 101, when a test fails.
+    Test {
+        #[command(flatten)]
+        args: CargoArgs,
+    },
+    /// Build the game as `build` does, then run it in a window, as a player
+    /// would, not in edit mode. Exits 30 when it does not build, else with
+    /// the game's code.
+    Run {
+        #[command(flatten)]
+        args: CargoArgs,
+    },
     /// Validate a Besfa project directory.
     Validate {
         /// Project directory to validate.
         #[arg(default_value = ".", value_name = "DIRECTORY")]
         directory: PathBuf,
     },
+}
+
+/// What `build`, `test` and `run` pass on to cargo.
+#[derive(Debug, Args)]
+pub(crate) struct CargoArgs {
+    /// Passed on to cargo, as `--release` or a test's name.
+    #[arg(allow_hyphen_values = true)]
+    cargo: Vec<String>,
+    /// After `--`: passed on to the tests or the game.
+    #[arg(last = true)]
+    then: Vec<String>,
+}
+
+impl CargoArgs {
+    /// The arguments as cargo takes them, with `--` before the tests' or
+    /// the game's.
+    pub(crate) fn all(&self) -> Vec<String> {
+        let mut all = self.cargo.clone();
+        if !self.then.is_empty() {
+            all.push("--".into());
+            all.extend(self.then.iter().cloned());
+        }
+        all
+    }
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -81,6 +139,66 @@ mod tests {
         let cli = Cli::try_parse_from(["besfa", "mcp"]).expect("mcp should parse");
 
         assert!(matches!(cli.command, Commands::Mcp));
+    }
+
+    #[test]
+    fn passes_cargo_and_game_arguments_through() {
+        let args = |line: &[&str]| match Cli::try_parse_from(line).map(|cli| cli.command) {
+            Ok(Commands::Build { args } | Commands::Test { args } | Commands::Run { args }) => {
+                args.all()
+            }
+            other => panic!("{line:?} parsed as {other:?}"),
+        };
+
+        assert!(args(&["besfa", "build"]).is_empty());
+        assert_eq!(args(&["besfa", "build", "--release"]), ["--release"]);
+        // CCGS's smoke command.
+        assert_eq!(
+            args(&["besfa", "build", "--all-targets"]),
+            ["--all-targets"]
+        );
+        assert_eq!(args(&["besfa", "test", "spawns"]), ["spawns"]);
+        assert_eq!(
+            args(&["besfa", "test", "--lib", "--", "--nocapture"]),
+            ["--lib", "--", "--nocapture"]
+        );
+        assert_eq!(
+            args(&["besfa", "run", "--", "--level", "shop"]),
+            ["--", "--level", "shop"]
+        );
+    }
+
+    #[test]
+    fn answers_help_instead_of_passing_it_to_cargo() {
+        // CCGS asks `besfa test --help` whether this besfa has the command.
+        for command in ["build", "test", "run"] {
+            let error = Cli::try_parse_from(["besfa", command, "--help"])
+                .expect_err("--help prints help and exits");
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+            assert_eq!(error.exit_code(), 0);
+        }
+    }
+
+    #[test]
+    fn parses_screenshot_with_the_game_arguments() {
+        let line = [
+            "besfa",
+            "screenshot",
+            "shots/a.png",
+            "--wait",
+            "2",
+            "--",
+            "--level",
+            "shop",
+        ];
+        match Cli::try_parse_from(line).map(|cli| cli.command) {
+            Ok(Commands::Screenshot { file, wait, args }) => {
+                assert_eq!(file, PathBuf::from("shots/a.png"));
+                assert_eq!(wait, 2.0);
+                assert_eq!(args, ["--level", "shop"]);
+            }
+            other => panic!("parsed as {other:?}"),
+        }
     }
 
     #[test]

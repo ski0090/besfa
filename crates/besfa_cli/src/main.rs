@@ -1,8 +1,9 @@
 mod cli;
+mod game;
 mod output;
 mod project_creation;
 
-use std::process::ExitCode;
+use std::{path::Path, process::ExitCode, time::Duration};
 
 use clap::Parser;
 
@@ -37,11 +38,29 @@ fn main() -> ExitCode {
                 ExitCode::from(error.exit_code)
             }
         },
+        Commands::Screenshot { file, wait, args } => {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let wait = Duration::from_secs_f64(wait.max(0.0));
+            match besfa_mcp::screenshot(Path::new("."), &file, wait, &args) {
+                Ok(file) => {
+                    println!("Screenshot saved to {}", file.display());
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(30)
+                }
+            }
+        }
         // Stdout carries only the server's messages.
         Commands::Mcp => {
             besfa_mcp::serve();
             ExitCode::SUCCESS
         }
+        // Exit codes on Windows go past 255, which ExitCode cannot carry.
+        Commands::Build { args } => std::process::exit(game::cargo("build", &args.all())),
+        Commands::Test { args } => std::process::exit(game::cargo("test", &args.all())),
+        Commands::Run { args } => std::process::exit(game::cargo("run", &args.all())),
         Commands::Validate { directory } => {
             eprintln!(
                 "Validating '{}' is not implemented yet.",

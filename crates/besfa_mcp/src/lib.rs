@@ -49,6 +49,51 @@ pub fn serve() {
     }
 }
 
+/// Runs the game at `project` without a window, as `start` does, with the
+/// game's own `args`, plays it for `wait` and saves what the player sees to
+/// `file`, a .png inside the project; returns where it went, or why not.
+/// For `besfa screenshot`, which shell scripts run as they run cargo.
+pub fn screenshot(
+    project: &Path,
+    file: &Path,
+    wait: Duration,
+    args: &[&str],
+) -> Result<PathBuf, String> {
+    let absolute = |path| std::path::absolute(path).map_err(|error| error.to_string());
+    let (project, file) = (absolute(project)?, absolute(file)?);
+    let inside = file.strip_prefix(&project).map_err(|_| {
+        format!(
+            "{} is not inside the project {}.",
+            file.display(),
+            project.display()
+        )
+    })?;
+    let command = Command::Screenshot {
+        file: inside.to_string_lossy().replace('\\', "/"),
+        target: [0.0; 3],
+        eye: None,
+        top: None,
+        width: None,
+        height: None,
+        markers: None,
+        game: Some(true),
+    };
+    let mut game = Game::start(&project, args)
+        .map_err(|error| format!("Could not start cargo in {}: {error}", project.display()))?;
+    // The first run after a code change builds the game, which takes minutes;
+    // the scene file loads soon after.
+    drop(game.wait(Duration::from_secs(3600), |inbox| inbox.hello.is_some())?);
+    drop(game.wait(Duration::from_secs(120), |inbox| inbox.entities.is_some())?);
+    game.send(vec![Command::Play], Duration::from_secs(30))?;
+    thread::sleep(wait);
+    let reports = game.send(vec![command], Duration::from_secs(600))?;
+    if reports.iter().any(|report| !report["error"].is_null()) {
+        Err(lines(&reports))
+    } else {
+        Ok(file)
+    }
+}
+
 /// The result of the JSON-RPC request `message`, or its error object.
 fn handle(game: &mut Option<Game>, message: &Value) -> Result<Value, Value> {
     let params = &message["params"];
@@ -84,10 +129,13 @@ fn tools() -> Value {
     json!([
         {
             "name": "start",
-            "description": "Builds and runs the Besfa game project at `project` in edit mode, paused, as the editor's Run does (`cargo run --features bevy/dynamic_linking`, plus `besfa_editor` when the game declares it). Returns once cargo starts; the other tools wait for the game. The game runs without a window, so nothing on screen shows it; `thumbnail` still renders. One game at a time; do not run one on a project the editor has open, since both would write its scene file.",
+            "description": "Builds and runs the Besfa game project at `project` in edit mode, paused, as the editor's Run does (`cargo run --features bevy/dynamic_linking`, plus `besfa_editor` when the game declares it). Returns once cargo starts; the other tools wait for the game. The game runs without a window, so nothing on screen shows it; `screenshot` and `thumbnail` still render. One game at a time; do not run one on a project the editor has open, since both would write its scene file.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"project": {"type": "string", "description": "Absolute path of the game project, the folder with its Cargo.toml; by default the folder the server runs in, which is the game's when its .mcp.json starts `besfa mcp`."}},
+                "properties": {
+                    "project": {"type": "string", "description": "Absolute path of the game project, the folder with its Cargo.toml; by default the folder the server runs in, which is the game's when its .mcp.json starts `besfa mcp`."},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "The game's own launch arguments, after `--`, as one that starts in a given level."},
+                },
             },
         },
         {
@@ -103,7 +151,7 @@ fn tools() -> Value {
                 "{\"command\":\"insert\",\"id\":ID,\"component\":PATH} / {\"command\":\"remove\",...}\n",
                 "{\"command\":\"duplicate\",\"id\":ID} / {\"command\":\"delete\",\"id\":ID} hides it until {\"command\":\"restore\",\"id\":ID}\n",
                 "{\"command\":\"save\"} writes the scene file; {\"command\":\"save_prefab\",\"id\":ID,\"path\":\"prefabs/x.scn.ron\"}; both are refused until the scene file has loaded, which `entities` waits for\n",
-                "{\"command\":\"screenshot\",\"file\":\"shots/map.png\",\"target\":[0,0,0],\"eye\":[40,30,40]} or with \"top\":200 instead of eye, a view straight down over a square that many meters wide, north (-Z) up; renders the scene without editor overlays to a PNG relative to the project, once its models have loaded, and with \"markers\":true also the icons and rings of what has no mesh to show it, as spawn points; read the file to see it\n",
+                "{\"command\":\"screenshot\",\"file\":\"shots/map.png\",\"target\":[0,0,0],\"eye\":[40,30,40]} or with \"top\":200 instead of eye, a view straight down over a square that many meters wide, north (-Z) up; renders the scene without editor overlays to a PNG relative to the project, once its models have loaded, and with \"markers\":true also the icons and rings of what has no mesh to show it, as spawn points; read the file to see it; with \"game\":true instead of the view, what the player sees: the game's cameras that draw to the window draw it, with the game's UI, 1280x720 unless width and height say otherwise, as the scene starts or, after play, as it is now\n",
                 "{\"command\":\"thumbnail\",\"path\":\"models/x.glb\",\"file\":\"thumb.png\"} renders one model on its own\n",
                 "Terrain: {\"command\":\"spawn\",\"kind\":\"terrain\",\"name\":\"Ground\"} makes flat ground 256 m a side centered on it, covered by its first layer; resize it by setting its besfa_editor_plugin::terrain::Terrain component to {\"size\":200}, which also takes \"layers\", up to four colors (by default grass, dirt, stone, sand); its heights go to a .terrain file of their own when the scene is saved\n",
                 "Sky: {\"command\":\"spawn\",\"kind\":\"sky\"} adds the scene's sky, which every camera draws behind everything; set its besfa_editor_plugin::sky::Sky to {\"mode\":\"Gradient\",\"zenith\":{\"Srgba\":{\"red\":0.2,\"green\":0.42,\"blue\":0.78,\"alpha\":1.0}},\"horizon\":...,\"ground\":...,\"blend\":0.5,\"brightness\":1.0,\"rotation\":0.0,\"sun\":{\"show\":true,\"direction\":[0.4,0.6,-0.5],\"size\":3.0,\"color\":...,\"flare\":0.5},\"moon\":{\"show\":true,\"direction\":[-0.4,0.5,0.5],\"size\":4.0,\"color\":...,\"phase\":0.5}} (sun and moon are world directions toward them, size in degrees across, flare 0 to 1 a lens flare while the sun is in sight, phase 0 new, 0.25 first quarter, 0.5 full; drawn on the gradient only) or {\"mode\":\"Cubemap\",\"cubemap\":\"skies/night.png\"} (a .ktx2/.dds cubemap or six faces +X,-X,+Y,-Y,+Z,-Z stacked top to bottom)\n",
@@ -167,7 +215,13 @@ fn call(game: &mut Option<Game>, name: &str, args: &Value) -> Result<String, Str
                 None => std::env::current_dir()
                     .map_err(|error| format!("No project given or current: {error}"))?,
             };
-            let started = Game::start(&project).map_err(|error| {
+            let game_args: Vec<&str> = args["args"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            let started = Game::start(&project, &game_args).map_err(|error| {
                 format!("Could not start cargo in {}: {error}", project.display())
             })?;
             *game = Some(started);
@@ -272,6 +326,9 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 /// The protocol version a game must speak to run `command`.
 fn since(command: &Command) -> u32 {
     match command {
+        Command::Screenshot {
+            game: Some(true), ..
+        } => 14,
         Command::Screenshot {
             markers: Some(true),
             ..
@@ -427,14 +484,16 @@ struct Game {
 impl Game {
     /// Starts the game the way the editor does, minus its viewport and any
     /// window, so the shared Bevy build is reused.
-    fn start(project: &Path) -> io::Result<Game> {
+    fn start(project: &Path, args: &[&str]) -> io::Result<Game> {
         let manifest = std::fs::read_to_string(project.join("Cargo.toml")).unwrap_or_default();
         let mut cargo = quiet("cargo")
             .args([
                 "run",
                 "--features",
                 &besfa_protocol::run_features(&manifest),
+                "--",
             ])
+            .args(args)
             .current_dir(project)
             // Read by besfa_editor_plugin: start paused and take commands.
             .env("BESFA_EDIT_MODE", "1")
@@ -720,6 +779,15 @@ mod tests {
                 .unwrap()
                 .contains("spawn")
         );
+
+        let shot = |game| json!({"command": "screenshot", "file": "shot.png", "game": game});
+        let since = |command| since(&serde_json::from_value(command).unwrap());
+        assert_eq!(
+            since(shot(true)),
+            14,
+            "a game picture needs a game that takes it"
+        );
+        assert_eq!(since(shot(false)), 4);
 
         let good = call(&mut game, json!({"command": "spawn", "kind": "cube"}));
         assert_eq!(good["isError"], true);
