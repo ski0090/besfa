@@ -501,12 +501,17 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             width,
             height,
             markers,
+            game,
         } => {
             if !(inside(&file) && file.ends_with(".png")) {
                 Err(format!("{file} is not a .png path inside the project"))
             } else {
-                Shot::new(target.into(), eye.map(Vec3::from), top, width, height, markers.unwrap_or(false))
-                    .map(|view| shot::request(world, file.clone(), project_file(&file), view))
+                let view = if game == Some(true) {
+                    Shot::game(width, height)
+                } else {
+                    Shot::new(target.into(), eye.map(Vec3::from), top, width, height, markers.unwrap_or(false))
+                };
+                view.map(|view| shot::request(world, file.clone(), project_file(&file), view))
             }
         }
         Command::PreviewScreenshot { path } => {

@@ -32,6 +32,10 @@ Preconditions:
   The reply is a `screenshot` report with `error: null`. The PNG shows the blue template cube and a grey sphere to its right.
 - **Play.** `send` `{"command":"play"}`. It returns no reports. Then `send` the same `screenshot` with
   `"file":"shots/after-play.png"`. That PNG shows the template cube turned, compared with `after-save.png`.
+- **The player's view.** `send` `{"command":"screenshot","file":"shots/game.png","game":true}`, before or
+  after `play`. The PNG is 1280x720 and shows what the template's Camera sees, with any UI the game spawned.
+  To check UI, give the game a `Startup` system that spawns a `Node` with a `BackgroundColor`, and pass it text
+  through `start`'s `args`.
 - **Proof.** Keep the reports, the scene-file excerpt, the post-restart `entities`, and the PNG.
 
 ## Gotchas
