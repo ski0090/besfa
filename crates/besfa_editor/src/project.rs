@@ -99,10 +99,11 @@ impl RecentProjects {
 }
 
 /// Creates a project in `directory` with `besfa new` and returns its path,
-/// or what went wrong.
-pub fn create(directory: &str) -> Result<String, String> {
+/// or what went wrong. `ccgs` adds Claude Code Game Studios.
+pub fn create(directory: &str, ccgs: bool) -> Result<String, String> {
     let output = command("besfa")
         .args(["new", directory, "--output", "json"])
+        .args(ccgs.then_some("--ccgs"))
         .output()
         .map_err(|error| format!("Could not start the Besfa CLI.\n{error}"))?;
     creation_result(
@@ -113,8 +114,13 @@ pub fn create(directory: &str) -> Result<String, String> {
 }
 
 fn creation_result(success: bool, stdout: &str, stderr: &str) -> Result<String, String> {
+    let error = |message: &str| match stderr.trim() {
+        "" => message.into(),
+        diagnostic => format!("{message}\n{diagnostic}"),
+    };
+    // An older CLI rejects new options with only a usage error on stderr.
     let Ok(serde_json::Value::Object(output)) = serde_json::from_str(stdout) else {
-        return Err("The Besfa CLI returned an invalid response.".into());
+        return Err(error("The Besfa CLI returned an invalid response."));
     };
     if success
         && output.get("status").and_then(|s| s.as_str()) == Some("success")
@@ -123,11 +129,7 @@ fn creation_result(success: bool, stdout: &str, stderr: &str) -> Result<String, 
         return Ok(path.into());
     }
     let message = output.get("message").and_then(|m| m.as_str());
-    let message = message.unwrap_or("Failed to create the project.");
-    Err(match stderr.trim() {
-        "" => message.into(),
-        diagnostic => format!("{message}\n{diagnostic}"),
-    })
+    Err(error(message.unwrap_or("Failed to create the project.")))
 }
 
 /// Moves `directory` to the Recycle Bin. Returns false if it failed.
@@ -157,6 +159,9 @@ pub fn reveal(directory: &str) {
 /// The community's plugins, assets, templates and tools for Bevy, which is
 /// what Bevy has for Unity's Asset Store.
 pub const BEVY_ASSETS: &str = "https://bevy.org/assets/";
+
+/// Claude Code Game Studios, which `besfa new --ccgs` copies from.
+pub const CCGS: &str = "https://github.com/ski0090/Claude-Code-Game-Studios";
 
 /// Hands `target`, a URL or a folder, to Explorer, which opens the default
 /// browser or a window, outside the editor's job so it stays open when the
@@ -307,6 +312,12 @@ mod tests {
         assert_eq!(
             creation_result(true, "oops", ""),
             Err("The Besfa CLI returned an invalid response.".into())
+        );
+        assert_eq!(
+            creation_result(false, "", "error: unexpected argument '--ccgs' found\n"),
+            Err("The Besfa CLI returned an invalid response.\n\
+                 error: unexpected argument '--ccgs' found"
+                .into())
         );
     }
 
