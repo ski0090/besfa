@@ -28,6 +28,8 @@ pub struct Hub {
     confirm_delete: Option<Project>,
     /// A project being moved to the Recycle Bin, and whether that worked.
     deleting: Option<(Project, Receiver<bool>)>,
+    /// GitHub's mark, loaded when the create dialog first shows.
+    github: Option<egui::TextureHandle>,
 }
 
 #[derive(Default)]
@@ -62,6 +64,7 @@ impl Hub {
             create: None,
             confirm_delete: None,
             deleting: None,
+            github: None,
         }
     }
 
@@ -292,51 +295,73 @@ impl Hub {
             }
         }
         let creating = dialog.creating.is_some();
+        let github = self.github.get_or_insert_with(|| github_icon(ctx));
         let (mut create, mut cancel) = (false, false);
         let modal = egui::Modal::new(egui::Id::new("create_project")).show(ctx, |ui| {
             ui.set_width(440.0);
             ui.heading("Create project");
             ui.label("Enter the folder path for the new Cargo project.");
-            ui.add_space(12.0);
-            ui.label(RichText::new("Project directory").small().color(MUTED));
-            ui.horizontal(|ui| {
-                if ui.add_enabled(!creating, Button::new("🗁 Browse")).clicked() {
-                    browse(dialog);
-                }
-                let field = TextEdit::singleline(&mut dialog.directory)
-                    .hint_text(r"ex) C:\Projects\my_game")
-                    .desired_width(f32::INFINITY);
-                let field = ui.add_enabled(!creating, field);
-                if ui.memory(|memory| memory.focused().is_none()) && !creating {
-                    field.request_focus();
-                }
-                create = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            });
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let ccgs = egui::Checkbox::new(&mut dialog.ccgs, "Add Claude Code Game Studios");
-                ui.add_enabled(!creating, ccgs).on_hover_text(
-                    "Agents, skills and hooks for making the game with Claude Code. \
-                     Needs Git and the network.",
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new("Project directory").small().color(MUTED));
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!creating, Button::new("🗁 Browse")).clicked() {
+                        browse(dialog);
+                    }
+                    let field = TextEdit::singleline(&mut dialog.directory)
+                        .hint_text(r"ex) C:\Projects\my_game")
+                        .desired_width(f32::INFINITY);
+                    let field = ui.add_enabled(!creating, field);
+                    if ui.memory(|memory| memory.focused().is_none()) && !creating {
+                        field.request_focus();
+                    }
+                    create = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                });
+            });
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new("Claude Code").small().color(MUTED));
+                ui.horizontal(|ui| {
+                    let ccgs =
+                        egui::Checkbox::new(&mut dialog.ccgs, "Add Claude Code Game Studios");
+                    ui.add_enabled(!creating, ccgs);
+                    let icon = egui::Image::new(&*github)
+                        .fit_to_exact_size(egui::vec2(14.0, 14.0))
+                        .tint(TEXT);
+                    if ui
+                        .add(Button::image(icon))
+                        .on_hover_text(project::CCGS)
+                        .clicked()
+                    {
+                        project::open_url(project::CCGS);
+                    }
+                });
+                ui.label(
+                    RichText::new(
+                        "Agents, skills and hooks for making the game with Claude Code. \
+                         Needs Git and the network.",
+                    )
+                    .small()
+                    .color(MUTED),
                 );
-                if ui.link("GitHub").on_hover_text(project::CCGS).clicked() {
-                    project::open_url(project::CCGS);
-                }
             });
             if let Some(error) = &dialog.error {
                 ui.label(RichText::new(error).color(ERROR));
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                cancel = ui.add_enabled(!creating, Button::new("Cancel")).clicked();
-                if creating {
-                    ui.add(egui::Spinner::new());
-                    ui.label("Creating…");
-                } else {
-                    create |= ui
-                        .button(RichText::new("➕ Create").color(ACCENT))
-                        .clicked();
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if creating {
+                        ui.label("Creating…");
+                        ui.add(egui::Spinner::new());
+                    } else {
+                        create |= ui
+                            .button(RichText::new("➕ Create").color(ACCENT))
+                            .clicked();
+                    }
+                    cancel = ui.add_enabled(!creating, Button::new("Cancel")).clicked();
+                });
             });
         });
         if create && !creating {
@@ -402,6 +427,17 @@ enum HubAction {
     OpenRecent(Project),
     Reveal(Project),
     Delete(Project),
+}
+
+/// GitHub's mark in white, to be tinted: Primer Octicons' `mark-github`
+/// (MIT), drawn at 64 px.
+fn github_icon(ctx: &egui::Context) -> egui::TextureHandle {
+    let image = image::load_from_memory(include_bytes!("../icons/github.png"))
+        .expect("the bundled icon is a PNG")
+        .to_rgba8();
+    let size = [image.width() as usize, image.height() as usize];
+    let pixels = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+    ctx.load_texture("github", pixels, egui::TextureOptions::LINEAR)
 }
 
 /// The CLI needs a folder that does not exist yet, so an editable name is
