@@ -33,6 +33,20 @@ pub(crate) enum Commands {
     },
     /// Build Bevy into the shared target directory, so games start fast.
     Prebuild,
+    /// Run the game in the current folder without a window, as `mcp` does,
+    /// play it and save what the player sees, its cameras and UI, to a PNG.
+    /// Exits 30 when no picture was saved.
+    Screenshot {
+        /// The .png file to write, inside the project.
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        /// Seconds the game plays before the picture.
+        #[arg(long, default_value_t = 0.0, value_name = "SECONDS")]
+        wait: f64,
+        /// After `--`: the game's own launch arguments.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
     /// Serve the editor's commands to an agent, an MCP server on stdin and
     /// stdout that runs the game in the current folder.
     Mcp,
@@ -162,6 +176,28 @@ mod tests {
                 .expect_err("--help prints help and exits");
             assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
             assert_eq!(error.exit_code(), 0);
+        }
+    }
+
+    #[test]
+    fn parses_screenshot_with_the_game_arguments() {
+        let line = [
+            "besfa",
+            "screenshot",
+            "shots/a.png",
+            "--wait",
+            "2",
+            "--",
+            "--level",
+            "shop",
+        ];
+        match Cli::try_parse_from(line).map(|cli| cli.command) {
+            Ok(Commands::Screenshot { file, wait, args }) => {
+                assert_eq!(file, PathBuf::from("shots/a.png"));
+                assert_eq!(wait, 2.0);
+                assert_eq!(args, ["--level", "shop"]);
+            }
+            other => panic!("parsed as {other:?}"),
         }
     }
 

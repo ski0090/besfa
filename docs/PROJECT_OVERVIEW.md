@@ -51,7 +51,7 @@ egui(eframe, wgpu DX12) 기반 Windows 데스크톱 에디터다. 프로젝트 �
 
 ### `crates/besfa_mcp`
 
-에이전트(Claude Code 등)가 에디터 UI 없이 게임의 씬을 읽고 고치게 하는 stdio MCP 서버다. 에디터의 Run처럼 게임을 edit mode로 띄우고(뷰포트도 창도 없이, `BESFA_HEADLESS`로 사용자 포커스를 빼앗지 않는다. 모델 썸네일은 오프스크린으로 그대로 그려진다) `besfa_protocol` 명령을 그대로 전달한다. 도구는 `start`, `send`(명령 하나나 목록을 차례로 보내고, `screenshot`·`thumbnail`·`reimport`는 답이 올 때까지 기다린다. 게임의 프로토콜이 모르는 명령은 보내기 전에 거절한다), `entities`(이름·에셋·부모로 거르고, 놓인 모델이 펼친 부품은 빼거나 함께 본다, `id`면 그 엔티티의 컴포넌트), `stop`이고, 게임 프로젝트에서는 `besfa new`가 넣는 `.mcp.json`이 `besfa mcp`로 띄우고(`start`에 `project`가 없으면 그 폴더), 이 저장소에서는 루트의 `.mcp.json`이 `cargo run -q -p besfa_mcp`로 띄운다. 서버는 라이브러리(`besfa_mcp::serve`)라서 CLI와 이 크레이트의 실행 파일이 함께 쓴다. 에디터가 열어 둔 프로젝트에 같이 쓰면 두 쪽이 씬 파일을 덮어쓴다.
+에이전트(Claude Code 등)가 에디터 UI 없이 게임의 씬을 읽고 고치게 하는 stdio MCP 서버다. 에디터의 Run처럼 게임을 edit mode로 띄우고(뷰포트도 창도 없이, `BESFA_HEADLESS`로 사용자 포커스를 빼앗지 않는다. 모델 썸네일은 오프스크린으로 그대로 그려진다) `besfa_protocol` 명령을 그대로 전달한다. 도구는 `start`(`args`는 게임의 실행 인자), `send`(명령 하나나 목록을 차례로 보내고, `screenshot`에 `game`을 주면 게임 카메라가 UI까지 그린 플레이어의 화면을 찍고, `screenshot`·`thumbnail`·`reimport`는 답이 올 때까지 기다린다. 게임의 프로토콜이 모르는 명령은 보내기 전에 거절한다), `entities`(이름·에셋·부모로 거르고, 놓인 모델이 펼친 부품은 빼거나 함께 본다, `id`면 그 엔티티의 컴포넌트), `stop`이고, 게임 프로젝트에서는 `besfa new`가 넣는 `.mcp.json`이 `besfa mcp`로 띄우고(`start`에 `project`가 없으면 그 폴더), 이 저장소에서는 루트의 `.mcp.json`이 `cargo run -q -p besfa_mcp`로 띄운다. 서버는 라이브러리(`besfa_mcp::serve`)라서 CLI와 이 크레이트의 실행 파일이 함께 쓴다. 에디터가 열어 둔 프로젝트에 같이 쓰면 두 쪽이 씬 파일을 덮어쓴다.
 
 ### `crates/besfa_cli`
 
@@ -65,6 +65,7 @@ besfa validate [DIRECTORY]
 besfa build | test | run [CARGO_ARGS]... [-- ARGS]...
 besfa --help
 besfa --version
+besfa screenshot <FILE> [--wait <SECONDS>] [-- GAME_ARGS]...
 ```
 
 `new`와 `validate`는 인자 파싱과 도움말만 구현되어 있으며, 실제 파일 생성과 검증은 아직 구현하지 않았다.
