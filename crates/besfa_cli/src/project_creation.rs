@@ -334,7 +334,7 @@ fn cargo_config(target_dir: &Path) -> String {
 /// Claude Code Game Studios: agents, skills and hooks for making the game
 /// with Claude Code, at the commit new games get.
 const CCGS_REPOSITORY: &str = "https://github.com/ski0090/Claude-Code-Game-Studios.git";
-const CCGS_COMMIT: &str = "b65e70142d4fd22e2841edbd7729684cbe2652cc";
+const CCGS_COMMIT: &str = "3a41fdc023077dceff0b05a5187ded7d38018b5a";
 
 /// What a game takes from it: the framework, and of the engine references
 /// only Bevy's. A trailing `/` marks a directory.
