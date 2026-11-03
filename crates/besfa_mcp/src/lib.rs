@@ -475,6 +475,8 @@ type Shared = Arc<(Mutex<Inbox>, Condvar)>;
 /// A game cargo runs, and what it reported.
 struct Game {
     cargo: Child,
+    /// Kills cargo and the game when this server dies, however it dies.
+    _job: Job,
     stdin: ChildStdin,
     /// Numbers requests, so each `done` report answers one.
     seq: u64,
@@ -504,6 +506,7 @@ impl Game {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
+        let job = Job::new(&cargo)?;
         let inbox: Shared = Arc::new((
             Mutex::new(Inbox {
                 open: 2,
@@ -516,6 +519,7 @@ impl Game {
         let stdin = cargo.stdin.take().unwrap();
         Ok(Game {
             cargo,
+            _job: job,
             stdin,
             seq: 0,
             inbox,
@@ -616,13 +620,47 @@ impl Game {
 
 impl Drop for Game {
     fn drop(&mut self) {
-        // Killing cargo alone would leave the game running.
-        let _ = quiet("taskkill")
-            .args(["/PID", &self.cargo.id().to_string(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        // Killing cargo alone would leave the game running, so the job
+        // goes first, taking the whole tree with it.
+        let _ = self.cargo.kill();
         let _ = self.cargo.wait();
+    }
+}
+
+/// A Windows job that kills everything in it when its handle closes, which
+/// the OS does when this process is killed too, as a client that is done
+/// with the server may do; no Drop runs then.
+struct Job(windows_sys::Win32::Foundation::HANDLE);
+
+impl Job {
+    fn new(child: &Child) -> io::Result<Job> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::*;
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let job = Job(job);
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let limited = SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&raw const info).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if limited == 0 || AssignProcessToJobObject(job.0, child.as_raw_handle()) == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(job)
+        }
+    }
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
     }
 }
 
