@@ -37,7 +37,7 @@ cargo new --bin <프로젝트 이름>
 - 게임이 고치는 파일은 서브모듈에서 복사한다: `.claude/` 바로 아래의 파일(`settings.json` 등), `.gitattributes`, `.worktreeinclude`, `CLAUDE.md`, `project.yaml`, `design/`, `production/`, `src/CLAUDE.md`, `docs/`의 프레임워크 문서와 `architecture/`, `registry/`. 레이아웃은 ski0090/duskhold#68과 같다.
 - `CLAUDE.md`의 엔진 레퍼런스 import를 Bevy의 `VERSION.md`로 바꾸고, CCGS가 쓰는 개인 설정과 세션 상태 파일을 `.gitignore`에 더한다. CCGS의 라이선스는 서브모듈에 있다.
 - 엔진 설정(`project.yaml`의 `engine`)은 쓰지 않는다. 프로젝트 폴더에서 Claude Code를 열고 `/start`, `/setup-engine bevy 0.20`을 실행한다.
-- Git이 없거나 받기에 실패하거나, 개발자 모드가 꺼져 링크를 만들지 못하면 프로젝트를 만들지 않고 종료 코드 `30`, `code`는 `ccgs_failed`를 반환한다. Git의 진단은 표준 오류로 나간다.
+- Git은 로그인을 묻지 않고, 30초 넘게 초당 1000바이트보다 느리면 받기를 포기한다. Git이 없거나, 받기에 실패하거나, 개발자 모드가 꺼져 링크를 만들지 못하거나, 받은 `CLAUDE.md`에 엔진 레퍼런스 import가 없으면 프로젝트를 만들지 않고 종료 코드 `30`, `code`는 `ccgs_failed`를 반환한다. Git의 진단은 표준 오류로 나간다.
 
 ```text
 besfa prebuild
@@ -51,7 +51,7 @@ besfa mcp
 
 표준 입출력으로 MCP 서버를 연다. 지금 폴더의 게임을 에디터의 Run처럼 창 없는 편집 상태로 띄우고(`start`에 `project`를 주면 그 폴더) `besfa_protocol` 명령을 전달한다. 도구와 명령은 [PROJECT_OVERVIEW.md](./PROJECT_OVERVIEW.md)의 `crates/besfa_mcp`와 [ARCHITECTURE.md](./ARCHITECTURE.md)를 따른다. 표준 출력에는 JSON-RPC 메시지만 쓰고, 클라이언트가 표준 입력을 닫으면 띄운 게임을 끄고 끝난다. 설치된 `besfa`가 아는 프로토콜보다 새 명령은 거절하므로, 플러그인을 올리면 CLI도 다시 설치한다.
 
-생성 시점에는 네트워크를 쓰지 않는다. 의존성은 게임을 처음 빌드할 때 받는다. 모든 단계가 성공한 경우에만 결과물을 최종 루트 디렉터리로 이동한다. `besfa/` 또는 `.besfa/` 데이터 경로와 초기 데이터 파일 생성은 데이터 포맷 계약을 확정한 뒤 추가한다.
+생성 시점에는 `--ccgs`가 CCGS를 받는 것 말고는 네트워크를 쓰지 않는다. 의존성은 게임을 처음 빌드할 때 받는다. 모든 단계가 성공한 경우에만 결과물을 최종 루트 디렉터리로 이동한다. `besfa/` 또는 `.besfa/` 데이터 경로와 초기 데이터 파일 생성은 데이터 포맷 계약을 확정한 뒤 추가한다.
 
 초기 구현은 Cargo의 기본 VCS 및 Rust edition 설정을 그대로 따른다. 게임 프로젝트의 VCS 설정 선택은 추후 에디터 UI에서 제공한다.
 
@@ -87,7 +87,7 @@ besfa mcp
 | `10` | 대상 디렉터리가 이미 존재함 |
 | `11` | Cargo가 거부한 유효하지 않은 프로젝트 이름 또는 요청 |
 | `20` | 파일 시스템 오류 |
-| `30` | 예상하지 못한 내부 오류 |
+| `30` | Cargo나 Git 실행 실패(`ccgs_failed` 포함), 또는 예상하지 못한 내부 오류 |
 
 Cargo가 프로젝트 이름 때문에 생성에 실패하면, `besfa`는 Cargo의 진단을 표준 오류로 전달하고 종료 코드 `11`을 반환한다. UI는 이 진단을 사용자에게 표시할 수 있다.
 

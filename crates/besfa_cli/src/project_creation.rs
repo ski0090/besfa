@@ -380,8 +380,22 @@ docs/consistency-failures.md\n";
 /// Adds Claude Code Game Studios from `repository` to `project` as the
 /// `.ccg` submodule on its `besfa` branch, then [`install_ccgs`].
 fn add_ccgs(project: &Path, repository: &str) -> Result<(), CreateError> {
+    // Run from the editor, a login prompt or a stalled download would hang
+    // it with no way to cancel, so both fail instead. Its paths run long
+    // enough to pass Windows' 260 under a deep project directory. Git hands
+    // `-c` and the variable on to the submodule's own clone.
     let git = || {
         let mut command = Command::new("git");
+        command.env("GIT_TERMINAL_PROMPT", "0").args([
+            "-c",
+            "credential.helper=",
+            "-c",
+            "http.lowSpeedLimit=1000",
+            "-c",
+            "http.lowSpeedTime=30",
+            "-c",
+            "core.longpaths=true",
+        ]);
         command.arg("-C").arg(project);
         command
     };
@@ -477,14 +491,21 @@ fn install_ccgs(project: &Path) -> Result<(), CreateError> {
     let claude_md = project.join("CLAUDE.md");
     let instructions = fs::read_to_string(&claude_md)
         .map_err(|error| filesystem_error("Failed to read CLAUDE.md.", error))?;
-    fs::write(
-        &claude_md,
-        instructions.replace(
-            "@docs/engine-reference/godot/VERSION.md",
-            "@docs/engine-reference/bevy/VERSION.md",
-        ),
-    )
-    .map_err(|error| filesystem_error("Failed to write CLAUDE.md.", error))?;
+    let (godot, bevy) = (
+        "@docs/engine-reference/godot/VERSION.md",
+        "@docs/engine-reference/bevy/VERSION.md",
+    );
+    // The `besfa` branch may already import Bevy's; neither means CCGS
+    // changed what this rewrites.
+    if !instructions.contains(godot) && !instructions.contains(bevy) {
+        return Err(CreateError::new(
+            30,
+            "ccgs_failed",
+            "CCGS's CLAUDE.md no longer imports an engine reference.",
+        ));
+    }
+    fs::write(&claude_md, instructions.replace(godot, bevy))
+        .map_err(|error| filesystem_error("Failed to write CLAUDE.md.", error))?;
     let append = |file: &str, text: &str| {
         fs::OpenOptions::new()
             .create(true)
