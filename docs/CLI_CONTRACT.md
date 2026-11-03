@@ -7,7 +7,7 @@
 ## 명령
 
 ```text
-besfa new <DIRECTORY> --output json
+besfa new <DIRECTORY> [--ccgs] --output json
 ```
 
 `DIRECTORY`는 생성될 게임 프로젝트의 최종 루트 디렉터리다.
@@ -29,6 +29,13 @@ cargo new --bin <프로젝트 이름>
 
 - `.cargo/config.toml`에 `target-dir = "%LOCALAPPDATA%/Besfa/target"`을 쓴다.
 - `%LOCALAPPDATA%/Besfa/prebuild/Cargo.lock`이 있으면 새 프로젝트로 복사해, 의존성 버전을 미리 빌드된 것과 맞춘다.
+
+`--ccgs`를 주면 [Claude Code Game Studios](https://github.com/ski0090/Claude-Code-Game-Studios)(CCGS: Claude Code로 게임을 만드는 에이전트, 스킬, 훅)를 프로젝트에 더한다. 에디터 허브의 **Add Claude Code Game Studios** 체크박스가 이 옵션이다.
+
+- Git으로 `crates/besfa_cli/src/project_creation.rs`의 `CCGS_COMMIT`에 고정된 커밋 하나만 받아, `CCGS_PATHS`(`.claude/`, `CLAUDE.md`, `project.yaml`, `design/`, `production/`, 프레임워크 문서, 그리고 엔진 레퍼런스 중 Bevy 것만)를 저장소에 커밋된 그대로(LF) 복사한다. CCGS 버전을 올리려면 `CCGS_COMMIT`을 바꾼다.
+- `CLAUDE.md`의 엔진 레퍼런스 import를 Bevy의 `VERSION.md`로 바꾸고, CCGS의 MIT 고지를 `.claude/CCGS-LICENSE`에 쓰며, CCGS가 쓰는 개인 설정과 세션 상태 파일을 `.gitignore`에 더한다.
+- 엔진 설정(`project.yaml`의 `engine`)은 쓰지 않는다. 프로젝트 폴더에서 Claude Code를 열고 `/start`, `/setup-engine bevy 0.20`을 실행한다.
+- Git이 없거나 받기에 실패하면 프로젝트를 만들지 않고 종료 코드 `30`, `code`는 `ccgs_failed`를 반환한다. Git의 진단은 표준 오류로 나간다.
 
 ```text
 besfa prebuild

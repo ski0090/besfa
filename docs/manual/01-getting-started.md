@@ -95,7 +95,8 @@ cargo run -p besfa_editor
 1. 허브에서 **➕ New project**를 누릅니다.
 2. **Create project** 창이 뜨면 **Project directory** 칸에 새 프로젝트 폴더의 경로를 씁니다. 예: `C:\Projects\my_game`
    - **🗁 Browse**를 누르면 폴더를 고를 수 있습니다. 고른 폴더 안에 `new_project`라는 이름이 붙으니, 이름을 원하는 것으로 고치세요.
-3. **➕ Create**를 누르거나 Enter를 누릅니다.
+3. Claude Code로 게임을 만들 거라면 **Add Claude Code Game Studios**를 켭니다. [Claude Code Game Studios 더하기](14-claude-code.md#claude-code-game-studios-더하기) 참고.
+4. **➕ Create**를 누르거나 Enter를 누릅니다.
 
 ![새 프로젝트 만들기 창](../images/hub-create.png)
 
@@ -112,6 +113,12 @@ cargo run -p besfa_editor
 
 ```bash
 besfa new C:\Projects\my_game
+```
+
+Claude Code Game Studios도 더하려면 `--ccgs`를 붙입니다.
+
+```bash
+besfa new C:\Projects\my_game --ccgs
 ```
 
 만든 뒤 허브의 **Open folder**로 열면 됩니다.
@@ -147,6 +154,7 @@ besfa new C:\Projects\my_game
 | `assets/` | 모델, 프리팹 같은 에셋을 넣는 폴더. [에셋과 프리팹](07-assets-prefabs.md) 참고. |
 | `.cargo/config.toml` | 미리 빌드한 Bevy를 같이 쓰게 하는 설정. |
 | `.mcp.json` | Claude Code가 이 프로젝트를 다룰 때 쓰는 설정. [Claude Code로 다루기](14-claude-code.md) 참고. |
+| `.claude/`, `CLAUDE.md`, `project.yaml`, `design/`, `production/`, `docs/` | **Add Claude Code Game Studios**(`--ccgs`)를 켰을 때만. Claude Code Game Studios의 에이전트, 스킬, 설정. [Claude Code Game Studios 더하기](14-claude-code.md#claude-code-game-studios-더하기) 참고. |
 
 에디터를 쓰다 보면 다음도 생깁니다.
 

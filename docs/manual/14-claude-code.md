@@ -16,6 +16,14 @@
 
 `besfa` 명령이 설치되어 있어야 합니다([설치와 시작](01-getting-started.md#설치)).
 
+## Claude Code Game Studios 더하기
+
+[Claude Code Game Studios](https://github.com/ski0090/Claude-Code-Game-Studios)(CCGS)는 Claude Code로 게임을 만들 때 쓰는 에이전트, 스킬, 훅 모음입니다. 기획 문서, 스프린트, 리뷰, 테스트 같은 개발 과정을 슬래시 명령으로 이끌고, Bevy 0.20 레퍼런스와 `bevy-specialist` 에이전트가 들어 있습니다.
+
+- 허브에서 새 프로젝트를 만들 때 **Add Claude Code Game Studios**를 켜거나, 터미널에서 `besfa new <폴더> --ccgs`로 만듭니다.
+- **Git**이 있어야 하고, 만들 때 인터넷으로 CCGS를 받습니다. 받지 못하면 프로젝트를 만들지 않고 이유를 보여 줍니다.
+- 만든 뒤 프로젝트 폴더에서 Claude Code를 열고 `/start`, 이어서 `/setup-engine bevy 0.20`을 실행하면 설정이 끝납니다.
+
 ## 쓰는 법
 
 프로젝트 폴더에서 Claude Code를 열고 하고 싶은 일을 말하면 됩니다. 예:

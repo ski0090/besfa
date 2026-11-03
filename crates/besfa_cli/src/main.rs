@@ -16,7 +16,11 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::New { directory, output } => match create_project(&directory) {
+        Commands::New {
+            directory,
+            ccgs,
+            output,
+        } => match create_project(&directory, ccgs) {
             Ok(project_path) => {
                 print_create_success(output, &project_path);
                 ExitCode::SUCCESS

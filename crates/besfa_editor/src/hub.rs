@@ -33,6 +33,8 @@ pub struct Hub {
 #[derive(Default)]
 struct CreateDialog {
     directory: String,
+    /// `besfa new --ccgs`: add Claude Code Game Studios to the project.
+    ccgs: bool,
     error: Option<String>,
     /// `besfa new` while it runs: the project's path or what went wrong.
     creating: Option<Receiver<Result<String, String>>>,
@@ -310,6 +312,12 @@ impl Hub {
                 }
                 create = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             });
+            ui.add_space(8.0);
+            let ccgs = egui::Checkbox::new(&mut dialog.ccgs, "Add Claude Code Game Studios");
+            ui.add_enabled(!creating, ccgs).on_hover_text(
+                "Agents, skills and hooks for making the game with Claude Code. \
+                 Needs Git and the network.",
+            );
             if let Some(error) = &dialog.error {
                 ui.label(RichText::new(error).color(ERROR));
             }
@@ -332,7 +340,8 @@ impl Hub {
                 dialog.error = Some("Enter a directory for the new project.".into());
             } else {
                 dialog.error = None;
-                dialog.creating = Some(background(ctx, move || project::create(&directory)));
+                let ccgs = dialog.ccgs;
+                dialog.creating = Some(background(ctx, move || project::create(&directory, ccgs)));
             }
         } else if !creating && (cancel || modal.should_close()) {
             self.create = None;

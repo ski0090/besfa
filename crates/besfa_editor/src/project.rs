@@ -99,10 +99,11 @@ impl RecentProjects {
 }
 
 /// Creates a project in `directory` with `besfa new` and returns its path,
-/// or what went wrong.
-pub fn create(directory: &str) -> Result<String, String> {
+/// or what went wrong. `ccgs` adds Claude Code Game Studios.
+pub fn create(directory: &str, ccgs: bool) -> Result<String, String> {
     let output = command("besfa")
         .args(["new", directory, "--output", "json"])
+        .args(ccgs.then_some("--ccgs"))
         .output()
         .map_err(|error| format!("Could not start the Besfa CLI.\n{error}"))?;
     creation_result(
