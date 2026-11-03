@@ -114,8 +114,13 @@ pub fn create(directory: &str, ccgs: bool) -> Result<String, String> {
 }
 
 fn creation_result(success: bool, stdout: &str, stderr: &str) -> Result<String, String> {
+    let error = |message: &str| match stderr.trim() {
+        "" => message.into(),
+        diagnostic => format!("{message}\n{diagnostic}"),
+    };
+    // An older CLI rejects new options with only a usage error on stderr.
     let Ok(serde_json::Value::Object(output)) = serde_json::from_str(stdout) else {
-        return Err("The Besfa CLI returned an invalid response.".into());
+        return Err(error("The Besfa CLI returned an invalid response."));
     };
     if success
         && output.get("status").and_then(|s| s.as_str()) == Some("success")
@@ -124,11 +129,7 @@ fn creation_result(success: bool, stdout: &str, stderr: &str) -> Result<String, 
         return Ok(path.into());
     }
     let message = output.get("message").and_then(|m| m.as_str());
-    let message = message.unwrap_or("Failed to create the project.");
-    Err(match stderr.trim() {
-        "" => message.into(),
-        diagnostic => format!("{message}\n{diagnostic}"),
-    })
+    Err(error(message.unwrap_or("Failed to create the project.")))
 }
 
 /// Moves `directory` to the Recycle Bin. Returns false if it failed.
@@ -311,6 +312,12 @@ mod tests {
         assert_eq!(
             creation_result(true, "oops", ""),
             Err("The Besfa CLI returned an invalid response.".into())
+        );
+        assert_eq!(
+            creation_result(false, "", "error: unexpected argument '--ccgs' found\n"),
+            Err("The Besfa CLI returned an invalid response.\n\
+                 error: unexpected argument '--ccgs' found"
+                .into())
         );
     }
 

@@ -334,11 +334,13 @@ fn cargo_config(target_dir: &Path) -> String {
 /// Claude Code Game Studios: agents, skills and hooks for making the game
 /// with Claude Code, at the commit new games get.
 const CCGS_REPOSITORY: &str = "https://github.com/ski0090/Claude-Code-Game-Studios.git";
+// Bumping it: re-check `CCGS_PATHS`, `CCGS_GITIGNORE` and the CLAUDE.md
+// import `add_ccgs` rewrites against that commit.
 const CCGS_COMMIT: &str = "3a41fdc023077dceff0b05a5187ded7d38018b5a";
 
 /// What a game takes from it: the framework, and of the engine references
 /// only Bevy's. A trailing `/` marks a directory.
-const CCGS_PATHS: [&str; 15] = [
+const CCGS_PATHS: &[&str] = &[
     ".claude/",
     ".gitattributes",
     ".worktreeinclude",
@@ -375,8 +377,21 @@ docs/consistency-failures.md\n";
 fn add_ccgs(project: &Path, repository: &str, revision: &str) -> Result<(), CreateError> {
     // A throwaway repository beside the project, so only the files land in it.
     let git_dir = project.with_file_name(".ccgs.git");
+    // Run from the editor, a login prompt or a stalled download would hang
+    // it with no way to cancel, so both fail instead. Its paths run to 88
+    // characters, which can pass Windows' 260 under a deep staging directory.
     let git = || {
         let mut command = Command::new("git");
+        command.env("GIT_TERMINAL_PROMPT", "0").args([
+            "-c",
+            "credential.helper=",
+            "-c",
+            "http.lowSpeedLimit=1000",
+            "-c",
+            "http.lowSpeedTime=30",
+            "-c",
+            "core.longpaths=true",
+        ]);
         command.arg("--git-dir").arg(&git_dir);
         command
     };
@@ -400,12 +415,17 @@ fn add_ccgs(project: &Path, repository: &str, revision: &str) -> Result<(), Crea
     let claude_md = project.join("CLAUDE.md");
     let instructions = fs::read_to_string(&claude_md)
         .map_err(|error| filesystem_error("Failed to read CLAUDE.md.", error))?;
+    let godot = "@docs/engine-reference/godot/VERSION.md";
+    if !instructions.contains(godot) {
+        return Err(CreateError::new(
+            30,
+            "ccgs_failed",
+            "CCGS's CLAUDE.md no longer imports Godot's engine reference.",
+        ));
+    }
     fs::write(
         &claude_md,
-        instructions.replace(
-            "@docs/engine-reference/godot/VERSION.md",
-            "@docs/engine-reference/bevy/VERSION.md",
-        ),
+        instructions.replace(godot, "@docs/engine-reference/bevy/VERSION.md"),
     )
     .map_err(|error| filesystem_error("Failed to write CLAUDE.md.", error))?;
     fs::OpenOptions::new()
@@ -614,6 +634,10 @@ mod tests {
         git(&["init", "--quiet"]);
         git(&["add", "."]);
         git(&["commit", "--quiet", "-m", "ccgs"]);
+        // Its download repository, which `add_ccgs` reuses, set to check out
+        // CRLF whatever this machine's Git does.
+        git(&["init", "--bare", "--quiet", "../.ccgs.git"]);
+        git(&["-C", "../.ccgs.git", "config", "core.autocrlf", "true"]);
         fs::create_dir_all(&project).expect("project should be created");
         fs::write(project.join(".gitignore"), "/target\n").expect(".gitignore should be written");
 
