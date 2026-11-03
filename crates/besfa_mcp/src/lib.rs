@@ -30,6 +30,7 @@ const ERROR_LINES: usize = 10;
 /// Answers MCP requests on stdin until the client closes it, then stops
 /// the game it started.
 pub fn serve() {
+    stop_other_servers();
     let mut game = None;
     let mut stdout = io::stdout();
     // Stdout carries only JSON-RPC lines; the game's output is piped.
@@ -92,6 +93,28 @@ pub fn screenshot(
     } else {
         Ok(file)
     }
+}
+
+/// Ends every other server of this program and the games they started, so
+/// a new one replaces what an earlier session left running.
+fn stop_other_servers() {
+    let Some(name) = std::env::current_exe().ok().and_then(|exe| {
+        exe.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    }) else {
+        return;
+    };
+    // Under `besfa mcp` the image is besfa.exe, which also runs the CLI and
+    // the editor, so only the dedicated binary may replace its siblings.
+    if !name.eq_ignore_ascii_case("besfa_mcp.exe") {
+        return;
+    }
+    let _ = quiet("taskkill")
+        .args(["/F", "/T", "/FI", &format!("IMAGENAME eq {name}")])
+        .args(["/FI", &format!("PID ne {}", std::process::id())])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// The result of the JSON-RPC request `message`, or its error object.
@@ -475,6 +498,8 @@ type Shared = Arc<(Mutex<Inbox>, Condvar)>;
 /// A game cargo runs, and what it reported.
 struct Game {
     cargo: Child,
+    /// Kills cargo and the game when this server dies, however it dies.
+    _job: Job,
     stdin: ChildStdin,
     /// Numbers requests, so each `done` report answers one.
     seq: u64,
@@ -504,6 +529,15 @@ impl Game {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
+        let job = match Job::new(&cargo) {
+            Ok(job) => job,
+            Err(error) => {
+                // Dropping a Child leaves it running.
+                let _ = cargo.kill();
+                let _ = cargo.wait();
+                return Err(error);
+            }
+        };
         let inbox: Shared = Arc::new((
             Mutex::new(Inbox {
                 open: 2,
@@ -516,6 +550,7 @@ impl Game {
         let stdin = cargo.stdin.take().unwrap();
         Ok(Game {
             cargo,
+            _job: job,
             stdin,
             seq: 0,
             inbox,
@@ -616,13 +651,61 @@ impl Game {
 
 impl Drop for Game {
     fn drop(&mut self) {
-        // Killing cargo alone would leave the game running.
-        let _ = quiet("taskkill")
-            .args(["/PID", &self.cargo.id().to_string(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        // Killing cargo alone would leave the game running; closing the job,
+        // which happens as the fields drop, takes the rest of the tree.
+        let _ = self.cargo.kill();
         let _ = self.cargo.wait();
+    }
+}
+
+/// A Windows job that kills everything in it when its handle closes, which
+/// the OS does when this process is killed too, as a client that is done
+/// with the server may do; no Drop runs then.
+#[cfg(windows)]
+struct Job(windows_sys::Win32::Foundation::HANDLE);
+
+/// Nothing outside Windows tracks the game's tree.
+#[cfg(not(windows))]
+struct Job;
+
+#[cfg(not(windows))]
+impl Job {
+    fn new(_: &Child) -> io::Result<Job> {
+        Ok(Job)
+    }
+}
+
+#[cfg(windows)]
+impl Job {
+    fn new(child: &Child) -> io::Result<Job> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::*;
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let job = Job(job);
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let limited = SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&raw const info).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if limited == 0 || AssignProcessToJobObject(job.0, child.as_raw_handle()) == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(job)
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
     }
 }
 
@@ -666,6 +749,19 @@ fn quiet(program: &str) -> Process {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn closing_the_job_kills_its_process() {
+        let mut child = quiet("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        drop(Job::new(&child).unwrap());
+        assert!(child.wait().is_ok());
+        assert!(child.try_wait().unwrap().is_some());
+    }
 
     fn request(method: &str, params: Value) -> Value {
         json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})

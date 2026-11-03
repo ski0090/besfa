@@ -7,3 +7,6 @@ description = "MCP server that runs a Besfa game in edit mode and passes it edit
 [dependencies]
 besfa_protocol = { path = "../besfa_protocol" }
 serde_json = "1.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
