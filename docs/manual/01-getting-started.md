@@ -95,7 +95,7 @@ cargo run -p besfa_editor
 1. 허브에서 **➕ New project**를 누릅니다.
 2. **Create project** 창이 뜨면 **Project directory** 칸에 새 프로젝트 폴더의 경로를 씁니다. 예: `C:\Projects\my_game`
    - **🗁 Browse**를 누르면 폴더를 고를 수 있습니다. 고른 폴더 안에 `new_project`라는 이름이 붙으니, 이름을 원하는 것으로 고치세요.
-3. Claude Code로 게임을 만들 거라면 **Add Claude Code Game Studios**를 켭니다. [Claude Code Game Studios 더하기](14-claude-code.md#claude-code-game-studios-더하기) 참고.
+3. Claude Code로 게임을 만들 거라면 **Add Claude Code Game Studios**를 켭니다. 옆의 **GitHub**를 누르면 그 저장소가 브라우저에 열립니다. [Claude Code Game Studios 더하기](14-claude-code.md#claude-code-game-studios-더하기) 참고.
 4. **➕ Create**를 누르거나 Enter를 누릅니다.
 
 ![새 프로젝트 만들기 창](../images/hub-create.png)

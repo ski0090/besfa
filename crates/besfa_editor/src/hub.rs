@@ -313,11 +313,16 @@ impl Hub {
                 create = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             });
             ui.add_space(8.0);
-            let ccgs = egui::Checkbox::new(&mut dialog.ccgs, "Add Claude Code Game Studios");
-            ui.add_enabled(!creating, ccgs).on_hover_text(
-                "Agents, skills and hooks for making the game with Claude Code. \
-                 Needs Git and the network.",
-            );
+            ui.horizontal(|ui| {
+                let ccgs = egui::Checkbox::new(&mut dialog.ccgs, "Add Claude Code Game Studios");
+                ui.add_enabled(!creating, ccgs).on_hover_text(
+                    "Agents, skills and hooks for making the game with Claude Code. \
+                     Needs Git and the network.",
+                );
+                if ui.link("GitHub").on_hover_text(project::CCGS).clicked() {
+                    project::open_url(project::CCGS);
+                }
+            });
             if let Some(error) = &dialog.error {
                 ui.label(RichText::new(error).color(ERROR));
             }
