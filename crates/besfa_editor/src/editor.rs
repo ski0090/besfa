@@ -114,7 +114,6 @@ enum RightTab {
 enum BottomTab {
     Log,
     Assets,
-    Agent,
 }
 
 enum Dialog {
@@ -208,6 +207,8 @@ pub struct Editor {
     agent: AgentSettings,
     agents: Agents,
     agent_open: bool,
+    /// Whether the Agent chat has its own window.
+    agent_chat_open: bool,
     agent_panel: AgentPanel,
     /// The window may close: nothing is unsaved, or the user chose.
     closing: bool,
@@ -268,6 +269,7 @@ impl Editor {
             agent: AgentSettings::read(&AgentSettings::file()),
             agents: Agents::load(),
             agent_open: false,
+            agent_chat_open: false,
             agent_panel: AgentPanel::default(),
             closing: false,
             leave: false,
@@ -334,7 +336,6 @@ impl Editor {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Log, "Log");
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Assets, "Assets");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Agent, "Agent");
                 });
                 ui.separator();
                 match self.bottom_tab {
@@ -346,7 +347,6 @@ impl Editor {
                         Some(AssetAction::Preview(path)) => self.open_preview(path),
                         None => {}
                     },
-                    BottomTab::Agent => self.agent_tab(ui, &ctx),
                 }
             });
         egui::Panel::left("hierarchy")
@@ -406,6 +406,7 @@ impl Editor {
         egui::CentralPanel::default().show(ui, |ui| self.viewport_ui(ui, &ctx));
         self.dialogs(&ctx);
         self.agent_window(&ctx);
+        self.agent_chat(&ctx);
         self.send_brushes(&ctx);
         self.send_snap(&ctx);
 
@@ -1372,6 +1373,9 @@ impl Editor {
     fn menu_bar(&mut self, ui: &mut Ui) {
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
+                if ui.button("Agent").clicked() {
+                    self.agent_chat_open = true;
+                }
                 ui.menu_button("File", |ui| {
                     // Only the edit session's scene is worth keeping.
                     let can_save = self.game.is_some() && !self.playing;
@@ -1675,7 +1679,27 @@ impl Editor {
         }
     }
 
-    fn agent_tab(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+    /// The Agent chat in a window of its own.
+    fn agent_chat(&mut self, ctx: &egui::Context) {
+        if !self.agent_chat_open {
+            return;
+        }
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Besfa Agent")
+            .with_inner_size([900.0, 640.0]);
+        let mut close = false;
+        let id = egui::ViewportId::from_hash_of("agent_chat");
+        ctx.show_viewport_immediate(id, builder, |ui, _| {
+            self.agent_tab(ui);
+            close = ui.input(|input| input.viewport().close_requested());
+        });
+        if close {
+            self.agent_chat_open = false;
+        }
+    }
+
+    fn agent_tab(&mut self, ui: &mut Ui) {
+        let ctx = &ui.ctx().clone();
         self.agents.check_once(ctx);
         let before = self.agent.clone();
         let route = self.agent_route();
@@ -1692,9 +1716,10 @@ impl Editor {
             self.log(format!("Could not save the agent settings: {error}"));
         }
         // The pick may have changed this frame, so the route is asked again.
-        if let (Some(prompt), Ok(route)) = (prompt, self.agent_route()) {
+        if let (Some((prompt, files)), Ok(route)) = (prompt, self.agent_route()) {
             let provider = self.agent.provider;
-            let invocation = agent::invocation(provider, &route, self.agent.model(provider));
+            let invocation =
+                agent::invocation(provider, &route, self.agent.model(provider), &files);
             let directory = self.project.file("");
             let scene = self.project.file(SCENE_FILE);
             self.agent_panel
@@ -2441,38 +2466,15 @@ mod tests {
         harness.run_steps(4);
         save(&mut harness, "assets-tab", Some(BOTTOM_PANEL));
 
-        // The Agent tab with its model list open: Claude's CLI is not
-        // logged in, ChatGPT's is, and Gemini goes with a key.
+        // The Agent chat has a window of its own, so the Agent tab shot is
+        // gone; Claude's CLI is not logged in, ChatGPT's is, and Gemini
+        // goes with a key.
         let editor = &mut harness.state_mut().editor;
         editor.agents = Agents::fixed(
             [Cli::LoggedOut, Cli::LoggedIn, Cli::LoggedIn],
             &[(Provider::Gemini, "gemini-key")],
         );
         editor.agent.access.insert(Provider::Gemini, Access::Key);
-        editor.bottom_tab = BottomTab::Agent;
-        harness.run_steps(4);
-        let model_list = || |node: &egui_kittest::Node| node.rect().min.y > BOTTOM_PANEL.min.y;
-        harness
-            .get_all_by_role(egui::accesskit::Role::ComboBox)
-            .find(model_list())
-            .unwrap()
-            .click();
-        harness.remove_cursor();
-        harness.run_steps(4);
-        save(
-            &mut harness,
-            "agent-tab",
-            Some(egui::Rect::from_min_max(
-                egui::pos2(0.0, 470.0),
-                BOTTOM_PANEL.max,
-            )),
-        );
-        harness
-            .get_all_by_role(egui::accesskit::Role::ComboBox)
-            .find(model_list())
-            .unwrap()
-            .click();
-        harness.run_steps(4);
 
         // Agent Settings, each provider showing what its choice needs.
         harness.state_mut().editor.agent_open = true;
@@ -2489,6 +2491,7 @@ mod tests {
         let editor = &mut harness.state_mut().editor;
         editor.agent_open = false;
         editor.bottom_tab = BottomTab::Log;
+        agent_window_screenshot();
         harness.run_steps(4);
 
         // Who Play starts.
@@ -2646,6 +2649,35 @@ mod tests {
         harness
             .get_by_role_and_label(egui::accesskit::Role::Button, icon)
             .rect()
+    }
+
+    /// The Agent chat's window, which the editor opens apart from its own.
+    fn agent_window_screenshot() {
+        let size = egui::vec2(820.0, 460.0);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(size + egui::Vec2::splat(2.0 * MARGIN))
+            .with_pixels_per_point(PIXELS_PER_POINT)
+            .build_ui_state(
+                |ui,
+                 (panel, settings, agents): &mut (
+                    crate::agent::AgentPanel,
+                    AgentSettings,
+                    Agents,
+                )| {
+                    panel.ui(ui, settings, agents, None);
+                },
+                (
+                    crate::agent::AgentPanel::demo(),
+                    AgentSettings::default(),
+                    Agents::fixed([Cli::LoggedIn; 3], &[]),
+                ),
+            );
+        harness.run_steps(4);
+        save(
+            &mut harness,
+            "agent-window",
+            Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+        );
     }
 
     /// Writes the window, or the part of it in `crop` (points), to
