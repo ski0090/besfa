@@ -616,30 +616,161 @@ impl Organization {
         input
     }
 
+    /// Where a template goes: right of everything already on the canvas,
+    /// so loading one never covers the user's agents.
+    fn free_x(&self) -> f32 {
+        let right = self
+            .nodes
+            .iter()
+            .map(|node| node.pos[0] + NODE_SIZE.x)
+            .chain(self.groups.iter().map(|group| group.max[0]))
+            .fold(f32::NEG_INFINITY, f32::max);
+        if right.is_finite() { right + 80.0 } else { 0.0 }
+    }
+
+    fn add_group(&mut self, name: &str, min: [f32; 2], max: [f32; 2]) {
+        let id = self.id();
+        self.groups.push(Group {
+            id,
+            name: name.into(),
+            min,
+            max,
+            ..Default::default()
+        });
+    }
+
     /// A small studio to start from: direction, design, code and testing.
     fn starter(&mut self) {
+        let x = self.free_x();
         let ids: Vec<u32> = [
-            ("creative-director", [40.0, 40.0]),
-            ("game-designer", [300.0, 40.0]),
-            ("gameplay-programmer", [560.0, 40.0]),
-            ("qa-tester", [820.0, 40.0]),
+            "creative-director",
+            "game-designer",
+            "gameplay-programmer",
+            "qa-tester",
         ]
         .into_iter()
-        .map(|(role, pos)| self.add(role, Pos2::from(pos)))
+        .enumerate()
+        .map(|(i, role)| self.add(role, Pos2::new(x + 40.0 + i as f32 * 260.0, 40.0)))
         .collect();
         for pair in ids.windows(2) {
             self.link(pair[0], pair[1]);
         }
-        let id = self.id();
-        self.groups.push(Group {
-            id,
-            name: "Studio".into(),
-            min: [20.0, 0.0],
-            max: [1050.0, 180.0],
-            ..Default::default()
-        });
+        self.add_group("Studio", [x + 20.0, 0.0], [x + 1050.0, 180.0]);
+    }
+
+    /// CCGS's studio: directors hand the task to their department leads,
+    /// and leads to their specialists, one lead and its specialists a row.
+    fn ccgs(&mut self) {
+        let x = self.free_x();
+        let (row, column) = (150.0, 260.0);
+        let y = |row_index: f32| 40.0 + row_index * row;
+        let mut directors: Vec<(&str, u32)> = Vec::new();
+        for (director, _, _) in CCGS_CHART {
+            if directors.iter().all(|&(name, _)| name != *director) {
+                // Level with the middle of its leads' rows.
+                let rows: Vec<f32> = (0..CCGS_CHART.len())
+                    .filter(|&i| CCGS_CHART[i].0 == *director)
+                    .map(|i| i as f32)
+                    .collect();
+                let middle = rows.iter().sum::<f32>() / rows.len() as f32;
+                let id = self.add(director, Pos2::new(x + 40.0, y(middle)));
+                directors.push((director, id));
+            }
+        }
+        let leads: Vec<u32> = CCGS_CHART
+            .iter()
+            .enumerate()
+            .map(|(i, &(director, lead, _))| {
+                let id = self.add(lead, Pos2::new(x + 40.0 + column, y(i as f32)));
+                let (_, from) = directors
+                    .iter()
+                    .find(|&&(name, _)| name == director)
+                    .unwrap();
+                self.link(*from, id);
+                id
+            })
+            .collect();
+        let mut widest = 0;
+        for (i, (_, _, specialists)) in CCGS_CHART.iter().enumerate() {
+            widest = widest.max(specialists.len());
+            for (k, specialist) in specialists.iter().enumerate() {
+                let pos = Pos2::new(x + 40.0 + column * (2 + k) as f32, y(i as f32));
+                let id = self.add(specialist, pos);
+                self.link(leads[i], id);
+            }
+        }
+        let bottom = y(CCGS_CHART.len() as f32 - 1.0) + NODE_SIZE.y + 20.0;
+        let tier = |first: usize, columns: usize| {
+            let left = x + 40.0 + column * first as f32;
+            [
+                left - 20.0,
+                left + column * (columns - 1) as f32 + NODE_SIZE.x + 20.0,
+            ]
+        };
+        for (name, [left, right]) in [
+            ("Directors", tier(0, 1)),
+            ("Department leads", tier(1, 1)),
+            ("Specialists", tier(2, widest)),
+        ] {
+            self.add_group(name, [left, 0.0], [right, bottom]);
+        }
     }
 }
+
+/// CCGS's chart, a row for each department lead: the director it answers
+/// to, the lead, and its specialists. shortcut: CCGS's README names the
+/// three tiers but not who reports to whom, so leads take their
+/// department's specialists; follow CCGS if it publishes its chart.
+const CCGS_CHART: &[(&str, &str, &[&str])] = &[
+    (
+        "creative-director",
+        "game-designer",
+        &[
+            "systems-designer",
+            "level-designer",
+            "economy-designer",
+            "ux-designer",
+            "live-ops-designer",
+        ],
+    ),
+    (
+        "creative-director",
+        "narrative-director",
+        &["writer", "world-builder"],
+    ),
+    ("creative-director", "art-director", &["technical-artist"]),
+    ("creative-director", "audio-director", &["sound-designer"]),
+    (
+        "technical-director",
+        "lead-programmer",
+        &[
+            "gameplay-programmer",
+            "engine-programmer",
+            "ai-programmer",
+            "network-programmer",
+            "ui-programmer",
+            "tools-programmer",
+            "bevy-specialist",
+            "prototyper",
+        ],
+    ),
+    (
+        "technical-director",
+        "qa-lead",
+        &[
+            "qa-tester",
+            "performance-analyst",
+            "accessibility-specialist",
+            "security-engineer",
+        ],
+    ),
+    (
+        "producer",
+        "release-manager",
+        &["devops-engineer", "analytics-engineer", "community-manager"],
+    ),
+    ("producer", "localization-lead", &[]),
+];
 
 /// A program, its arguments and its environment.
 type Invocation = (String, Vec<String>, Vec<(String, String)>);
@@ -982,6 +1113,30 @@ impl OrgPanel {
     fn toolbar(&mut self, ui: &mut Ui) {
         let running = self.running();
         ui.horizontal_wrapped(|ui| {
+            ui.add_enabled_ui(!running, |ui| {
+                ui.menu_button(t("Templates"), |ui| {
+                    if ui
+                        .button(t("Small studio"))
+                        .on_hover_text(t("Direction, design, code and testing in a line."))
+                        .clicked()
+                    {
+                        self.org.starter();
+                        ui.close();
+                    }
+                    if ui
+                        .button(t("Claude Code Game Studios"))
+                        .on_hover_text(t(
+                            "Every CCGS agent: directors hand the task to their department leads, leads to their specialists.",
+                        ))
+                        .clicked()
+                    {
+                        self.org.ccgs();
+                        ui.close();
+                    }
+                })
+                .response
+                .on_hover_text(t("Adds a ready-made team beside the agents already here."));
+            });
             let can_group = !self.selected.is_empty() && !running;
             if ui
                 .add_enabled(can_group, egui::Button::new(t("Group selection")))
@@ -1622,6 +1777,38 @@ mod tests {
         assert_eq!(back.groups[0].name, "Studio");
         assert!(back.nodes[0].output.is_empty());
         assert_eq!(back.next_id, org.next_id);
+    }
+
+    #[test]
+    fn the_ccgs_template_is_every_role_in_three_tiers_beside_what_is_there() {
+        let mut org = Organization::default();
+        org.starter();
+        org.ccgs();
+        let ccgs = &org.nodes[4..];
+        assert_eq!(ccgs.len(), ROLES.len(), "every role once");
+        assert!(
+            ROLES
+                .iter()
+                .all(|role| ccgs.iter().any(|node| node.role == role.name))
+        );
+        // Each agent takes the task from exactly one above it, directors
+        // from none.
+        for node in ccgs {
+            let above = org.links.iter().filter(|&&(_, to)| to == node.id).count();
+            let director = CCGS_CHART.iter().any(|&(boss, _, _)| boss == node.role);
+            assert_eq!(above, usize::from(!director), "{}", node.role);
+        }
+        let order = org.order().unwrap();
+        let place = |role: &str| {
+            let id = ccgs.iter().find(|node| node.role == role).unwrap().id;
+            order.iter().position(|&other| other == id).unwrap()
+        };
+        assert!(place("technical-director") < place("lead-programmer"));
+        assert!(place("lead-programmer") < place("bevy-specialist"));
+        // Right of the starter studio, not over it.
+        let studio_right = org.groups[0].max[0];
+        assert!(ccgs.iter().all(|node| node.pos[0] > studio_right));
+        assert_eq!(org.groups.len(), 4);
     }
 
     #[test]

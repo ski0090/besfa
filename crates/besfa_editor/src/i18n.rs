@@ -451,6 +451,17 @@ fn korean(en: &str) -> Option<&'static str> {
         }
         "Add agents from the roles on the left." => "왼쪽 역할 목록에서 에이전트를 추가하세요.",
         "Start with a studio" => "스튜디오로 시작",
+        "Templates" => "템플릿",
+        "Small studio" => "작은 스튜디오",
+        "Direction, design, code and testing in a line." => {
+            "디렉션, 기획, 코드, 테스트를 한 줄로 잇습니다."
+        }
+        "Every CCGS agent: directors hand the task to their department leads, leads to their specialists." => {
+            "CCGS의 모든 에이전트: 디렉터가 부서 리드에게, 리드가 스페셜리스트에게 작업을 넘깁니다."
+        }
+        "Adds a ready-made team beside the agents already here." => {
+            "지금 있는 에이전트 옆에 미리 짠 팀을 더합니다."
+        }
         "Remove group" => "그룹 제거",
         "Takes the results of the agents linked into it. Right-click to unlink." => {
             "연결된 에이전트들의 결과를 받습니다. 오른쪽 클릭하면 연결을 끊습니다."
