@@ -699,6 +699,11 @@ assets/prefabs/rock-pile.scn.ron",
                 if ui.small_button(label).clicked() {
                     self.sidebar_closed = !self.sidebar_closed;
                 }
+                // The sidebar's "+ New Agent" is gone while it is hidden.
+                let new = egui::Button::new("+ New").small();
+                if ui.add_enabled(!self.running(), new).clicked() {
+                    self.new_chat();
+                }
                 ui.label(RichText::new(self.chat.title()).strong());
             });
             ui.separator();
@@ -1153,6 +1158,30 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().sent.as_deref(), Some("Add a red cube."));
         assert!(harness.state().panel.prompt.is_empty());
+    }
+
+    #[test]
+    fn hides_the_history_and_still_starts_a_new_chat() {
+        let mut harness = tab(None);
+        harness.state_mut().panel.chat.messages.push(Message {
+            user: true,
+            text: "first".into(),
+        });
+        harness.run();
+        harness.get_by_label("Hide history").click();
+        harness.run();
+        assert!(harness.query_by_label("+ New Agent").is_none());
+
+        harness.get_by_label("+ New").click();
+        harness.run();
+        let panel = &harness.state().panel;
+        assert_eq!(panel.chat.title(), "New chat");
+        assert_eq!(panel.history.len(), 1);
+
+        harness.get_by_label("Show history").click();
+        harness.run();
+        assert!(harness.query_by_label("+ New Agent").is_some());
+        assert!(harness.query_by_label("first").is_some());
     }
 
     #[test]
