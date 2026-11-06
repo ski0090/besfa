@@ -200,8 +200,6 @@ pub struct Prebuild {
     /// Share of cargo's build units finished, 0 to 1; None until cargo
     /// reports it, and when nothing needs building.
     pub progress: Option<f32>,
-    /// Cargo's first `error` line, the one that names the cause.
-    error: Option<String>,
     process: Option<CliProcess>,
 }
 
@@ -222,7 +220,6 @@ impl Prebuild {
                 phase: PrebuildPhase::Running,
                 message: "Preparing Bevy…".into(),
                 progress: None,
-                error: None,
                 process: Some(process),
             },
             // The game still runs without it; it just builds Bevy itself.
@@ -230,7 +227,6 @@ impl Prebuild {
                 phase: PrebuildPhase::Failed,
                 message: format!("Could not start {program}: {error}"),
                 progress: None,
-                error: None,
                 process: None,
             },
         }
@@ -269,9 +265,6 @@ impl Prebuild {
                     if let Some(progress) = build_progress(line) {
                         self.progress = Some(progress);
                     } else if !line.is_empty() {
-                        if line.starts_with("error") && self.error.is_none() {
-                            self.error = Some(line.into());
-                        }
                         self.message = line.into();
                     }
                 }
@@ -281,13 +274,9 @@ impl Prebuild {
                     (self.phase, self.message) = if code == 0 {
                         (PrebuildPhase::Ready, "Bevy is ready".into())
                     } else {
-                        let cause = self.error.take().map(|e| format!(": {e}"));
                         (
                             PrebuildPhase::Failed,
-                            format!(
-                                "Bevy prebuild failed (exit {code}){}",
-                                cause.unwrap_or_default()
-                            ),
+                            format!("Bevy prebuild failed (exit {code})"),
                         )
                     };
                 }
@@ -304,7 +293,6 @@ impl Prebuild {
             phase,
             message: message.into(),
             progress: None,
-            error: None,
             process: None,
         }
     }
@@ -365,7 +353,7 @@ mod tests {
             &[
                 "-NoProfile",
                 "-Command",
-                r#"[Console]::Error.Write("   Compiling bevy v0.19.1`n    Building [==   ] 1/4: bevy`r    Building [====  ] 3/4: bevy`r   Compiling game v0.1.0`nerror[E0425]: cannot find value`nerror: could not compile game`n"); exit 3"#,
+                r#"[Console]::Error.Write("   Compiling bevy v0.19.1`n    Building [==   ] 1/4: bevy`r    Building [====  ] 3/4: bevy`r   Compiling game v0.1.0`n"); exit 3"#,
             ],
         );
         let mut statuses = Vec::new();
@@ -375,12 +363,7 @@ mod tests {
             ("Compiling bevy v0.19.1", Some(0.25)),
             ("Compiling bevy v0.19.1", Some(0.75)),
             ("Compiling game v0.1.0", Some(0.75)),
-            ("error[E0425]: cannot find value", Some(0.75)),
-            ("error: could not compile game", Some(0.75)),
-            (
-                "Bevy prebuild failed (exit 3): error[E0425]: cannot find value",
-                None,
-            ),
+            ("Bevy prebuild failed (exit 3)", None),
         ];
         let statuses: Vec<_> = statuses.iter().map(|(m, p)| (m.as_str(), *p)).collect();
         // Polling may merge updates that arrive together; none may be wrong.
