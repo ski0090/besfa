@@ -195,7 +195,11 @@ pub fn invocation(
         args.extend([flag.into(), folder.display().to_string()]);
     }
     if provider == Provider::OpenAi {
-        for file in files.iter().filter(|file| is_image(file)) {
+        // Codex splits --image at commas; such a file goes by path alone.
+        let images = files
+            .iter()
+            .filter(|file| is_image(file) && !file.to_string_lossy().contains(','));
+        for file in images {
             args.push(format!("--image={}", file.display()));
         }
     }
@@ -1024,6 +1028,7 @@ mod tests {
         let files = [
             PathBuf::from(r"C:\My Art\ref.PNG"),
             PathBuf::from(r"C:\My Art\notes.txt"),
+            PathBuf::from(r"C:\My Art\a,b.png"),
         ];
         let (_, args, _) = invocation(Provider::Claude, &Route::Cli, "", &files);
         assert_eq!(args[3..], ["--add-dir", r"C:\My Art"]);
