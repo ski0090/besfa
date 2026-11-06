@@ -6,6 +6,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::prune;
+
 #[derive(Debug)]
 pub(crate) struct CreateError {
     pub(crate) exit_code: u8,
@@ -70,7 +72,38 @@ pub(crate) fn prebuild() -> Result<(), CreateError> {
             "Cargo failed to build the prebuild project.",
         ));
     }
+    prune_shared_target(&shared);
     Ok(())
+}
+
+/// Removes the units of dependency versions neither the prebuild nor a
+/// recent project (the editor's list) pins any more: an old Bevy, old
+/// plugin commits. A game outside the list rebuilds them when opened.
+fn prune_shared_target(shared: &Path) {
+    let mut locks = vec![shared.join("prebuild").join("Cargo.lock")];
+    let recent = env::var_os("APPDATA")
+        .map(|dir| {
+            PathBuf::from(dir)
+                .join("Besfa")
+                .join("recent_projects.json")
+        })
+        .and_then(|file| fs::read_to_string(file).ok())
+        .and_then(|text| serde_json::from_str::<Vec<PathBuf>>(&text).ok())
+        .unwrap_or_default();
+    locks.extend(recent.iter().map(|project| project.join("Cargo.lock")));
+    let locked = prune::Locked::from_locks(locks.iter().map(PathBuf::as_path));
+    match prune::prune(&shared.join("target"), &locked) {
+        Ok(pruned) if pruned.units > 0 => eprintln!(
+            "Removed {} stale build units ({:.0} MB).",
+            pruned.units,
+            pruned.bytes as f64 / 1e6
+        ),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            eprintln!("Another build holds the shared target; stale builds stay for now.");
+        }
+        Err(error) => eprintln!("Could not prune the shared target: {error}"),
+    }
 }
 
 /// Cargo's manifest header for the prebuild game; the template dependencies
