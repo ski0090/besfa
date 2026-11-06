@@ -122,9 +122,16 @@ impl CliProcess {
         }
     }
 
-    /// Closes the process's stdin, for programs that read it to the end.
-    pub fn end_input(&mut self) {
-        self.stdin = None;
+    /// Writes `input` to the process's stdin and then closes it, for
+    /// programs that read it to the end. A thread does the writing: input
+    /// bigger than the pipe's buffer would otherwise hold the caller until
+    /// the program starts reading.
+    pub fn send_all(&mut self, input: String) {
+        if let Some(mut stdin) = self.stdin.take() {
+            thread::spawn(move || {
+                let _ = stdin.write_all(format!("{input}\n").as_bytes());
+            });
+        }
     }
 
     /// Stops the process and everything it launched. Killing only cargo
@@ -386,6 +393,24 @@ mod tests {
                 .message
                 .starts_with("Could not start besfa-missing-cli")
         );
+    }
+
+    #[test]
+    fn sends_input_bigger_than_the_pipe_without_waiting() {
+        let ctx = egui::Context::default();
+        let mut process = CliProcess::start(
+            Path::new("."),
+            "powershell",
+            &["-NoProfile", "-Command", "[Console]::In.ReadToEnd().Length"],
+            &[],
+            &ctx,
+        )
+        .unwrap();
+        let sent = Instant::now();
+        process.send_all("x".repeat(100_000));
+        assert!(sent.elapsed() < Duration::from_millis(500));
+        let line = process.output.recv_timeout(Duration::from_secs(20));
+        assert!(matches!(line, Ok(Output::Line(length)) if length.trim() == "100001"));
     }
 
     #[test]

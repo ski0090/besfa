@@ -605,8 +605,7 @@ assets/prefabs/rock-pile.scn.ron",
             .collect();
         match CliProcess::start(directory, &program, &args, &env, ctx) {
             Ok(mut run) => {
-                run.send(&input);
-                run.end_input();
+                run.send_all(input);
                 self.watched = Some((watch.clone(), modified(&watch)));
                 self.run = Some(run);
             }
