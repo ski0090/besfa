@@ -6,7 +6,10 @@
 use besfa_protocol::{ScatterBrush, ScatterModel};
 use eframe::egui::{self, DragValue, RichText, Slider, Ui};
 
-use crate::panels::{MUTED, can_place, section};
+use crate::{
+    i18n::t,
+    panels::{MUTED, can_place, section},
+};
 
 pub struct ScatterTools {
     /// Painting with the left button instead of selecting.
@@ -63,13 +66,13 @@ impl ScatterTools {
             ui.set_min_width(ui.available_width());
             if self.models.is_empty() {
                 ui.label(
-                    RichText::new("Drag prefabs or models here to scatter them.").color(MUTED),
+                    RichText::new(t("Drag prefabs or models here to scatter them.")).color(MUTED),
                 );
             }
             let mut gone = None;
             for (index, model) in self.models.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui.small_button("🗙").on_hover_text("Remove").clicked() {
+                    if ui.small_button("🗙").on_hover_text(t("Remove")).clicked() {
                         gone = Some(index);
                     }
                     ui.add(
@@ -77,7 +80,7 @@ impl ScatterTools {
                             .range(0.0..=10.0)
                             .speed(0.05),
                     )
-                    .on_hover_text("How often it comes up against the others");
+                    .on_hover_text(t("How often it comes up against the others"));
                     let name = model.path.rsplit('/').next().unwrap_or(&model.path);
                     ui.label(name).on_hover_text(model.path.as_str());
                 });
@@ -100,30 +103,30 @@ impl ScatterTools {
             Slider::new(&mut self.size, 0.5..=50.0)
                 .logarithmic(true)
                 .suffix(" m")
-                .text("Brush size"),
+                .text(t("Brush size")),
         );
         ui.add(
             Slider::new(&mut self.density, 1.0..=200.0)
                 .logarithmic(true)
-                .text("Density"),
+                .text(t("Density")),
         )
-        .on_hover_text("Things per 100 m² under the brush");
+        .on_hover_text(t("Things per 100 m² under the brush"));
         ui.add(
             Slider::new(&mut self.spacing, 0.0..=20.0)
                 .suffix(" m")
-                .text("Spacing"),
+                .text(t("Spacing")),
         );
         ui.horizontal(|ui| {
             let [small, big] = &mut self.scale;
             ui.add(DragValue::new(small).range(0.05..=*big).speed(0.01));
-            ui.label("to");
+            ui.label(t("to"));
             ui.add(DragValue::new(big).range(*small..=20.0).speed(0.01));
-            ui.label("Scale");
+            ui.label(t("Scale"));
         });
-        ui.checkbox(&mut self.rotate, "Random rotation");
-        ui.checkbox(&mut self.align, "Align to surface");
+        ui.checkbox(&mut self.rotate, t("Random rotation"));
+        ui.checkbox(&mut self.align, t("Align to surface"));
         if self.on {
-            ui.label(RichText::new("Paint to place; hold Shift to erase.").color(MUTED));
+            ui.label(RichText::new(t("Paint to place; hold Shift to erase.")).color(MUTED));
         }
     }
 }

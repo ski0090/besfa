@@ -10,6 +10,7 @@ use eframe::egui::{self, Id, Label, RichText, ScrollArea, TextEdit, Ui};
 use serde_json::{Value, json};
 
 use crate::{
+    i18n::t,
     panels::{MUTED, TEXT, panel_header, section, tag},
     terrain::{TERRAIN, TerrainTools},
 };
@@ -82,9 +83,9 @@ impl Inspector {
     /// Switches between what there is to edit and every detail.
     pub fn details_button(&mut self, ui: &mut Ui) {
         let (icon, tip) = if self.details {
-            ("⏶", "Hide details")
+            ("⏶", t("Hide details"))
         } else {
-            ("⏷", "Show details")
+            ("⏷", t("Show details"))
         };
         if ui.small_button(icon).on_hover_text(tip).clicked() {
             self.details = !self.details;
@@ -102,8 +103,8 @@ impl Inspector {
                 .map(|value| Action::Set(NAME.into(), value)),
             None => {
                 let text = match (selected, entity) {
-                    (None, _) => "Select an entity in the Hierarchy".into(),
-                    (Some(id), None) => format!("Entity {id} is gone"),
+                    (None, _) => t("Select an entity in the Hierarchy").into(),
+                    (Some(id), None) => t("Entity {} is gone").replace("{}", &id.to_string()),
                     (_, Some(entity)) => entity.label(),
                 };
                 let color = if entity.is_some() { TEXT } else { MUTED };
@@ -159,7 +160,7 @@ impl Inspector {
                     tile(ui, component);
                 }
             }
-            if entity.is_some() && ui.button("➕ Add component").clicked() {
+            if entity.is_some() && ui.button(t("➕ Add component")).clicked() {
                 self.adding = Some(String::new());
             }
         }
@@ -212,10 +213,10 @@ impl Inspector {
         let mut cancel = false;
         let modal = egui::Modal::new(Id::new("add_component")).show(ctx, |ui| {
             ui.set_width(420.0);
-            ui.heading("Add component");
+            ui.heading(t("Add component"));
             let search = ui.add(
                 TextEdit::singleline(query)
-                    .hint_text("Search components")
+                    .hint_text(t("Search components"))
                     .desired_width(f32::INFINITY),
             );
             if !search.has_focus() && ui.memory(|m| m.focused().is_none()) {
@@ -247,7 +248,7 @@ impl Inspector {
                         }
                     }
                 });
-            cancel = ui.button("Cancel").clicked();
+            cancel = ui.button(t("Cancel")).clicked();
         });
         if picked.is_some() || cancel || modal.should_close() {
             self.adding = None;
@@ -286,10 +287,11 @@ fn placement(
             &match placed.and_then(|p| p.asset.as_deref()) {
                 // The game keeps changes to a model's parts on the model.
                 Some(asset) if asset.ends_with(".glb") || asset.ends_with(".gltf") => {
-                    format!("Part of {asset}; changes to it are saved on the placed model.")
+                    t("Part of {}; changes to it are saved on the placed model.")
+                        .replace("{}", asset)
                 }
-                Some(asset) => format!("Part of {asset}; Save scene skips it."),
-                None => "Spawned by the game while it runs; Save scene skips it.".into(),
+                Some(asset) => t("Part of {}; Save scene skips it.").replace("{}", asset),
+                None => t("Spawned by the game while it runs; Save scene skips it.").into(),
             },
         );
     }
@@ -299,7 +301,7 @@ fn placement(
         if can_apply
             && asset.ends_with(".scn.ron")
             && asset != "scenes/main.scn.ron"
-            && ui.button("⮉ Apply to prefab").clicked()
+            && ui.button(t("⮉ Apply to prefab")).clicked()
         {
             *action = Some(Action::ApplyPrefab(placed.id));
         }
@@ -353,7 +355,7 @@ fn component_tile(
         ui.label(RichText::new(&component.name).strong().color(color));
         if details {
             if let Some(required_by) = &component.required_by {
-                tag(ui, &format!("required by {required_by}"));
+                tag(ui, &t("required by {}").replace("{}", required_by));
             }
             if !component.saved {
                 tag(ui, "computed");
@@ -369,7 +371,7 @@ fn component_tile(
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("🗙")
-                    .on_hover_text("Remove component")
+                    .on_hover_text(t("Remove component"))
                     .clicked()
                 {
                     action = Some(Action::Remove(component.path.clone()));
@@ -465,7 +467,7 @@ impl Fields<'_> {
                     read_only(ui, "None", MUTED);
                     if ui
                         .small_button("➕")
-                        .on_hover_text("Give it a value")
+                        .on_hover_text(t("Give it a value"))
                         .clicked()
                     {
                         self.change = Some((path.clone(), start.clone()));
@@ -474,7 +476,10 @@ impl Fields<'_> {
             }
             let mut clear = false;
             row(ui, label, |ui| {
-                clear = ui.small_button("🗙").on_hover_text("Make it None").clicked();
+                clear = ui
+                    .small_button("🗙")
+                    .on_hover_text(t("Make it None"))
+                    .clicked();
             });
             ui.indent((label, path.len()), |ui| self.content(ui, node, path, None));
             if clear {
@@ -542,7 +547,12 @@ impl Fields<'_> {
         let fixed = shapes.fixed.contains(&shape(path, shapes));
         let mut changed = None;
         row(ui, Some(label), |ui| {
-            if !fixed && ui.small_button("➕").on_hover_text("Add an item").clicked() {
+            if !fixed
+                && ui
+                    .small_button("➕")
+                    .on_hover_text(t("Add an item"))
+                    .clicked()
+            {
                 let mut grown = items.to_vec();
                 // A copy of the last, or what the type starts one as.
                 let item = items
@@ -564,7 +574,7 @@ impl Fields<'_> {
                     remove = !fixed
                         && ui
                             .small_button("🗙")
-                            .on_hover_text("Remove this item")
+                            .on_hover_text(t("Remove this item"))
                             .clicked();
                 };
                 match item {
@@ -622,13 +632,13 @@ impl Fields<'_> {
             let mut key: String = ui.data_mut(|data| data.get_temp(id)).unwrap_or_default();
             ui.add(
                 egui::TextEdit::singleline(&mut key)
-                    .hint_text("key")
+                    .hint_text(t("key"))
                     .desired_width(80.0),
             );
             let fresh = !key.is_empty() && !map.contains_key(&key);
             if ui
                 .add_enabled(fresh, egui::Button::new("➕").small())
-                .on_hover_text("Add an entry by this key")
+                .on_hover_text(t("Add an entry by this key"))
                 .clicked()
             {
                 let mut grown = map.clone();
@@ -644,7 +654,7 @@ impl Fields<'_> {
                 let mut remove_button = |ui: &mut Ui| {
                     remove = ui
                         .small_button("🗙")
-                        .on_hover_text("Remove this entry")
+                        .on_hover_text(t("Remove this entry"))
                         .clicked();
                 };
                 match value {

@@ -30,6 +30,7 @@ use serde_json::Value;
 use crate::{
     agent::{self, AgentPanel, AgentSettings, Agents, Route},
     animation,
+    i18n::{self, t},
     inspector::{Action, Inspector, TRANSFORM},
     organization::{ORGANIZATION_FILE, OrgPanel},
     panels::{
@@ -347,8 +348,8 @@ impl Editor {
             .resizable(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Log, "Log");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Assets, "Assets");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Log, t("Log"));
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Assets, t("Assets"));
                 });
                 ui.separator();
                 match self.bottom_tab {
@@ -385,9 +386,9 @@ impl Editor {
                     None => {
                         ui.horizontal(|ui| {
                             for (tab, label) in [
-                                (RightTab::Inspector, "Inspector"),
-                                (RightTab::Scatter, "Scatter"),
-                                (RightTab::Animation, "Animation"),
+                                (RightTab::Inspector, t("Inspector")),
+                                (RightTab::Scatter, t("Scatter")),
+                                (RightTab::Animation, t("Animation")),
                             ] {
                                 ui.selectable_value(&mut self.right_tab, tab, label);
                             }
@@ -1236,7 +1237,7 @@ impl Editor {
         let mut show = None;
         let mut close = false;
         ui.horizontal(|ui| {
-            if ui.selectable_label(!self.previewing, "Scene").clicked() && self.previewing {
+            if ui.selectable_label(!self.previewing, t("Scene")).clicked() && self.previewing {
                 show = Some(false);
             }
             let tab = Button::selectable(self.previewing, name);
@@ -1250,7 +1251,7 @@ impl Editor {
             }
             close = ui
                 .small_button("🗙")
-                .on_hover_text("Close the preview")
+                .on_hover_text(t("Close the preview"))
                 .clicked();
         });
         if close {
@@ -1386,42 +1387,45 @@ impl Editor {
     fn menu_bar(&mut self, ui: &mut Ui) {
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                if ui.button("Agent").clicked() {
+                if ui.button(t("Agent")).clicked() {
                     self.agent_chat_open = true;
                 }
-                ui.menu_button("File", |ui| {
+                ui.menu_button(t("File"), |ui| {
                     // Only the edit session's scene is worth keeping.
                     let can_save = self.game.is_some() && !self.playing;
                     if ui
-                        .add_enabled(can_save, Button::new("Save scene").shortcut_text("Ctrl+S"))
+                        .add_enabled(
+                            can_save,
+                            Button::new(t("Save scene")).shortcut_text("Ctrl+S"),
+                        )
                         .clicked()
                     {
                         self.save_after_ui = true;
                     }
-                    if ui.button("Agent Settings...").clicked() {
+                    if ui.button(t("Agent Settings...")).clicked() {
                         self.agent_open = true;
                         self.agents.check(ui.ctx());
                     }
-                    if ui.button("Back to Project Hub").clicked() {
+                    if ui.button(t("Back to Project Hub")).clicked() {
                         self.request_leave();
                     }
                 });
-                ui.menu_button("Edit", |ui| {
-                    let undo = Button::new("Undo").shortcut_text("Ctrl+Z");
+                ui.menu_button(t("Edit"), |ui| {
+                    let undo = Button::new(t("Undo")).shortcut_text("Ctrl+Z");
                     if ui
                         .add_enabled(self.history.can_undo() && !self.playing, undo)
                         .clicked()
                     {
                         self.replay(true);
                     }
-                    let redo = Button::new("Redo").shortcut_text("Ctrl+Y");
+                    let redo = Button::new(t("Redo")).shortcut_text("Ctrl+Y");
                     if ui
                         .add_enabled(self.history.can_redo() && !self.playing, redo)
                         .clicked()
                     {
                         self.replay(false);
                     }
-                    let drop = Button::new("Drop to surface").shortcut_text("End");
+                    let drop = Button::new(t("Drop to surface")).shortcut_text("End");
                     let can_drop = self.scene.selected.is_some()
                         && !self.playing
                         && self.protocol >= Some(DROP_PROTOCOL);
@@ -1429,18 +1433,21 @@ impl Editor {
                         self.drop_to_surface();
                     }
                 });
-                ui.menu_button("Window", |ui| {
-                    if ui.button("Animation State Machine").clicked() {
+                ui.menu_button(t("Window"), |ui| {
+                    if ui.button(t("Animation State Machine")).clicked() {
                         self.right_tab = RightTab::Animation;
                         if self.previewing {
                             self.show_preview(false);
                         }
                     }
-                    let assets = Button::new("Bevy Assets").shortcut_text("Ctrl+9");
+                    let assets = Button::new(t("Bevy Assets")).shortcut_text("Ctrl+9");
                     if ui.add(assets).on_hover_text(project::BEVY_ASSETS).clicked() {
                         project::open_url(project::BEVY_ASSETS);
                     }
                 });
+                if let Some(error) = i18n::settings_menu(ui) {
+                    self.log(format!("Could not save the settings: {error}"));
+                }
             });
         });
     }
@@ -1449,10 +1456,14 @@ impl Editor {
         let busy = self.starting || prebuild.running();
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                let label = if self.playing { "⏹ Stop" } else { "▶ Play" };
+                let label = if self.playing {
+                    t("⏹ Stop")
+                } else {
+                    t("▶ Play")
+                };
                 let mut button = ui.add_enabled(!busy, Button::new(label));
                 if self.playing {
-                    button = button.on_hover_text("Ctrl+click restarts the game");
+                    button = button.on_hover_text(t("Ctrl+click restarts the game"));
                 }
                 if button.clicked() {
                     if self.playing {
@@ -1468,7 +1479,7 @@ impl Editor {
                     let button = Button::selectable(self.tool == tool, icon);
                     if ui
                         .add_enabled(!self.playing && !self.previewing, button)
-                        .on_hover_text(tooltip)
+                        .on_hover_text(t(tooltip))
                         .clicked()
                     {
                         self.set_tool(tool);
@@ -1478,7 +1489,7 @@ impl Editor {
                 let scatter = Button::selectable(self.scatter.on, "🌲");
                 if ui
                     .add_enabled(self.can_scatter(), scatter)
-                    .on_hover_text("Scatter")
+                    .on_hover_text(t("Scatter"))
                     .clicked()
                 {
                     self.scatter.on = !self.scatter.on;
@@ -1500,9 +1511,9 @@ impl Editor {
     /// clients joined to it.
     fn play_as(&mut self, ui: &mut Ui, enabled: bool) {
         let name = |clients: usize| match clients {
-            0 => "Standalone".to_owned(),
-            1 => "Server + 1 client".to_owned(),
-            n => format!("Server + {n} clients"),
+            0 => t("Standalone").to_owned(),
+            1 => t("Server + 1 client").to_owned(),
+            n => t("Server + {} clients").replace("{}", &n.to_string()),
         };
         ui.add_enabled_ui(enabled, |ui| {
             egui::ComboBox::from_id_salt("play_as")
@@ -1527,12 +1538,12 @@ impl Editor {
         let snap = Button::selectable(self.snapping.on, "#");
         if ui
             .add_enabled(enabled, snap)
-            .on_hover_text("Snap (hold Ctrl)")
+            .on_hover_text(t("Snap (hold Ctrl)"))
             .clicked()
         {
             self.snapping.on = !self.snapping.on;
         }
-        ui.add_enabled(enabled, egui::Label::new("Grid"));
+        ui.add_enabled(enabled, egui::Label::new(t("Grid")));
         let grid = egui::DragValue::new(&mut self.snapping.grid)
             .range(0.01..=100.0)
             .speed(0.05)
@@ -1562,15 +1573,23 @@ impl Editor {
             (Some(project), Some(latest)) if project != latest
         );
         let (icon, color, state) = if differs || warning.is_some() {
-            ("⚠", WARNING, "differs from")
+            (
+                "⚠",
+                WARNING,
+                "The plugin differs from the Bevy prebuild. Click to update it to the latest commit.",
+            )
         } else {
-            ("✔", GOOD, "matches")
+            (
+                "✔",
+                GOOD,
+                "The plugin matches the Bevy prebuild. Click to update it to the latest commit.",
+            )
         };
         let tooltip = match warning {
-            Some(warning) => format!("{warning} Click to update it to the latest commit."),
-            None => format!(
-                "The plugin {state} the Bevy prebuild. Click to update it to the latest commit."
-            ),
+            Some(warning) => {
+                t("{} Click to update it to the latest commit.").replace("{}", &warning)
+            }
+            None => t(state).to_owned(),
         };
         let button = Button::new(RichText::new(icon).color(color)).frame(false);
         if ui
@@ -1590,7 +1609,7 @@ impl Editor {
         let Some((texture, size)) =
             shown.map(|v| (v.texture_id, egui::vec2(v.width as f32, v.height as f32)))
         else {
-            ui.centered_and_justified(|ui| ui.label(RichText::new("Viewport").color(MUTED)));
+            ui.centered_and_justified(|ui| ui.label(RichText::new(t("Viewport")).color(MUTED)));
             return;
         };
         let scale = (panel.width() / size.x).min(panel.height() / size.y);
@@ -1605,13 +1624,19 @@ impl Editor {
         }
         if !self.playing {
             let hint = if self.previewing {
-                "Drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  F fit"
+                t("Drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  F fit")
             } else if self.scatter_brush.is_some() {
-                "Paint to place; hold Shift to erase.  ·  Right-drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  Esc stop"
+                t(
+                    "Paint to place; hold Shift to erase.  ·  Right-drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  Esc stop",
+                )
             } else if self.brush.is_some() {
-                "Paint to sculpt; hold Shift to invert.  ·  Right-drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  Esc stop"
+                t(
+                    "Paint to sculpt; hold Shift to invert.  ·  Right-drag orbit  ·  Middle-drag pan  ·  Scroll zoom  ·  Esc stop",
+                )
             } else {
-                "Click select  ·  Right-drag orbit  ·  Right-hold + WASD/QE fly  ·  Middle-drag pan  ·  Scroll zoom  ·  F focus"
+                t(
+                    "Click select  ·  Right-drag orbit  ·  Right-hold + WASD/QE fly  ·  Middle-drag pan  ·  Scroll zoom  ·  F focus",
+                )
             };
             ui.painter().text(
                 rect.left_bottom() + egui::vec2(8.0, -8.0),
@@ -1705,13 +1730,13 @@ impl Editor {
         ctx.show_viewport_immediate(id, builder, |ui, _| {
             egui::Panel::top("agent_view").show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.agent_view, AgentView::Chat, "Chat");
+                    ui.selectable_value(&mut self.agent_view, AgentView::Chat, t("Chat"));
                     ui.selectable_value(
                         &mut self.agent_view,
                         AgentView::Organization,
-                        "Organization",
+                        t("Organization"),
                     )
-                    .on_hover_text("Agents with roles that work on a task together.");
+                    .on_hover_text(t("Agents with roles that work on a task together."));
                 });
             });
             match self.agent_view {
@@ -1738,7 +1763,7 @@ impl Editor {
             .or(self
                 .organization
                 .running()
-                .then_some("The organization is working on a task."));
+                .then_some(t("The organization is working on a task.")));
         let prompt = self
             .agent_panel
             .ui(ui, &mut self.agent, &self.agents, blocked);
@@ -1762,7 +1787,7 @@ impl Editor {
     fn agent_blocked(&self) -> Option<&'static str> {
         self.scene
             .dirty
-            .then_some("Save the scene first. The agent may change its file.")
+            .then_some(t("Save the scene first. The agent may change its file."))
     }
 
     fn organization_tab(&mut self, ui: &mut Ui) {
@@ -1770,7 +1795,7 @@ impl Editor {
         let blocked = self.agent_blocked().or(self
             .agent_panel
             .running()
-            .then_some("The chat's agent is still working."));
+            .then_some(t("The chat's agent is still working.")));
         let (task, error) = self.organization.ui(ui, blocked);
         if let Some(error) = error {
             self.log(format!("Could not save the organization: {error}"));
@@ -1835,8 +1860,8 @@ impl Editor {
                 };
                 let modal = egui::Modal::new(egui::Id::new("prefab_name")).show(ctx, |ui| {
                     ui.set_width(360.0);
-                    ui.heading("Save as prefab");
-                    ui.label("Prefab name");
+                    ui.heading(t("Save as prefab"));
+                    ui.label(t("Prefab name"));
                     let field =
                         ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
                     if ui.memory(|memory| memory.focused().is_none()) {
@@ -1845,20 +1870,20 @@ impl Editor {
                     submit = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                     if valid {
                         ui.label(
-                            RichText::new("Saved to assets/prefabs")
+                            RichText::new(t("Saved to assets/prefabs"))
                                 .small()
                                 .color(MUTED),
                         );
                     } else {
                         ui.label(
-                            RichText::new("Letters, digits, spaces, - and _ only")
+                            RichText::new(t("Letters, digits, spaces, - and _ only"))
                                 .small()
                                 .color(panels::ERROR),
                         );
                     }
                     ui.horizontal(|ui| {
-                        cancel = ui.button("Cancel").clicked();
-                        submit |= ui.button("Save").clicked();
+                        cancel = ui.button(t("Cancel")).clicked();
+                        submit |= ui.button(t("Save")).clicked();
                     });
                 });
                 if submit && valid {
@@ -1878,17 +1903,19 @@ impl Editor {
                 let mut choice = None;
                 let modal = egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
                     ui.set_width(380.0);
-                    ui.heading("Save changes to the scene?");
-                    ui.label("The scene has changes that are not saved to scenes/main.scn.ron.");
+                    ui.heading(t("Save changes to the scene?"));
+                    ui.label(t(
+                        "The scene has changes that are not saved to scenes/main.scn.ron.",
+                    ));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t("Cancel")).clicked() {
                             choice = Some("cancel");
                         }
-                        if ui.button("Discard").clicked() {
+                        if ui.button(t("Discard")).clicked() {
                             choice = Some("discard");
                         }
-                        if can_save && ui.button("Save").clicked() {
+                        if can_save && ui.button(t("Save")).clicked() {
                             choice = Some("save");
                         }
                     });

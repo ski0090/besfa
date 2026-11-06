@@ -10,6 +10,7 @@ use std::{
 use eframe::egui::{self, Button, Frame, Key, Label, RichText, ScrollArea, TextEdit, Ui};
 
 use crate::{
+    i18n::{self, t},
     panels::{ACCENT, ERROR, MUTED, TEXT, prebuild_status},
     process::Prebuild,
     project::{self, Project, RecentProjects},
@@ -86,11 +87,15 @@ impl Hub {
                 ui.label(RichText::new("Besfa Editor").color(MUTED));
                 ui.add_space(24.0);
                 if ui
-                    .link("Bevy Assets")
+                    .link(t("Bevy Assets"))
                     .on_hover_text(project::BEVY_ASSETS)
                     .clicked()
                 {
                     project::open_url(project::BEVY_ASSETS);
+                }
+                ui.add_space(24.0);
+                if let Some(error) = i18n::settings_menu(ui) {
+                    self.show_message(t("Could not save the settings: {}").replace("{}", &error));
                 }
                 ui.add_space(24.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -134,28 +139,30 @@ impl Hub {
     fn content(&self, ui: &mut Ui, width: f32) -> Option<HubAction> {
         let mut action = None;
         ui.label(
-            RichText::new("Start creating")
+            RichText::new(t("Start creating"))
                 .size(36.0)
                 .color(egui::Color32::WHITE),
         );
         ui.add_space(10.0);
         ui.label(
-            RichText::new("Create a new Besfa project or open one you already have.")
-                .size(16.0)
-                .color(TEXT),
+            RichText::new(t(
+                "Create a new Besfa project or open one you already have.",
+            ))
+            .size(16.0)
+            .color(TEXT),
         );
         ui.add_space(32.0);
         let create = (
             "➕",
-            "Create project",
-            "Start a new binary Rust game project.",
-            "New project",
+            t("Create project"),
+            t("Start a new binary Rust game project."),
+            t("New project"),
         );
         let open = (
             "🗁",
-            "Open project",
-            "Open an existing Besfa project folder.",
-            "Open folder",
+            t("Open project"),
+            t("Open an existing Besfa project folder."),
+            t("Open folder"),
         );
         let narrow = width < 680.0;
         let card_width = if narrow { width } else { (width - 16.0) / 2.0 };
@@ -177,7 +184,7 @@ impl Hub {
         }
         ui.add_space(48.0);
         ui.label(
-            RichText::new("Recent projects")
+            RichText::new(t("Recent projects"))
                 .size(22.0)
                 .color(egui::Color32::WHITE),
         );
@@ -191,8 +198,10 @@ impl Hub {
                     ui.set_width(ui.available_width());
                     ui.vertical_centered(|ui| {
                         ui.label(RichText::new("🗀").size(28.0).color(MUTED));
-                        ui.label("No recent projects");
-                        ui.label(RichText::new("Projects you open will appear here.").color(MUTED));
+                        ui.label(t("No recent projects"));
+                        ui.label(
+                            RichText::new(t("Projects you open will appear here.")).color(MUTED),
+                        );
                     });
                 });
             return action;
@@ -206,10 +215,14 @@ impl Hub {
                 for project in &self.recent {
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("🗑").on_hover_text("Delete project").clicked() {
+                            if ui.button("🗑").on_hover_text(t("Delete project")).clicked() {
                                 action = Some(HubAction::Delete(project.clone()));
                             }
-                            if ui.button("🗁").on_hover_text("Show in Explorer").clicked() {
+                            if ui
+                                .button("🗁")
+                                .on_hover_text(t("Show in Explorer"))
+                                .clicked()
+                            {
                                 action = Some(HubAction::Reveal(project.clone()));
                             }
                             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -238,12 +251,12 @@ impl Hub {
         match action {
             HubAction::Create => self.create = Some(CreateDialog::default()),
             HubAction::OpenFolder => {
-                let directory = project::pick_folder("Open")?;
+                let directory = project::pick_folder(t("Open"))?;
                 let project = Project::new(&directory);
                 if project.exists() {
                     return Some(self.open(project, store));
                 }
-                self.show_message(format!("'{directory}' has no Cargo.toml."));
+                self.show_message(t("'{}' has no Cargo.toml.").replace("{}", &directory));
             }
             HubAction::OpenRecent(project) => {
                 if project.exists() {
@@ -255,7 +268,7 @@ impl Hub {
                 if Path::new(&project.path).exists() {
                     project::reveal(&project.path);
                 } else {
-                    self.show_message(format!("'{}' no longer exists.", project.path));
+                    self.show_message(t("'{}' no longer exists.").replace("{}", &project.path));
                 }
             }
             // Never delete a folder that is not (or no longer) a Cargo project.
@@ -272,10 +285,9 @@ impl Hub {
 
     fn forget(&mut self, project: Project, store: &RecentProjects) {
         self.recent = store.remove(&project);
-        self.show_message(format!(
-            "'{}' is no longer a Cargo project and was removed.",
-            project.path
-        ));
+        self.show_message(
+            t("'{}' is no longer a Cargo project and was removed.").replace("{}", &project.path),
+        );
     }
 
     fn create_dialog(&mut self, ctx: &egui::Context, store: &RecentProjects) -> Option<Project> {
@@ -299,14 +311,17 @@ impl Hub {
         let (mut create, mut cancel) = (false, false);
         let modal = egui::Modal::new(egui::Id::new("create_project")).show(ctx, |ui| {
             ui.set_width(440.0);
-            ui.heading("Create project");
-            ui.label("Enter the folder path for the new Cargo project.");
+            ui.heading(t("Create project"));
+            ui.label(t("Enter the folder path for the new Cargo project."));
             ui.add_space(8.0);
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new("Project directory").small().color(MUTED));
+                ui.label(RichText::new(t("Project directory")).small().color(MUTED));
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!creating, Button::new("🗁 Browse")).clicked() {
+                    if ui
+                        .add_enabled(!creating, Button::new(t("🗁 Browse")))
+                        .clicked()
+                    {
                         browse(dialog);
                     }
                     let field = TextEdit::singleline(&mut dialog.directory)
@@ -324,7 +339,7 @@ impl Hub {
                 ui.label(RichText::new("Claude Code").small().color(MUTED));
                 ui.horizontal(|ui| {
                     let ccgs =
-                        egui::Checkbox::new(&mut dialog.ccgs, "Add Claude Code Game Studios");
+                        egui::Checkbox::new(&mut dialog.ccgs, t("Add Claude Code Game Studios"));
                     ui.add_enabled(!creating, ccgs);
                     let icon = egui::Image::new(&*github)
                         .fit_to_exact_size(egui::vec2(14.0, 14.0))
@@ -353,21 +368,23 @@ impl Hub {
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if creating {
-                        ui.label("Creating…");
+                        ui.label(t("Creating…"));
                         ui.add(egui::Spinner::new());
                     } else {
                         create |= ui
-                            .button(RichText::new("➕ Create").color(ACCENT))
+                            .button(RichText::new(t("➕ Create")).color(ACCENT))
                             .clicked();
                     }
-                    cancel = ui.add_enabled(!creating, Button::new("Cancel")).clicked();
+                    cancel = ui
+                        .add_enabled(!creating, Button::new(t("Cancel")))
+                        .clicked();
                 });
             });
         });
         if create && !creating {
             let directory = dialog.directory.trim().to_owned();
             if directory.is_empty() {
-                dialog.error = Some("Enter a directory for the new project.".into());
+                dialog.error = Some(t("Enter a directory for the new project.").into());
             } else {
                 dialog.error = None;
                 let ccgs = dialog.ccgs;
@@ -388,7 +405,7 @@ impl Hub {
             if deleted {
                 self.recent = store.remove(&project);
             } else {
-                self.show_message(format!("Could not delete '{}'.", project.path));
+                self.show_message(t("Could not delete '{}'.").replace("{}", &project.path));
             }
         }
         let Some(project) = &self.confirm_delete else {
@@ -397,15 +414,12 @@ impl Hub {
         let (mut delete, mut cancel) = (false, false);
         let modal = egui::Modal::new(egui::Id::new("delete_project")).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.heading(format!("Delete '{}'?", project.name()));
-            ui.label(format!(
-                "'{}' will be moved to the Recycle Bin.",
-                project.path
-            ));
+            ui.heading(t("Delete '{}'?").replace("{}", project.name()));
+            ui.label(t("'{}' will be moved to the Recycle Bin.").replace("{}", &project.path));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                cancel = ui.button("Cancel").clicked();
-                delete = ui.button(RichText::new("Delete").color(ERROR)).clicked();
+                cancel = ui.button(t("Cancel")).clicked();
+                delete = ui.button(RichText::new(t("Delete")).color(ERROR)).clicked();
             });
         });
         if delete {
@@ -443,7 +457,7 @@ fn github_icon(ctx: &egui::Context) -> egui::TextureHandle {
 /// The CLI needs a folder that does not exist yet, so an editable name is
 /// appended to the picked location.
 fn browse(dialog: &mut CreateDialog) {
-    if let Some(parent) = project::pick_folder("Select location") {
+    if let Some(parent) = project::pick_folder(t("Select location")) {
         dialog.directory = Path::new(&parent).join("new_project").display().to_string();
         dialog.error = None;
     }

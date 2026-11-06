@@ -8,6 +8,7 @@ mod agent;
 mod animation;
 mod editor;
 mod hub;
+mod i18n;
 mod inspector;
 mod organization;
 mod panels;
@@ -57,6 +58,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             style(&cc.egui_ctx);
+            i18n::load();
             let recent = RecentProjects::standard();
             Ok(Box::new(App {
                 render: cc.wgpu_render_state.clone(),

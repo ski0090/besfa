@@ -25,6 +25,7 @@ use windows::{
 };
 
 use crate::{
+    i18n::t,
     panels,
     process::{self, CliProcess, Output},
 };
@@ -155,14 +156,14 @@ pub enum Access {
 /// CLI too, so the CLI must be installed either way.
 fn route(access: Access, cli: Cli, key: &str) -> Result<Route, &'static str> {
     match (access, cli) {
-        (_, Cli::Checking) => Err("Checking the command-line tool."),
-        (_, Cli::Missing) => Err("Install its command-line tool first."),
+        (_, Cli::Checking) => Err(t("Checking the command-line tool.")),
+        (_, Cli::Missing) => Err(t("Install its command-line tool first.")),
         (Access::Cli, Cli::LoggedIn) => Ok(Route::Cli),
-        (Access::Cli, Cli::LoggedOut) => Err(
+        (Access::Cli, Cli::LoggedOut) => Err(t(
             "Log in to its command-line tool, or switch it to an API key in File > Agent Settings.",
-        ),
+        )),
         (Access::Key, _) if key.trim().is_empty() => {
-            Err("Enter its API key in File > Agent Settings.")
+            Err(t("Enter its API key in File > Agent Settings."))
         }
         (Access::Key, _) => Ok(Route::Key(key.trim().into())),
     }
@@ -411,7 +412,8 @@ pub fn window(
     agents: &mut Agents,
 ) -> bool {
     let mut changed = false;
-    egui::Window::new("Agent Settings")
+    egui::Window::new(t("Agent Settings"))
+        .id(egui::Id::new("agent_settings"))
         .open(open)
         .resizable(false)
         .show(ctx, |ui| changed = show(ui, settings, agents));
@@ -430,12 +432,12 @@ fn show(ui: &mut Ui, settings: &mut AgentSettings, agents: &mut Agents) -> bool 
                 let name = ui.strong(provider.label());
                 ui.add_space((70.0 - name.rect.width()).max(0.0));
                 ui.selectable_value(&mut access, Access::Cli, "CLI");
-                ui.selectable_value(&mut access, Access::Key, "API key");
+                ui.selectable_value(&mut access, Access::Key, t("API key"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     match agents.ready(provider, access) {
-                        None => ui.colored_label(panels::MUTED, "checking"),
-                        Some(true) => ui.colored_label(panels::GOOD, "ready"),
-                        Some(false) => ui.colored_label(panels::WARNING, "can't send yet"),
+                        None => ui.colored_label(panels::MUTED, t("checking")),
+                        Some(true) => ui.colored_label(panels::GOOD, t("ready")),
+                        Some(false) => ui.colored_label(panels::WARNING, t("can't send yet")),
                     };
                 });
             });
@@ -444,15 +446,16 @@ fn show(ui: &mut Ui, settings: &mut AgentSettings, agents: &mut Agents) -> bool 
                 ui.label(RichText::new(text).color(panels::MUTED).small());
             };
             match (access, agents.cli(provider)) {
-                (_, Cli::Checking) => note(ui, format!("Checking `{command}`.")),
-                (_, Cli::Missing) => note(ui, format!("`{command}` is not installed.")),
+                (_, Cli::Checking) => note(ui, t("Checking `{}`.").replace("{}", command)),
+                (_, Cli::Missing) => note(ui, t("`{}` is not installed.").replace("{}", command)),
                 (Access::Cli, Cli::LoggedOut) => note(
                     ui,
-                    format!(
-                        "`{command}` is not logged in. Run `{command}` in a terminal to log in."
-                    ),
+                    t("`{}` is not logged in. Run `{}` in a terminal to log in.")
+                        .replace("{}", command),
                 ),
-                (Access::Cli, Cli::LoggedIn) => note(ui, format!("`{command}` is logged in.")),
+                (Access::Cli, Cli::LoggedIn) => {
+                    note(ui, t("`{}` is logged in.").replace("{}", command))
+                }
                 (Access::Key, _) => {}
             }
             if access == Access::Key {
@@ -460,7 +463,7 @@ fn show(ui: &mut Ui, settings: &mut AgentSettings, agents: &mut Agents) -> bool 
                 let field = ui.add(
                     egui::TextEdit::singleline(key)
                         .password(true)
-                        .hint_text(format!("{} API key", provider.label()))
+                        .hint_text(t("{} API key").replace("{}", provider.label()))
                         .desired_width(f32::INFINITY),
                 );
                 if field.lost_focus() {
@@ -475,12 +478,12 @@ fn show(ui: &mut Ui, settings: &mut AgentSettings, agents: &mut Agents) -> bool 
     }
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new("Keys stay in the Windows Credential Manager.")
+            RichText::new(t("Keys stay in the Windows Credential Manager."))
                 .color(panels::MUTED)
                 .small(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Check again").clicked() {
+            if ui.button(t("Check again")).clicked() {
                 agents.check(ui.ctx());
             }
         });
@@ -508,7 +511,10 @@ impl Chat {
             .iter()
             .find(|message| message.user)
             .and_then(|message| message.text.lines().next())
-            .map_or_else(|| "New chat".into(), |line| line.chars().take(30).collect())
+            .map_or_else(
+                || t("New chat").into(),
+                |line| line.chars().take(30).collect(),
+            )
     }
 
     /// What goes to the CLI for `prompt`: each run starts fresh, so the
@@ -692,15 +698,15 @@ assets/prefabs/rock-pile.scn.ron",
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
                 let label = if self.sidebar_closed {
-                    "Show history"
+                    t("Show history")
                 } else {
-                    "Hide history"
+                    t("Hide history")
                 };
                 if ui.small_button(label).clicked() {
                     self.sidebar_closed = !self.sidebar_closed;
                 }
                 // The sidebar's "+ New Agent" is gone while it is hidden.
-                let new = egui::Button::new("+ New").small();
+                let new = egui::Button::new(t("+ New")).small();
                 if ui.add_enabled(!self.running(), new).clicked() {
                     self.new_chat();
                 }
@@ -715,13 +721,13 @@ assets/prefabs/rock-pile.scn.ron",
     fn sidebar(&mut self, ui: &mut Ui) {
         ui.add_space(4.0);
         let new_agent =
-            egui::Button::new("+ New Agent").min_size(egui::vec2(ui.available_width(), 28.0));
+            egui::Button::new(t("+ New Agent")).min_size(egui::vec2(ui.available_width(), 28.0));
         if ui.add_enabled(!self.running(), new_agent).clicked() {
             self.new_chat();
         }
         ui.add_space(6.0);
         ui.label(
-            RichText::new("History")
+            RichText::new(t("History"))
                 .small()
                 .strong()
                 .color(panels::MUTED),
@@ -729,7 +735,7 @@ assets/prefabs/rock-pile.scn.ron",
         let mut open = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             if self.history.is_empty() {
-                ui.colored_label(panels::MUTED, "No earlier chats.");
+                ui.colored_label(panels::MUTED, t("No earlier chats."));
             }
             for (index, chat) in self.history.iter().enumerate().rev() {
                 let row = egui::Button::new(chat.title())
@@ -754,7 +760,7 @@ assets/prefabs/rock-pile.scn.ron",
             .show(ui, |ui| {
                 ui.add_space(4.0);
                 if self.chat.messages.is_empty() {
-                    ui.colored_label(panels::MUTED, "Ask the agent to change the project.");
+                    ui.colored_label(panels::MUTED, t("Ask the agent to change the project."));
                 }
                 let last = self.chat.messages.len().wrapping_sub(1);
                 for (index, message) in self.chat.messages.iter().enumerate() {
@@ -830,12 +836,12 @@ assets/prefabs/rock-pile.scn.ron",
                         .frame(egui::Frame::NONE)
                         .desired_rows(3)
                         .desired_width(f32::INFINITY)
-                        .hint_text("Ask the agent to change the project. Ctrl+Enter sends."),
+                        .hint_text(t("Ask the agent to change the project. Ctrl+Enter sends.")),
                 );
                 let shortcut = field.has_focus()
                     && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
                 ui.horizontal(|ui| {
-                    let attach = egui::Button::new("+ Attach");
+                    let attach = egui::Button::new(t("+ Attach"));
                     if ui.add_enabled(self.picking.is_none(), attach).clicked() {
                         // The dialog waits for the user, so it runs on its
                         // own thread to keep the editor drawing. ponytail:
@@ -851,13 +857,13 @@ assets/prefabs/rock-pile.scn.ron",
                     model_picker(ui, settings, agents);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if let Some(run) = &self.run {
-                            if ui.button("Stop").clicked() {
+                            if ui.button(t("Stop")).clicked() {
                                 run.stop();
                             }
                             return;
                         }
                         let can_send = blocked.is_none() && !self.prompt.trim().is_empty();
-                        let button = ui.add_enabled(can_send, egui::Button::new("Send"));
+                        let button = ui.add_enabled(can_send, egui::Button::new(t("Send")));
                         if can_send && (button.clicked() || shortcut) {
                             let mut prompt = std::mem::take(&mut self.prompt).trim().to_string();
                             let files = std::mem::take(&mut self.attached);
@@ -888,7 +894,7 @@ assets/prefabs/rock-pile.scn.ron",
 
 pub fn model_label(model: &str) -> &str {
     if model.is_empty() {
-        "CLI default"
+        t("CLI default")
     } else {
         model
     }
@@ -911,10 +917,10 @@ fn model_picker(ui: &mut Ui, settings: &mut AgentSettings, agents: &Agents) {
             for provider in Provider::ALL {
                 let access = settings.access(provider);
                 let (how, color) = match (agents.ready(provider, access), access) {
-                    (None, _) => ("checking", panels::MUTED),
-                    (Some(false), _) => ("can't send yet", panels::WARNING),
+                    (None, _) => (t("checking"), panels::MUTED),
+                    (Some(false), _) => (t("can't send yet"), panels::WARNING),
                     (Some(true), Access::Cli) => ("CLI", panels::MUTED),
-                    (Some(true), Access::Key) => ("API key", panels::MUTED),
+                    (Some(true), Access::Key) => (t("API key"), panels::MUTED),
                 };
                 let mut heading = egui::text::LayoutJob::default();
                 for text in [
