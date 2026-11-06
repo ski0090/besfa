@@ -2490,6 +2490,7 @@ mod tests {
         let editor = &mut harness.state_mut().editor;
         editor.agent_open = false;
         editor.bottom_tab = BottomTab::Log;
+        agent_window_screenshot();
         harness.run_steps(4);
 
         // Who Play starts.
@@ -2647,6 +2648,35 @@ mod tests {
         harness
             .get_by_role_and_label(egui::accesskit::Role::Button, icon)
             .rect()
+    }
+
+    /// The Agent chat's window, which the editor opens apart from its own.
+    fn agent_window_screenshot() {
+        let size = egui::vec2(820.0, 460.0);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(size + egui::Vec2::splat(2.0 * MARGIN))
+            .with_pixels_per_point(PIXELS_PER_POINT)
+            .build_ui_state(
+                |ui,
+                 (panel, settings, agents): &mut (
+                    crate::agent::AgentPanel,
+                    AgentSettings,
+                    Agents,
+                )| {
+                    panel.ui(ui, settings, agents, None);
+                },
+                (
+                    crate::agent::AgentPanel::demo(),
+                    AgentSettings::default(),
+                    Agents::fixed([Cli::LoggedIn; 3], &[]),
+                ),
+            );
+        harness.run_steps(4);
+        save(
+            &mut harness,
+            "agent-window",
+            Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+        );
     }
 
     /// Writes the window, or the part of it in `crop` (points), to

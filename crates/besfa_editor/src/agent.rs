@@ -496,6 +496,38 @@ impl AgentPanel {
         self.run.is_some()
     }
 
+    /// A panel with a chat and an earlier one, for the manual's screenshot.
+    #[cfg(test)]
+    pub fn demo() -> Self {
+        let chat = |turns: &[(bool, &str)]| Chat {
+            messages: turns
+                .iter()
+                .map(|(user, text)| Message {
+                    user: *user,
+                    text: text.to_string(),
+                })
+                .collect(),
+        };
+        let mut panel = Self::default();
+        panel.history = vec![
+            chat(&[(true, "Make the terrain greener")]),
+            chat(&[(true, "Add a spawn point for the zombie")]),
+        ];
+        panel.chat = chat(&[
+            (
+                true,
+                "Put a rock pile next to the oak tree.
+@assets/prefabs/rock-pile.scn.ron",
+            ),
+            (
+                false,
+                "I placed rock-pile.scn.ron 2 meters east of the oak tree and saved the scene.",
+            ),
+        ]);
+        panel.attached = vec!["assets/models/small-stones.glb".into()];
+        panel
+    }
+
     /// Runs `invocation` on `prompt` in `directory`. `poll` tells once it
     /// exits whether it changed `watch`.
     pub fn start(
