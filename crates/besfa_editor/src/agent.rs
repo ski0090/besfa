@@ -493,6 +493,9 @@ struct Message {
 #[derive(Default)]
 struct Chat {
     messages: Vec<Message>,
+    /// Every file sent in this chat. The resent chat names them all, so the
+    /// CLI needs to reach them all.
+    files: Vec<PathBuf>,
 }
 
 impl Chat {
@@ -556,6 +559,7 @@ impl AgentPanel {
                     text: text.to_string(),
                 })
                 .collect(),
+            ..Default::default()
         };
         let mut panel = Self::default();
         panel.history = vec![
@@ -648,7 +652,11 @@ assets/prefabs/rock-pile.scn.ron",
     }
 
     /// Shows `chat` in place of the current one, which goes to the history.
+    /// What was attached or typed for the current one stays behind with it.
     fn show_chat(&mut self, chat: Chat) {
+        self.attached.clear();
+        self.prompt.clear();
+        self.picking = None;
         let current = std::mem::replace(&mut self.chat, chat);
         if !current.messages.is_empty() {
             self.history.push(current);
@@ -656,8 +664,8 @@ assets/prefabs/rock-pile.scn.ron",
     }
 
     /// Shows the window's contents, where the provider and model are picked
-    /// too. Returns the prompt to send and the files attached to it, unless
-    /// `blocked` says why it cannot go.
+    /// too. Returns the prompt to send and every file attached in this chat,
+    /// unless `blocked` says why it cannot go.
     pub fn ui(
         &mut self,
         ui: &mut Ui,
@@ -757,7 +765,7 @@ assets/prefabs/rock-pile.scn.ron",
     }
 
     /// The card with the attached files, the prompt and the controls under
-    /// it. Returns the prompt to send and its files.
+    /// it. Returns the prompt to send and every file attached in this chat.
     fn prompt_card(
         &mut self,
         ui: &mut Ui,
@@ -848,7 +856,12 @@ assets/prefabs/rock-pile.scn.ron",
                                     prompt.push_str(&format!("\n{}", file.display()));
                                 }
                             }
-                            send = Some((prompt, files));
+                            for file in files {
+                                if !self.chat.files.contains(&file) {
+                                    self.chat.files.push(file);
+                                }
+                            }
+                            send = Some((prompt, self.chat.files.clone()));
                         }
                         if let Some(reason) = blocked {
                             ui.colored_label(panels::WARNING, reason);
@@ -1029,6 +1042,7 @@ mod tests {
                     text: "Done.".into(),
                 },
             ],
+            ..Default::default()
         };
         assert_eq!(Chat::default().input("Hi"), "Hi");
         let input = chat.input("Now make it red.");
@@ -1070,6 +1084,7 @@ mod tests {
         agents: Agents,
         blocked: Option<&'static str>,
         sent: Option<String>,
+        files: Vec<PathBuf>,
     }
 
     fn tab(blocked: Option<&'static str>) -> Harness<'static, Tab> {
@@ -1078,6 +1093,7 @@ mod tests {
                 let blocked = tab.blocked;
                 if let Some(prompt) = tab.panel.ui(ui, &mut tab.settings, &tab.agents, blocked) {
                     tab.sent = Some(prompt.0);
+                    tab.files = prompt.1;
                 }
             },
             Tab {
@@ -1086,6 +1102,7 @@ mod tests {
                 agents: agents(Cli::LoggedIn),
                 blocked,
                 sent: None,
+                files: Vec::new(),
             },
         )
     }
@@ -1097,6 +1114,7 @@ mod tests {
                 user: true,
                 text: text.into(),
             }],
+            ..Default::default()
         };
         let mut panel = AgentPanel::default();
         panel.new_chat();
@@ -1126,6 +1144,30 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().sent.as_deref(), Some("Add a red cube."));
         assert!(harness.state().panel.prompt.is_empty());
+    }
+
+    #[test]
+    fn sends_every_file_of_the_chat_and_none_into_the_next() {
+        let mut harness = tab(None);
+        let panel = &mut harness.state_mut().panel;
+        panel.chat.files = vec!["a.png".into()];
+        panel.attached = vec!["b.txt".into()];
+        panel.prompt = "Use these.".into();
+        // The prompt panel grows to fit the attached file a frame late.
+        harness.run();
+        harness.run();
+        harness.get_by_label("Send").click();
+        harness.run();
+        let files: Vec<PathBuf> = vec!["a.png".into(), "b.txt".into()];
+        assert_eq!(harness.state().files, files);
+        assert!(harness.state().sent.as_ref().unwrap().ends_with("b.txt"));
+
+        let panel = &mut harness.state_mut().panel;
+        panel.attached = vec!["c.txt".into()];
+        panel.prompt = "half typed".into();
+        panel.new_chat();
+        assert!(panel.attached.is_empty() && panel.prompt.is_empty());
+        assert!(panel.chat.files.is_empty());
     }
 
     #[test]
