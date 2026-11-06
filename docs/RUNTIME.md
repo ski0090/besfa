@@ -48,6 +48,7 @@ let plugins = besfa_components::default_plugins();
 ```
 
 - 에디터, `besfa_mcp`, `besfa new`의 미리 빌드는 게임을 `--features bevy/dynamic_linking,besfa_editor`로 실행한다. 그 feature가 없는 옛 프로젝트는 cargo가 실패하므로 `Cargo.toml`의 `[features]`에 `besfa_editor`가 있을 때만 붙인다(`besfa_protocol::run_features`).
+- 공유 target의 Bevy는 cargo가 크레이트마다 toolchain, `Cargo.lock`의 의존성 버전, feature 합집합으로 해시를 매기므로 그 셋이 모두 같은 게임만 재사용한다. 게임의 다른 의존성이 Bevy가 쓰는 크레이트의 feature를 넓히면(duskhold의 rapier·renet은 `downcast-rs`의 `sync`, `profiling`의 `procmacros`, `windows-sys`의 `Win32_System_Time`을) 그 위의 Bevy 전체가 다른 해시로 한 번 더 빌드되고, 그 뒤로는 그 게임의 빌드를 재사용한다. 같은 게임은 늘 같은 feature로 빌드해야 Bevy가 한 벌이다: `besfa build`·`test`·`run`과 에디터는 같은 feature를 쓰고, `besfa_editor` 없이 `cargo run`하면 플러그인이 켜는 Bevy의 `debug` feature가 빠져 Bevy를 또 빌드한다. `RUSTUP_TOOLCHAIN`이나 `CARGO_TARGET_DIR`을 바꿔 띄운 에디터도 마찬가지로 Bevy를 한 벌 더 만든다.
 - `cargo update -p besfa_editor_plugin`은 같은 git 저장소의 `besfa_components`도 함께 올리므로, 에디터의 플러그인 갱신 아이콘은 그대로 쓴다.
 - `besfa new` 템플릿(`Cargo.toml`, `main.rs`)을 위처럼 바꾼다. 기존 게임(Duskhold)은 고치지 않아도 지금처럼 동작하고, 원할 때 같은 모양으로 옮긴다.
 

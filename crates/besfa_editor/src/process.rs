@@ -185,6 +185,8 @@ fn split_lines(mut pipe: impl Read, mut emit: impl FnMut(String)) {
 #[derive(Clone, Copy, PartialEq)]
 pub enum PrebuildPhase {
     Running,
+    /// Stopped for a project's build; `start` carries on from there.
+    Stopped,
     Ready,
     Failed,
 }
@@ -234,6 +236,22 @@ impl Prebuild {
     /// would only wait for it.
     pub fn running(&self) -> bool {
         self.phase == PrebuildPhase::Running
+    }
+
+    /// Stops a running prebuild so an opened project builds at once instead
+    /// of behind it: cargo builds in the shared directory one build at a
+    /// time, and a game whose other dependencies widen the features of
+    /// crates Bevy uses (rapier, renet) cannot reuse the prebuild's Bevy
+    /// anyway. A `start` back in the hub carries on from the crates built.
+    pub fn stop(&mut self) {
+        if let Some(process) = self.process.take() {
+            process.stop();
+        }
+        if self.running() {
+            self.phase = PrebuildPhase::Stopped;
+            self.message = "Bevy prebuild paused for the project".into();
+            self.progress = None;
+        }
     }
 
     pub fn poll(&mut self) {
