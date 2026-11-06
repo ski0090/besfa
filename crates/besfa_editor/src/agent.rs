@@ -68,7 +68,7 @@ impl Provider {
 
     /// Models to offer besides the CLI's default. Claude's aliases follow
     /// its latest models; the others are left to the CLI's own setting.
-    fn models(self) -> &'static [&'static str] {
+    pub fn models(self) -> &'static [&'static str] {
         match self {
             Provider::Claude => &["fable", "opus", "sonnet", "haiku"],
             Provider::OpenAi | Provider::Gemini => &[],
@@ -886,7 +886,7 @@ assets/prefabs/rock-pile.scn.ron",
     }
 }
 
-fn model_label(model: &str) -> &str {
+pub fn model_label(model: &str) -> &str {
     if model.is_empty() {
         "CLI default"
     } else {
