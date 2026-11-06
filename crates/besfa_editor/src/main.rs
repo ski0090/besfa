@@ -9,6 +9,7 @@ mod animation;
 mod editor;
 mod hub;
 mod inspector;
+mod organization;
 mod panels;
 mod preview;
 mod process;

@@ -31,6 +31,7 @@ use crate::{
     agent::{self, AgentPanel, AgentSettings, Agents, Route},
     animation,
     inspector::{Action, Inspector, TRANSFORM},
+    organization::{ORGANIZATION_FILE, OrgPanel},
     panels::{
         self, ACCENT, AssetAction, AssetBrowser, GOOD, HierarchyAction, MUTED, Reimport, WARNING,
         prebuild_status,
@@ -114,6 +115,12 @@ enum RightTab {
 enum BottomTab {
     Log,
     Assets,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AgentView {
+    Chat,
+    Organization,
 }
 
 enum Dialog {
@@ -210,6 +217,9 @@ pub struct Editor {
     /// Whether the Agent chat has its own window.
     agent_chat_open: bool,
     agent_panel: AgentPanel,
+    /// Which tab the Agent window shows, and its Organization tab.
+    agent_view: AgentView,
+    organization: OrgPanel,
     /// The window may close: nothing is unsaved, or the user chose.
     closing: bool,
     leave: bool,
@@ -223,6 +233,7 @@ impl Editor {
         ctx: &egui::Context,
     ) -> Self {
         let snapping = Snapping::read(&project.file(SNAP_FILE));
+        let organization = OrgPanel::new(project.file(ORGANIZATION_FILE));
         let mut editor = Self {
             source: SourceWatch::new(project.file("src")),
             assets: AssetBrowser::new(project.file("assets")),
@@ -271,6 +282,8 @@ impl Editor {
             agent_open: false,
             agent_chat_open: false,
             agent_panel: AgentPanel::default(),
+            agent_view: AgentView::Chat,
+            organization,
             closing: false,
             leave: false,
         };
@@ -1690,7 +1703,21 @@ impl Editor {
         let mut close = false;
         let id = egui::ViewportId::from_hash_of("agent_chat");
         ctx.show_viewport_immediate(id, builder, |ui, _| {
-            self.agent_tab(ui);
+            egui::Panel::top("agent_view").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.agent_view, AgentView::Chat, "Chat");
+                    ui.selectable_value(
+                        &mut self.agent_view,
+                        AgentView::Organization,
+                        "Organization",
+                    )
+                    .on_hover_text("Agents with roles that work on a task together.");
+                });
+            });
+            match self.agent_view {
+                AgentView::Chat => self.agent_tab(ui),
+                AgentView::Organization => self.organization_tab(ui),
+            }
             close = ui.input(|input| input.viewport().close_requested());
         });
         if close {
@@ -1703,10 +1730,15 @@ impl Editor {
         self.agents.check_once(ctx);
         let before = self.agent.clone();
         let route = self.agent_route();
-        let blocked = route.as_ref().err().copied().or(self
-            .scene
-            .dirty
-            .then_some("Save the scene first. The agent may change its file."));
+        let blocked = route
+            .as_ref()
+            .err()
+            .copied()
+            .or(self.agent_blocked())
+            .or(self
+                .organization
+                .running()
+                .then_some("The organization is working on a task."));
         let prompt = self
             .agent_panel
             .ui(ui, &mut self.agent, &self.agents, blocked);
@@ -1727,10 +1759,38 @@ impl Editor {
         }
     }
 
+    fn agent_blocked(&self) -> Option<&'static str> {
+        self.scene
+            .dirty
+            .then_some("Save the scene first. The agent may change its file.")
+    }
+
+    fn organization_tab(&mut self, ui: &mut Ui) {
+        self.agents.check_once(ui.ctx());
+        let blocked = self.agent_blocked().or(self
+            .agent_panel
+            .running()
+            .then_some("The chat's agent is still working."));
+        let (task, error) = self.organization.ui(ui, blocked);
+        if let Some(error) = error {
+            self.log(format!("Could not save the organization: {error}"));
+        }
+        if let Some(task) = task {
+            let directory = self.project.file("");
+            let scene = self.project.file(SCENE_FILE);
+            self.organization
+                .start(task, &self.agent, &self.agents, &directory, scene);
+        }
+    }
+
     /// Reloads the scene the agent changed, unless that would throw away
     /// edits made while it ran.
     fn poll_agent(&mut self, ctx: &egui::Context) {
-        let Some(scene_changed) = self.agent_panel.poll() else {
+        let finished = self
+            .agent_panel
+            .poll()
+            .or_else(|| self.organization.poll(ctx));
+        let Some(scene_changed) = finished else {
             return;
         };
         self.log("The agent finished.");
@@ -2676,6 +2736,23 @@ mod tests {
         save(
             &mut harness,
             "agent-window",
+            Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+        );
+
+        let size = egui::vec2(1180.0, 520.0);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(size + egui::Vec2::splat(2.0 * MARGIN))
+            .with_pixels_per_point(PIXELS_PER_POINT)
+            .build_ui_state(
+                |ui, panel: &mut OrgPanel| {
+                    panel.ui(ui, None);
+                },
+                OrgPanel::demo(),
+            );
+        harness.run_steps(4);
+        save(
+            &mut harness,
+            "agent-organization",
             Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
         );
     }
