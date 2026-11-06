@@ -2,6 +2,7 @@ mod cli;
 mod game;
 mod output;
 mod project_creation;
+mod prune;
 
 use std::{path::Path, process::ExitCode, time::Duration};
 

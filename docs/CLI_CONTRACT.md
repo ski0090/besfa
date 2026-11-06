@@ -43,7 +43,7 @@ cargo new --bin <프로젝트 이름>
 besfa prebuild
 ```
 
-`%LOCALAPPDATA%/Besfa/prebuild`를 `besfa new`와 같은 템플릿의 게임 프로젝트로 만들고(`Cargo.toml`, `src/main.rs`, `.cargo/config.toml`이 템플릿과 다를 때만 다시 써서, 바뀐 것이 없으면 다시 컴파일하지 않는다), 그 안에서 `cargo update -p besfa_editor_plugin`으로 플러그인을 최신 git 커밋으로 올린 뒤(에디터의 Run이 package cache 잠금을 기다리지 않도록 재시도 없이 요청당 10초만 기다리고, 실패하면 경고만 남기고 고정된 버전으로 계속한다) `cargo build --features bevy/dynamic_linking,besfa_editor`를 실행한다. 공유 target 디렉터리, 의존성, feature, 프로필이 에디터의 Run과 같으므로, 이후 게임의 첫 Run은 게임 코드만 컴파일한다. 빌드가 만든 `Cargo.lock`은 `besfa new`가 새 프로젝트로 복사한다. Cargo 출력은 그대로 표준 출력·오류로 나간다. `LOCALAPPDATA`가 없으면 종료 코드 `20`, Cargo 실행이나 빌드가 실패하면 `30`을 반환한다.
+`%LOCALAPPDATA%/Besfa/prebuild`를 `besfa new`와 같은 템플릿의 게임 프로젝트로 만들고(`Cargo.toml`, `src/main.rs`, `.cargo/config.toml`이 템플릿과 다를 때만 다시 써서, 바뀐 것이 없으면 다시 컴파일하지 않는다), 그 안에서 `cargo update -p besfa_editor_plugin`으로 플러그인을 최신 git 커밋으로 올린 뒤(에디터의 Run이 package cache 잠금을 기다리지 않도록 재시도 없이 요청당 10초만 기다리고, 실패하면 경고만 남기고 고정된 버전으로 계속한다) `cargo build --features bevy/dynamic_linking,besfa_editor`를 실행한다. 공유 target 디렉터리, 의존성, feature, 프로필이 에디터의 Run과 같으므로, 이후 게임의 첫 Run은 게임 코드만 컴파일한다. 빌드가 만든 `Cargo.lock`은 `besfa new`가 새 프로젝트로 복사한다. Cargo 출력은 그대로 표준 출력·오류로 나간다. `LOCALAPPDATA`가 없으면 종료 코드 `20`, Cargo 실행이나 빌드가 실패하면 `30`을 반환한다. 빌드가 끝나면 공유 target의 `debug/deps`에서 prebuild의 `Cargo.lock`과 에디터 최근 프로젝트 목록(`%APPDATA%/Besfa/recent_projects.json`)의 어느 `Cargo.lock`도 고정하지 않는 의존성 버전(예전 Bevy, 예전 플러그인 커밋)의 유닛을 fingerprint와 함께 지운다. 유닛의 출처는 `.d` 파일의 첫 소스 경로(registry의 `<이름>-<버전>` 디렉터리, git checkout의 리비전)로 판단하고, 그 밖의 것(path 의존성, 게임 자체)은 남긴다. 다른 Cargo가 build 디렉터리 잠금(`debug/.cargo-lock`)을 쥐고 있으면 그 회차는 건너뛴다. 지운 것이 있으면 표준 오류에 한 줄로 알린다.
 
 ```text
 besfa screenshot <FILE> [--wait <SECONDS>] [-- GAME_ARGS]...
