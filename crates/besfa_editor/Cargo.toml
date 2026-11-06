@@ -12,6 +12,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # Editor data files under the project's besfa/ folder are RON.
 serde = { version = "1", features = ["derive"] }
 ron = "0.12"
+# The Agent tab's Attach button picks files.
+rfd = "0.15"
 # Reads the models' thumbnails the game writes.
 image = { version = "0.25", default-features = false, features = ["png"] }
 

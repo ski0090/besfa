@@ -4,7 +4,7 @@
 //! The Agent tab picks the provider and model and sends the prompt.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::Stdio,
@@ -453,12 +453,40 @@ fn show(ui: &mut Ui, settings: &mut AgentSettings, agents: &mut Agents) -> bool 
     *settings != before
 }
 
-/// The Agent tab: a prompt box and the latest run's output.
+/// One turn of a chat: what the user sent, or what the agent printed back.
+struct Message {
+    user: bool,
+    text: String,
+}
+
+#[derive(Default)]
+struct Chat {
+    messages: Vec<Message>,
+}
+
+impl Chat {
+    fn title(&self) -> String {
+        self.messages
+            .iter()
+            .find(|message| message.user)
+            .and_then(|message| message.text.lines().next())
+            .map_or_else(|| "New chat".into(), |line| line.chars().take(30).collect())
+    }
+}
+
+/// The Agent window: past chats on the left, the chat in the middle, and the
+/// prompt card below it.
 #[derive(Default)]
 pub struct AgentPanel {
     prompt: String,
     run: Option<CliProcess>,
-    output: VecDeque<String>,
+    chat: Chat,
+    /// Earlier chats, newest last. ponytail: kept until the editor closes;
+    /// save them under the project if they should survive a restart.
+    history: Vec<Chat>,
+    sidebar_closed: bool,
+    /// Files to send with the next prompt, by path.
+    attached: Vec<PathBuf>,
     /// A file the run may change, and when it was changed before the run.
     watched: Option<(PathBuf, Option<SystemTime>)>,
 }
@@ -478,9 +506,14 @@ impl AgentPanel {
         watch: PathBuf,
         ctx: &egui::Context,
     ) {
-        self.output.clear();
-        self.output
-            .extend(prompt.lines().map(|line| format!("> {line}")));
+        self.chat.messages.push(Message {
+            user: true,
+            text: prompt.into(),
+        });
+        self.chat.messages.push(Message {
+            user: false,
+            text: String::new(),
+        });
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let env: Vec<(&str, &str)> = env
             .iter()
@@ -493,9 +526,17 @@ impl AgentPanel {
                 self.watched = Some((watch.clone(), modified(&watch)));
                 self.run = Some(run);
             }
-            Err(error) => self
-                .output
-                .push_back(format!("Could not start {program}: {error}")),
+            Err(error) => self.reply(&format!("Could not start {program}: {error}")),
+        }
+    }
+
+    /// Adds a line to the agent's latest message.
+    fn reply(&mut self, line: &str) {
+        if let Some(message) = self.chat.messages.last_mut() {
+            if !message.text.is_empty() {
+                message.text.push('\n');
+            }
+            message.text.push_str(line);
         }
     }
 
@@ -504,12 +545,11 @@ impl AgentPanel {
     pub fn poll(&mut self) -> Option<bool> {
         for output in self.run.as_ref()?.poll() {
             match output {
-                Output::Line(line) => self.output.push_back(line),
+                Output::Line(line) => self.reply(&line),
                 Output::Exit(code) => {
-                    self.output.push_back(match code {
-                        0 => "Done.".into(),
-                        code => format!("Exited with code {code}."),
-                    });
+                    if code != 0 {
+                        self.reply(&format!("Exited with code {code}."));
+                    }
                     self.run = None;
                     let (file, before) = self.watched.take()?;
                     return Some(modified(&file) != before);
@@ -519,8 +559,22 @@ impl AgentPanel {
         None
     }
 
-    /// Shows the tab, where the provider and model are picked too. Returns
-    /// the prompt to send, unless `blocked` says why it cannot go.
+    /// Puts the current chat away, if it has anything, and shows an empty one.
+    fn new_chat(&mut self) {
+        self.show_chat(Chat::default());
+    }
+
+    /// Shows `chat` in place of the current one, which goes to the history.
+    fn show_chat(&mut self, chat: Chat) {
+        let current = std::mem::replace(&mut self.chat, chat);
+        if !current.messages.is_empty() {
+            self.history.push(current);
+        }
+    }
+
+    /// Shows the window's contents, where the provider and model are picked
+    /// too. Returns the prompt to send, unless `blocked` says why it cannot
+    /// go.
     pub fn ui(
         &mut self,
         ui: &mut Ui,
@@ -528,39 +582,174 @@ impl AgentPanel {
         agents: &Agents,
         blocked: Option<&str>,
     ) -> Option<String> {
-        let mut send = None;
-        egui::Panel::bottom("agent_prompt").show(ui, |ui| {
-            ui.add_space(4.0);
+        if !self.sidebar_closed {
+            egui::Panel::left("agent_history")
+                .default_size(190.0)
+                .show(ui, |ui| self.sidebar(ui));
+        }
+        let send = egui::Panel::bottom("agent_prompt")
+            .show(ui, |ui| self.prompt_card(ui, settings, agents, blocked))
+            .inner;
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
-                let can_send =
-                    blocked.is_none() && !self.running() && !self.prompt.trim().is_empty();
-                let button = ui.add_enabled(can_send, egui::Button::new("Send"));
+                let label = if self.sidebar_closed {
+                    "Show history"
+                } else {
+                    "Hide history"
+                };
+                if ui.small_button(label).clicked() {
+                    self.sidebar_closed = !self.sidebar_closed;
+                }
+                ui.label(RichText::new(self.chat.title()).strong());
+            });
+            ui.separator();
+            self.messages(ui);
+        });
+        send
+    }
+
+    fn sidebar(&mut self, ui: &mut Ui) {
+        ui.add_space(4.0);
+        let new_agent =
+            egui::Button::new("+ New Agent").min_size(egui::vec2(ui.available_width(), 28.0));
+        if ui.add_enabled(!self.running(), new_agent).clicked() {
+            self.new_chat();
+        }
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new("History")
+                .small()
+                .strong()
+                .color(panels::MUTED),
+        );
+        let mut open = None;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            if self.history.is_empty() {
+                ui.colored_label(panels::MUTED, "No earlier chats.");
+            }
+            for (index, chat) in self.history.iter().enumerate().rev() {
+                let row = egui::Button::new(chat.title())
+                    .frame(false)
+                    .truncate()
+                    .min_size(egui::vec2(ui.available_width(), 0.0));
+                if ui.add_enabled(!self.running(), row).clicked() {
+                    open = Some(index);
+                }
+            }
+        });
+        if let Some(index) = open {
+            let chat = self.history.remove(index);
+            self.show_chat(chat);
+        }
+    }
+
+    fn messages(&self, ui: &mut Ui) {
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                if self.chat.messages.is_empty() {
+                    ui.colored_label(panels::MUTED, "Ask the agent to change the project.");
+                }
+                let last = self.chat.messages.len().wrapping_sub(1);
+                for (index, message) in self.chat.messages.iter().enumerate() {
+                    if message.user {
+                        egui::Frame::new()
+                            .fill(ui.visuals().extreme_bg_color)
+                            .corner_radius(8.0)
+                            .inner_margin(10.0)
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label(&message.text);
+                            });
+                    } else if message.text.is_empty() && index == last && self.running() {
+                        ui.spinner();
+                    } else {
+                        ui.label(RichText::new(&message.text).color(panels::TEXT));
+                    }
+                    ui.add_space(8.0);
+                }
+            });
+    }
+
+    /// The card with the attached files, the prompt and the controls under
+    /// it. Returns the prompt to send.
+    fn prompt_card(
+        &mut self,
+        ui: &mut Ui,
+        settings: &mut AgentSettings,
+        agents: &Agents,
+        blocked: Option<&str>,
+    ) -> Option<String> {
+        let mut send = None;
+        ui.add_space(6.0);
+        egui::Frame::new()
+            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+            .corner_radius(10.0)
+            .inner_margin(8.0)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if !self.attached.is_empty() {
+                    let mut removed = None;
+                    ui.horizontal_wrapped(|ui| {
+                        for (index, file) in self.attached.iter().enumerate() {
+                            let name = file.file_name().map_or_else(
+                                || file.display().to_string(),
+                                |name| name.to_string_lossy().into_owned(),
+                            );
+                            if ui
+                                .small_button(format!("{name}  x"))
+                                .on_hover_text(file.display().to_string())
+                                .clicked()
+                            {
+                                removed = Some(index);
+                            }
+                        }
+                    });
+                    if let Some(index) = removed {
+                        self.attached.remove(index);
+                    }
+                }
                 let field = ui.add(
                     egui::TextEdit::multiline(&mut self.prompt)
-                        .desired_rows(2)
+                        .frame(egui::Frame::NONE)
+                        .desired_rows(3)
                         .desired_width(f32::INFINITY)
                         .hint_text("Ask the agent to change the project. Ctrl+Enter sends."),
                 );
                 let shortcut = field.has_focus()
                     && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
-                if can_send && (button.clicked() || shortcut) {
-                    send = Some(std::mem::take(&mut self.prompt).trim().to_string());
-                }
-            });
-            ui.horizontal(|ui| {
-                model_picker(ui, settings, agents);
-                if let Some(run) = &self.run {
-                    ui.spinner();
-                    if ui.small_button("Stop").clicked() {
-                        run.stop();
+                ui.horizontal(|ui| {
+                    if ui.button("+ Attach").clicked()
+                        && let Some(files) = rfd::FileDialog::new().pick_files()
+                    {
+                        self.attached.extend(files);
                     }
-                }
-                if let Some(reason) = blocked {
-                    ui.colored_label(panels::WARNING, reason);
-                }
+                    model_picker(ui, settings, agents);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(run) = &self.run {
+                            if ui.button("Stop").clicked() {
+                                run.stop();
+                            }
+                            return;
+                        }
+                        let can_send = blocked.is_none() && !self.prompt.trim().is_empty();
+                        let button = ui.add_enabled(can_send, egui::Button::new("Send"));
+                        if can_send && (button.clicked() || shortcut) {
+                            let mut prompt = std::mem::take(&mut self.prompt).trim().to_string();
+                            // The CLIs read an `@path` as a file to look at.
+                            for file in self.attached.drain(..) {
+                                prompt.push_str(&format!("\n@{}", file.display()));
+                            }
+                            send = Some(prompt);
+                        }
+                        if let Some(reason) = blocked {
+                            ui.colored_label(panels::WARNING, reason);
+                        }
+                    });
+                });
             });
-        });
-        panels::log(ui, &self.output);
         send
     }
 }
@@ -758,6 +947,27 @@ mod tests {
                 sent: None,
             },
         )
+    }
+
+    #[test]
+    fn keeps_earlier_chats_and_brings_one_back() {
+        let said = |text: &str| Chat {
+            messages: vec![Message {
+                user: true,
+                text: text.into(),
+            }],
+        };
+        let mut panel = AgentPanel::default();
+        panel.new_chat();
+        assert!(panel.history.is_empty());
+        panel.chat = said("first");
+        panel.new_chat();
+        assert_eq!(panel.chat.title(), "New chat");
+        let chat = panel.history.remove(0);
+        panel.chat = said("second");
+        panel.show_chat(chat);
+        assert_eq!(panel.chat.title(), "first");
+        assert_eq!(panel.history[0].title(), "second");
     }
 
     #[test]
