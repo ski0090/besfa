@@ -1716,9 +1716,10 @@ impl Editor {
             self.log(format!("Could not save the agent settings: {error}"));
         }
         // The pick may have changed this frame, so the route is asked again.
-        if let (Some(prompt), Ok(route)) = (prompt, self.agent_route()) {
+        if let (Some((prompt, files)), Ok(route)) = (prompt, self.agent_route()) {
             let provider = self.agent.provider;
-            let invocation = agent::invocation(provider, &route, self.agent.model(provider));
+            let invocation =
+                agent::invocation(provider, &route, self.agent.model(provider), &files);
             let directory = self.project.file("");
             let scene = self.project.file(SCENE_FILE);
             self.agent_panel

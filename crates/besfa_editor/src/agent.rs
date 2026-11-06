@@ -168,21 +168,52 @@ fn route(access: Access, cli: Cli, key: &str) -> Result<Route, &'static str> {
     }
 }
 
-/// The program, arguments and environment that send a prompt.
+/// The program, arguments and environment that send a prompt with `files`
+/// attached.
 pub fn invocation(
     provider: Provider,
     route: &Route,
     model: &str,
+    files: &[PathBuf],
 ) -> (String, Vec<String>, Vec<(String, String)>) {
     let mut args: Vec<String> = provider.args().iter().map(|arg| arg.to_string()).collect();
     if !model.is_empty() {
         args.extend(["--model".into(), model.into()]);
+    }
+    // Claude and Gemini keep to the project unless told about the attached
+    // files' folders. Codex reads anywhere, but sees an image only through
+    // --image.
+    let mut folders: Vec<&Path> = files.iter().filter_map(|file| file.parent()).collect();
+    folders.sort();
+    folders.dedup();
+    for folder in folders {
+        let flag = match provider {
+            Provider::Claude => "--add-dir",
+            Provider::Gemini => "--include-directories",
+            Provider::OpenAi => continue,
+        };
+        args.extend([flag.into(), folder.display().to_string()]);
+    }
+    if provider == Provider::OpenAi {
+        for file in files.iter().filter(|file| is_image(file)) {
+            args.push(format!("--image={}", file.display()));
+        }
     }
     let env = match route {
         Route::Cli => Vec::new(),
         Route::Key(key) => vec![(provider.key_env().into(), key.clone())],
     };
     (provider.command().into(), args, env)
+}
+
+fn is_image(file: &Path) -> bool {
+    file.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["png", "jpg", "jpeg", "gif", "webp"]
+                .iter()
+                .any(|image| extension.eq_ignore_ascii_case(image))
+        })
 }
 
 /// The provider and model the Agent tab last picked, each provider's model
@@ -472,6 +503,22 @@ impl Chat {
             .and_then(|message| message.text.lines().next())
             .map_or_else(|| "New chat".into(), |line| line.chars().take(30).collect())
     }
+
+    /// What goes to the CLI for `prompt`: each run starts fresh, so the
+    /// chat so far comes first. ponytail: the whole chat goes every time;
+    /// resume the CLI's own session if long chats grow too big.
+    fn input(&self, prompt: &str) -> String {
+        if self.messages.is_empty() {
+            return prompt.into();
+        }
+        let mut input = String::from("Earlier in this conversation:\n\n");
+        for message in &self.messages {
+            let who = if message.user { "User" } else { "You" };
+            input.push_str(&format!("{who}: {}\n\n", message.text));
+        }
+        input.push_str(&format!("Now the user says:\n\n{prompt}"));
+        input
+    }
 }
 
 /// The Agent window: past chats on the left, the chat in the middle, and the
@@ -487,6 +534,8 @@ pub struct AgentPanel {
     sidebar_closed: bool,
     /// Files to send with the next prompt, by path.
     attached: Vec<PathBuf>,
+    /// The open file dialog's pick, once the user makes it.
+    picking: Option<Receiver<Option<Vec<PathBuf>>>>,
     /// A file the run may change, and when it was changed before the run.
     watched: Option<(PathBuf, Option<SystemTime>)>,
 }
@@ -517,7 +566,9 @@ impl AgentPanel {
             (
                 true,
                 "Put a rock pile next to the oak tree.
-@assets/prefabs/rock-pile.scn.ron",
+
+Attached files:
+assets/prefabs/rock-pile.scn.ron",
             ),
             (
                 false,
@@ -538,6 +589,7 @@ impl AgentPanel {
         watch: PathBuf,
         ctx: &egui::Context,
     ) {
+        let input = self.chat.input(prompt);
         self.chat.messages.push(Message {
             user: true,
             text: prompt.into(),
@@ -553,7 +605,7 @@ impl AgentPanel {
             .collect();
         match CliProcess::start(directory, &program, &args, &env, ctx) {
             Ok(mut run) => {
-                run.send(prompt);
+                run.send(&input);
                 run.end_input();
                 self.watched = Some((watch.clone(), modified(&watch)));
                 self.run = Some(run);
@@ -605,15 +657,15 @@ impl AgentPanel {
     }
 
     /// Shows the window's contents, where the provider and model are picked
-    /// too. Returns the prompt to send, unless `blocked` says why it cannot
-    /// go.
+    /// too. Returns the prompt to send and the files attached to it, unless
+    /// `blocked` says why it cannot go.
     pub fn ui(
         &mut self,
         ui: &mut Ui,
         settings: &mut AgentSettings,
         agents: &Agents,
         blocked: Option<&str>,
-    ) -> Option<String> {
+    ) -> Option<(String, Vec<PathBuf>)> {
         if !self.sidebar_closed {
             egui::Panel::left("agent_history")
                 .default_size(190.0)
@@ -706,14 +758,24 @@ impl AgentPanel {
     }
 
     /// The card with the attached files, the prompt and the controls under
-    /// it. Returns the prompt to send.
+    /// it. Returns the prompt to send and its files.
     fn prompt_card(
         &mut self,
         ui: &mut Ui,
         settings: &mut AgentSettings,
         agents: &Agents,
         blocked: Option<&str>,
-    ) -> Option<String> {
+    ) -> Option<(String, Vec<PathBuf>)> {
+        if let Some(picking) = &self.picking {
+            match picking.try_recv() {
+                Ok(files) => {
+                    self.attached.extend(files.unwrap_or_default());
+                    self.picking = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.picking = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         let mut send = None;
         ui.add_space(6.0);
         egui::Frame::new()
@@ -753,10 +815,18 @@ impl AgentPanel {
                 let shortcut = field.has_focus()
                     && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
                 ui.horizontal(|ui| {
-                    if ui.button("+ Attach").clicked()
-                        && let Some(files) = rfd::FileDialog::new().pick_files()
-                    {
-                        self.attached.extend(files);
+                    let attach = egui::Button::new("+ Attach");
+                    if ui.add_enabled(self.picking.is_none(), attach).clicked() {
+                        // The dialog waits for the user, so it runs on its
+                        // own thread to keep the editor drawing. ponytail:
+                        // no parent window, so it may open behind this one.
+                        let (sender, receiver) = mpsc::channel();
+                        let ctx = ui.ctx().clone();
+                        thread::spawn(move || {
+                            let _ = sender.send(rfd::FileDialog::new().pick_files());
+                            ctx.request_repaint();
+                        });
+                        self.picking = Some(receiver);
                     }
                     model_picker(ui, settings, agents);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -770,11 +840,16 @@ impl AgentPanel {
                         let button = ui.add_enabled(can_send, egui::Button::new("Send"));
                         if can_send && (button.clicked() || shortcut) {
                             let mut prompt = std::mem::take(&mut self.prompt).trim().to_string();
-                            // The CLIs read an `@path` as a file to look at.
-                            for file in self.attached.drain(..) {
-                                prompt.push_str(&format!("\n@{}", file.display()));
+                            let files = std::mem::take(&mut self.attached);
+                            // Plain paths, since `@path` stops at a space and
+                            // codex does not read it.
+                            if !files.is_empty() {
+                                prompt.push_str("\n\nAttached files:");
+                                for file in &files {
+                                    prompt.push_str(&format!("\n{}", file.display()));
+                                }
                             }
-                            send = Some(prompt);
+                            send = Some((prompt, files));
                         }
                         if let Some(reason) = blocked {
                             ui.colored_label(panels::WARNING, reason);
@@ -911,7 +986,7 @@ mod tests {
 
     #[test]
     fn passes_the_key_in_the_variable_each_cli_reads() {
-        let (program, args, env) = invocation(Provider::Claude, &Route::Cli, "opus");
+        let (program, args, env) = invocation(Provider::Claude, &Route::Cli, "opus", &[]);
         assert_eq!(program, "claude");
         assert_eq!(
             args,
@@ -919,13 +994,48 @@ mod tests {
         );
         assert!(env.is_empty());
 
-        let (program, args, env) = invocation(Provider::OpenAi, &Route::Key("sk".into()), "");
+        let (program, args, env) = invocation(Provider::OpenAi, &Route::Key("sk".into()), "", &[]);
         assert_eq!(program, "codex");
         assert_eq!(args[0], "exec");
         assert_eq!(env, [("CODEX_API_KEY".to_string(), "sk".to_string())]);
 
-        let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "");
+        let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &[]);
         assert_eq!(args, ["--prompt", "", "--approval-mode", "auto_edit"]);
+    }
+
+    #[test]
+    fn lets_each_cli_reach_the_attached_files() {
+        let files = [
+            PathBuf::from(r"C:\My Art\ref.PNG"),
+            PathBuf::from(r"C:\My Art\notes.txt"),
+        ];
+        let (_, args, _) = invocation(Provider::Claude, &Route::Cli, "", &files);
+        assert_eq!(args[3..], ["--add-dir", r"C:\My Art"]);
+        let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &files);
+        assert_eq!(args[4..], ["--include-directories", r"C:\My Art"]);
+        let (_, args, _) = invocation(Provider::OpenAi, &Route::Cli, "", &files);
+        assert_eq!(args[4..], [r"--image=C:\My Art\ref.PNG"]);
+    }
+
+    #[test]
+    fn sends_the_chat_so_far_with_the_next_prompt() {
+        let chat = Chat {
+            messages: vec![
+                Message {
+                    user: true,
+                    text: "Make the tower taller.".into(),
+                },
+                Message {
+                    user: false,
+                    text: "Done.".into(),
+                },
+            ],
+        };
+        assert_eq!(Chat::default().input("Hi"), "Hi");
+        let input = chat.input("Now make it red.");
+        assert!(input.contains("User: Make the tower taller."));
+        assert!(input.contains("You: Done."));
+        assert!(input.ends_with("Now make it red."));
     }
 
     #[test]
@@ -968,7 +1078,7 @@ mod tests {
             |ui, tab: &mut Tab| {
                 let blocked = tab.blocked;
                 if let Some(prompt) = tab.panel.ui(ui, &mut tab.settings, &tab.agents, blocked) {
-                    tab.sent = Some(prompt);
+                    tab.sent = Some(prompt.0);
                 }
             },
             Tab {
