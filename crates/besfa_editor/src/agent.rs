@@ -636,6 +636,10 @@ assets/prefabs/rock-pile.scn.ron",
                 Output::Exit(code) => {
                     if code != 0 {
                         self.reply(&format!("Exited with code {code}."));
+                    } else if self.chat.messages.last().is_some_and(|m| m.text.is_empty()) {
+                        // Shows it finished, and keeps an empty turn out of
+                        // the chat the next prompt resends.
+                        self.reply("Done.");
                     }
                     self.run = None;
                     let (file, before) = self.watched.take()?;
@@ -1144,6 +1148,19 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().sent.as_deref(), Some("Add a red cube."));
         assert!(harness.state().panel.prompt.is_empty());
+    }
+
+    #[test]
+    fn says_done_when_a_run_prints_nothing() {
+        let mut panel = AgentPanel::default();
+        let quiet = ("cmd".into(), vec!["/c".into(), "exit 0".into()], vec![]);
+        let ctx = egui::Context::default();
+        panel.start(quiet, "Hi", Path::new("."), "none".into(), &ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while panel.poll().is_none() && std::time::Instant::now() < deadline {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(panel.chat.messages[1].text, "Done.");
     }
 
     #[test]
