@@ -923,15 +923,14 @@ impl ModelPreview {
 
 /// Counts of what the model is made of, and its materials.
 fn stats_ui(ui: &mut Ui, stats: &ModelStats, joints: usize) {
-    let mut counts = format!(
-        "{} triangles · {} vertices · {} mesh{}",
-        stats.triangles,
-        stats.vertices,
-        stats.meshes,
-        plural(stats.meshes)
-    );
+    // Korean has no plural, so its text has no {s}.
+    let mut counts = t("{triangles} triangles · {vertices} vertices · {meshes} mesh{s}")
+        .replace("{triangles}", &stats.triangles.to_string())
+        .replace("{vertices}", &stats.vertices.to_string())
+        .replace("{meshes}", &stats.meshes.to_string())
+        .replace("{s}", plural(stats.meshes));
     if joints > 0 {
-        counts += &format!(" · {joints} joints");
+        counts += &t(" · {} joints").replace("{}", &joints.to_string());
     }
     tag(ui, &counts);
     let title = t("Materials ({})").replace("{}", &stats.materials.len().to_string());
@@ -952,7 +951,11 @@ fn stats_ui(ui: &mut Ui, stats: &ModelStats, joints: usize) {
                     ui.label(RichText::new(name).small().color(TEXT))
                         .on_hover_text(format!("#{r:02X}{g:02X}{b:02X}, alpha {a}"));
                     let meshes = material.meshes;
-                    let mut notes = vec![format!("{meshes} mesh{}", plural(meshes))];
+                    let mut notes = vec![
+                        t("{meshes} mesh{s}")
+                            .replace("{meshes}", &meshes.to_string())
+                            .replace("{s}", plural(meshes)),
+                    ];
                     notes.extend(
                         material
                             .textures

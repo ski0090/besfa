@@ -95,7 +95,7 @@ impl Hub {
                 }
                 ui.add_space(24.0);
                 if let Some(error) = i18n::settings_menu(ui) {
-                    self.show_message(format!("Could not save the settings: {error}"));
+                    self.show_message(t("Could not save the settings: {}").replace("{}", &error));
                 }
                 ui.add_space(24.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

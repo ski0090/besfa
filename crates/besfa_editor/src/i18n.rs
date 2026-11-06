@@ -110,6 +110,7 @@ fn korean(en: &str) -> Option<&'static str> {
         // Menus
         "Settings" => "설정",
         "Language" => "언어",
+        "Could not save the settings: {}" => "설정을 저장하지 못했습니다: {}",
         "Agent" => "에이전트",
         "File" => "파일",
         "Save scene" => "씬 저장",
@@ -132,7 +133,7 @@ fn korean(en: &str) -> Option<&'static str> {
         "Standalone" => "단독 실행",
         "Server + 1 client" => "서버 + 클라이언트 1개",
         "Server + {} clients" => "서버 + 클라이언트 {}개",
-        "Snap (hold Ctrl)" => "스냅 (Ctrl 누르기)",
+        "Snap (hold Ctrl)" => "스냅 (Ctrl 누른 채)",
         "Grid" => "격자",
         "{} Click to update it to the latest commit." => {
             "{} 클릭하면 최신 커밋으로 업데이트합니다."
@@ -189,7 +190,7 @@ fn korean(en: &str) -> Option<&'static str> {
         "Letters, digits, spaces, - and _ only" => "문자, 숫자, 공백, -, _만 쓸 수 있습니다",
         "Cancel" => "취소",
         "Save" => "저장",
-        "Discard" => "버리기",
+        "Discard" => "저장 안 함",
         "Delete" => "삭제",
         "Save changes to the scene?" => "씬의 변경 사항을 저장할까요?",
         "The scene has changes that are not saved to scenes/main.scn.ron." => {
@@ -238,6 +239,7 @@ fn korean(en: &str) -> Option<&'static str> {
             "에디터가 알지 못하는 형태의 상태 머신입니다."
         }
         "Playing" => "재생 중",
+        "{} pulled" => "{} 발동",
         "States" => "상태",
         "The model's clips show once it has loaded." => "모델이 로드되면 클립이 표시됩니다.",
         "Plays first" => "처음 재생됨",
@@ -256,7 +258,7 @@ fn korean(en: &str) -> Option<&'static str> {
         "Any state but the one it goes to" => "도착 상태를 뺀 모든 상태",
         "Blend s " => "블렌드(초) ",
         "Crossfade seconds" => "크로스페이드 시간(초)",
-        "Exit " => "종료 ",
+        "Exit " => "종료 시점 ",
         "How much of the clip plays first, 1 for once through; 0 for any time" => {
             "먼저 재생할 클립의 비율: 1이면 끝까지 한 번, 0이면 언제든지"
         }
@@ -369,6 +371,11 @@ fn korean(en: &str) -> Option<&'static str> {
         "joint" => "관절",
         "Materials ({})" => "머티리얼 ({})",
         "Unnamed" => "이름 없음",
+        "{triangles} triangles · {vertices} vertices · {meshes} mesh{s}" => {
+            "삼각형 {triangles}개 · 정점 {vertices}개 · 메시 {meshes}개"
+        }
+        " · {} joints" => " · 관절 {}개",
+        "{meshes} mesh{s}" => "메시 {meshes}개",
         // Agents
         "Agent Settings" => "에이전트 설정",
         "API key" => "API 키",
@@ -379,6 +386,13 @@ fn korean(en: &str) -> Option<&'static str> {
             "키는 Windows 자격 증명 관리자에 보관됩니다."
         }
         "Check again" => "다시 확인",
+        "Checking `{}`." => "`{}` 확인 중입니다.",
+        "`{}` is not installed." => "`{}`이(가) 설치되어 있지 않습니다.",
+        "`{}` is not logged in. Run `{}` in a terminal to log in." => {
+            "`{}`에 로그인되어 있지 않습니다. 터미널에서 `{}`을(를) 실행해 로그인하세요."
+        }
+        "`{}` is logged in." => "`{}`에 로그인되어 있습니다.",
+        "{} API key" => "{} API 키",
         "Checking the command-line tool." => "명령줄 도구를 확인하는 중입니다.",
         "Install its command-line tool first." => "먼저 명령줄 도구를 설치하세요.",
         "Log in to its command-line tool, or switch it to an API key in File > Agent Settings." => {
@@ -431,7 +445,7 @@ fn korean(en: &str) -> Option<&'static str> {
         "+ Custom agent" => "+ 사용자 에이전트",
         "Group selection" => "선택 항목 묶기",
         "Puts a box around the selected agents." => "선택한 에이전트를 상자로 묶습니다.",
-        "Center view" => "가운데로 보기",
+        "Center view" => "뷰 가운데로",
         "Drag from an agent's right pin to another agent to hand it the result. Right-click a pin to unlink it. Shift-click selects more." => {
             "에이전트의 오른쪽 핀을 다른 에이전트로 드래그하면 결과를 넘깁니다. 핀을 오른쪽 클릭하면 연결을 끊습니다. Shift+클릭으로 여러 개를 선택합니다."
         }

@@ -130,13 +130,13 @@ pub fn ui(ui: &mut Ui, scene: &Inspected) -> Option<Action> {
         if !scene.addable.iter().any(|t| t.path == MACHINE) {
             tag(
                 ui,
-                t("Update besfa_editor_plugin in the game to play animation state machines."),
+                "Update besfa_editor_plugin in the game to play animation state machines.",
             );
             return None;
         }
         tag(
             ui,
-            t("Put a state machine on a placed glTF model to play its clips."),
+            "Put a state machine on a placed glTF model to play its clips.",
         );
         return ui
             .button(t("➕ Add state machine"))
@@ -146,7 +146,7 @@ pub fn ui(ui: &mut Ui, scene: &Inspected) -> Option<Action> {
     let Ok(machine) = serde_json::from_value::<Machine>(value.clone()) else {
         tag(
             ui,
-            t("This state machine has a shape the editor does not know."),
+            "This state machine has a shape the editor does not know.",
         );
         return None;
     };
@@ -181,7 +181,7 @@ fn playing(ui: &mut Ui, params: &Value) {
         }
     }
     for trigger in params["triggers"].as_array().into_iter().flatten() {
-        said.push(format!("{} pulled", trigger.as_str().unwrap_or_default()));
+        said.push(t("{} pulled").replace("{}", trigger.as_str().unwrap_or_default()));
     }
     if !said.is_empty() {
         tag(ui, &said.join("  ·  "));
@@ -268,7 +268,7 @@ fn transitions(ui: &mut Ui, id: Id, machine: &mut Machine) {
     section(ui, "Transitions");
     tag(
         ui,
-        t("Taken first in the list first, once every condition holds."),
+        "Taken first in the list first, once every condition holds.",
     );
     let names: Vec<String> = machine
         .states

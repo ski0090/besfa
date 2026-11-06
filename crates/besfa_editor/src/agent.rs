@@ -446,15 +446,16 @@ fn show(ui: &mut Ui, settings: &mut AgentSettings, agents: &mut Agents) -> bool 
                 ui.label(RichText::new(text).color(panels::MUTED).small());
             };
             match (access, agents.cli(provider)) {
-                (_, Cli::Checking) => note(ui, format!("Checking `{command}`.")),
-                (_, Cli::Missing) => note(ui, format!("`{command}` is not installed.")),
+                (_, Cli::Checking) => note(ui, t("Checking `{}`.").replace("{}", command)),
+                (_, Cli::Missing) => note(ui, t("`{}` is not installed.").replace("{}", command)),
                 (Access::Cli, Cli::LoggedOut) => note(
                     ui,
-                    format!(
-                        "`{command}` is not logged in. Run `{command}` in a terminal to log in."
-                    ),
+                    t("`{}` is not logged in. Run `{}` in a terminal to log in.")
+                        .replace("{}", command),
                 ),
-                (Access::Cli, Cli::LoggedIn) => note(ui, format!("`{command}` is logged in.")),
+                (Access::Cli, Cli::LoggedIn) => {
+                    note(ui, t("`{}` is logged in.").replace("{}", command))
+                }
                 (Access::Key, _) => {}
             }
             if access == Access::Key {
@@ -462,7 +463,7 @@ fn show(ui: &mut Ui, settings: &mut AgentSettings, agents: &mut Agents) -> bool 
                 let field = ui.add(
                     egui::TextEdit::singleline(key)
                         .password(true)
-                        .hint_text(format!("{} API key", provider.label()))
+                        .hint_text(t("{} API key").replace("{}", provider.label()))
                         .desired_width(f32::INFINITY),
                 );
                 if field.lost_focus() {

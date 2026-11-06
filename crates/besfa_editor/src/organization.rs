@@ -959,6 +959,7 @@ impl OrgPanel {
                 egui::CollapsingHeader::new(
                     RichText::new(department.label()).color(department.color()),
                 )
+                .id_salt(("department", department as usize))
                 .default_open(department == Department::Leadership)
                 .show(ui, |ui| {
                     for role in ROLES.iter().filter(|role| role.department == department) {
