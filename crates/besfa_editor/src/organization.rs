@@ -478,7 +478,12 @@ impl Organization {
 
     /// Without links the editor cannot make, which a hand-edited or merged
     /// file can have: to agents that are gone, twice, or into a loop.
+    /// Ids are kept unique too, and `next_id` past every one in use.
     fn tidy(mut self) -> Self {
+        let mut seen = std::collections::BTreeSet::new();
+        self.nodes.retain(|node| seen.insert(node.id));
+        self.groups.retain(|group| seen.insert(group.id));
+        self.next_id = seen.into_iter().fold(self.next_id, u32::max);
         let links = std::mem::take(&mut self.links);
         for (from, to) in links {
             if self.node(from).is_some() && self.node(to).is_some() {
@@ -849,7 +854,8 @@ impl OrgPanel {
                     if let Some(file) = &answer {
                         let _ = fs::remove_file(file);
                     }
-                    if run.stopped {
+                    // One that finished as Stop came keeps its answer.
+                    if run.stopped && code != 0 {
                         node.output.push_str("Stopped.");
                         node.state = NodeState::Failed;
                         return self.finish();
@@ -1700,9 +1706,18 @@ mod tests {
     fn drops_links_the_editor_cannot_make_when_reading() {
         let (mut org, [design, code, _]) = studio();
         org.links = vec![(design, code), (design, code), (code, design), (99, code)];
-        let org = org.tidy();
+        let twin = Node {
+            id: code,
+            ..Default::default()
+        };
+        org.nodes.push(twin);
+        org.next_id = 1;
+        let mut org = org.tidy();
         assert_eq!(org.links, [(design, code)]);
+        assert_eq!(org.nodes.len(), 3);
         assert!(org.order().is_ok());
+        let id = org.id();
+        assert!(org.node(id).is_none(), "a new id is not one in use");
     }
 
     #[test]
