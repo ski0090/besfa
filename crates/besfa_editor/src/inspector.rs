@@ -385,9 +385,14 @@ fn component_tile(
             .map_or(&[][..], |(_, fields)| fields);
         // A new selection starts with fresh fields.
         let id = Id::new((selected, &component.path));
-        if let Some(value) =
-            value_editor_with(ui, id, value, component.path == TRANSFORM, hidden, &component.shapes)
-        {
+        if let Some(value) = value_editor_with(
+            ui,
+            id,
+            value,
+            component.path == TRANSFORM,
+            hidden,
+            &component.shapes,
+        ) {
             action = Some(Action::Set(component.path.clone(), value));
         }
     } else {
@@ -458,7 +463,11 @@ impl Fields<'_> {
             if node.is_null() {
                 return row(ui, label, |ui| {
                     read_only(ui, "None", MUTED);
-                    if ui.small_button("➕").on_hover_text("Give it a value").clicked() {
+                    if ui
+                        .small_button("➕")
+                        .on_hover_text("Give it a value")
+                        .clicked()
+                    {
                         self.change = Some((path.clone(), start.clone()));
                     }
                 });
@@ -487,7 +496,10 @@ impl Fields<'_> {
                         *channel = egui::ecolor::linear_from_gamma(*channel);
                     }
                 }
-                if ui.color_edit_button_rgba_unmultiplied(&mut linear).changed() {
+                if ui
+                    .color_edit_button_rgba_unmultiplied(&mut linear)
+                    .changed()
+                {
                     self.change = Some((path.clone(), color_value(space, linear, srgb)));
                 }
             });
@@ -608,7 +620,11 @@ impl Fields<'_> {
                 return;
             }
             let mut key: String = ui.data_mut(|data| data.get_temp(id)).unwrap_or_default();
-            ui.add(egui::TextEdit::singleline(&mut key).hint_text("key").desired_width(80.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut key)
+                    .hint_text("key")
+                    .desired_width(80.0),
+            );
             let fresh = !key.is_empty() && !map.contains_key(&key);
             if ui
                 .add_enabled(fresh, egui::Button::new("➕").small())
@@ -626,7 +642,10 @@ impl Fields<'_> {
                 path.push(key.clone());
                 let mut remove = false;
                 let mut remove_button = |ui: &mut Ui| {
-                    remove = ui.small_button("🗙").on_hover_text("Remove this entry").clicked();
+                    remove = ui
+                        .small_button("🗙")
+                        .on_hover_text("Remove this entry")
+                        .clicked();
                 };
                 match value {
                     Value::Object(_) => {
@@ -843,7 +862,12 @@ fn color_of(node: &Value) -> Option<(&str, [f32; 4])> {
     let channel = |name: &str| channels.get(name)?.as_f64().map(|value| value as f32);
     Some((
         space,
-        [channel("red")?, channel("green")?, channel("blue")?, channel("alpha")?],
+        [
+            channel("red")?,
+            channel("green")?,
+            channel("blue")?,
+            channel("alpha")?,
+        ],
     ))
 }
 
@@ -952,7 +976,17 @@ mod tests {
         assert_eq!(shrunk["recipes"], json!([{"item": "hammer", "needs": []}]));
 
         // An item's field edits in place.
-        let changed = replace(&recipes, &["recipes".into(), "0".into(), "needs".into(), "0".into(), "count".into()], json!(5));
+        let changed = replace(
+            &recipes,
+            &[
+                "recipes".into(),
+                "0".into(),
+                "needs".into(),
+                "0".into(),
+                "count".into(),
+            ],
+            json!(5),
+        );
         assert_eq!(changed["recipes"][0]["needs"][0]["count"], 5);
         assert_eq!(changed["recipes"][1], recipes["recipes"][1]);
     }
@@ -987,7 +1021,9 @@ mod tests {
         let editor = |value: Value, shapes: Shapes| {
             Harness::builder().build_ui_state(
                 move |ui, changed: &mut Option<Value>| {
-                    if let Some(value) = value_editor_with(ui, Id::new("slot"), &value, false, &[], &shapes) {
+                    if let Some(value) =
+                        value_editor_with(ui, Id::new("slot"), &value, false, &[], &shapes)
+                    {
                         *changed = Some(value);
                     }
                 },
@@ -999,15 +1035,25 @@ mod tests {
         // The worn slot's ➕ comes before the runes'.
         harness.get_all_by_label("➕").next().unwrap().click();
         harness.run();
-        assert_eq!(harness.state().clone().unwrap()["worn"], json!({"item": "", "count": 1}));
+        assert_eq!(
+            harness.state().clone().unwrap()["worn"],
+            json!({"item": "", "count": 1})
+        );
 
         let mut harness = editor(json!({"worn": null, "runes": []}), shapes.clone());
         harness.run();
         harness.get_all_by_label("➕").nth(1).unwrap().click();
         harness.run();
-        assert_eq!(harness.state().clone().unwrap()["runes"], json!([""]), "a text, not an object");
+        assert_eq!(
+            harness.state().clone().unwrap()["runes"],
+            json!([""]),
+            "a text, not an object"
+        );
 
-        let mut harness = editor(json!({"worn": {"item": "cloth", "count": 1}, "runes": []}), shapes);
+        let mut harness = editor(
+            json!({"worn": {"item": "cloth", "count": 1}, "runes": []}),
+            shapes,
+        );
         harness.run();
         harness.get_by_label("🗙").click();
         harness.run();
@@ -1025,7 +1071,9 @@ mod tests {
         let editor = |value: Value, shapes: Shapes| {
             Harness::builder().build_ui_state(
                 move |ui, changed: &mut Option<Value>| {
-                    if let Some(value) = value_editor_with(ui, Id::new("pose"), &value, false, &[], &shapes) {
+                    if let Some(value) =
+                        value_editor_with(ui, Id::new("pose"), &value, false, &[], &shapes)
+                    {
                         *changed = Some(value);
                     }
                 },
@@ -1034,8 +1082,12 @@ mod tests {
         };
         // A typed key: the map's ➕, before the list's, adds an entry by it.
         let mut harness = editor(pose.clone(), shapes.clone());
-        let key = Id::new("pose").with(&["layers".to_owned()][..]).with("new key");
-        harness.ctx.data_mut(|data| data.insert_temp(key, "seat".to_owned()));
+        let key = Id::new("pose")
+            .with(&["layers".to_owned()][..])
+            .with("new key");
+        harness
+            .ctx
+            .data_mut(|data| data.insert_temp(key, "seat".to_owned()));
         harness.run();
         harness.get_all_by_label("➕").next().unwrap().click();
         harness.run();
@@ -1065,7 +1117,9 @@ mod tests {
         let value = json!({"dyes": [null, red.clone(), null]});
         let mut harness = Harness::builder().build_ui_state(
             move |ui, changed: &mut Option<Value>| {
-                if let Some(value) = value_editor_with(ui, Id::new("look"), &value, false, &[], &shapes) {
+                if let Some(value) =
+                    value_editor_with(ui, Id::new("look"), &value, false, &[], &shapes)
+                {
                     *changed = Some(value);
                 }
             },
@@ -1077,26 +1131,38 @@ mod tests {
         assert_eq!(harness.get_all_by_label("➕").count(), 2);
         harness.get_all_by_label("➕").next().unwrap().click();
         harness.run();
-        assert_eq!(harness.state().clone().unwrap()["dyes"], json!([red, red, null]));
+        assert_eq!(
+            harness.state().clone().unwrap()["dyes"],
+            json!([red, red, null])
+        );
     }
 
     #[test]
     fn picks_an_enum_variant_from_its_list() {
         let tools = json!({"tools": [{"kind": "Axe"}, {"kind": "Axe"}]});
         let shapes = Shapes {
-            choices: BTreeMap::from([("tools/*/kind".to_owned(), vec!["Axe".to_owned(), "Bow".to_owned()])]),
+            choices: BTreeMap::from([(
+                "tools/*/kind".to_owned(),
+                vec!["Axe".to_owned(), "Bow".to_owned()],
+            )]),
             ..Default::default()
         };
         let mut harness = Harness::builder().build_ui_state(
             move |ui, changed: &mut Option<Value>| {
-                if let Some(value) = value_editor_with(ui, Id::new("tools"), &tools, false, &[], &shapes) {
+                if let Some(value) =
+                    value_editor_with(ui, Id::new("tools"), &tools, false, &[], &shapes)
+                {
                     *changed = Some(value);
                 }
             },
             None,
         );
         harness.run();
-        harness.get_all_by_role(egui::accesskit::Role::ComboBox).nth(1).unwrap().click();
+        harness
+            .get_all_by_role(egui::accesskit::Role::ComboBox)
+            .nth(1)
+            .unwrap()
+            .click();
         harness.run();
         harness.get_by_label("Bow").click();
         harness.run();
