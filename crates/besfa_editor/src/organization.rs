@@ -472,7 +472,20 @@ impl Organization {
         fs::read_to_string(file)
             .ok()
             .and_then(|text| ron::from_str::<Self>(&text).ok())
+            .map(Self::tidy)
             .unwrap_or_default()
+    }
+
+    /// Without links the editor cannot make, which a hand-edited or merged
+    /// file can have: to agents that are gone, twice, or into a loop.
+    fn tidy(mut self) -> Self {
+        let links = std::mem::take(&mut self.links);
+        for (from, to) in links {
+            if self.node(from).is_some() && self.node(to).is_some() {
+                self.link(from, to);
+            }
+        }
+        self
     }
 
     fn write(&self, file: &Path) -> Result<(), String> {
@@ -636,6 +649,10 @@ struct Run {
     invocations: Vec<Invocation>,
     next: usize,
     process: Option<CliProcess>,
+    /// Where each agent's CLI writes its final answer, when it can, by its
+    /// place in `order`. Codex logs the run, prompt included, on stderr.
+    answers: Vec<Option<PathBuf>>,
+    stopped: bool,
     directory: PathBuf,
     /// A file the run may change, and when it was changed before the run.
     watched: (PathBuf, Option<SystemTime>),
@@ -721,6 +738,7 @@ impl OrgPanel {
             }
         };
         let mut invocations = Vec::new();
+        let mut answers = Vec::new();
         for &id in &order {
             let node = self.org.node(id).expect("ordered nodes exist");
             let route = match agents.route(node.provider, settings.access(node.provider)) {
@@ -742,7 +760,14 @@ impl OrgPanel {
             if node.provider == Provider::Claude && !node.role.is_empty() && agent_file.is_file() {
                 args.extend(["--agent".into(), node.role.clone()]);
             }
+            let answer = (node.provider == Provider::OpenAi).then(|| {
+                std::env::temp_dir().join(format!("besfa-org-{}-{id}.txt", std::process::id()))
+            });
+            if let Some(answer) = &answer {
+                args.extend(["--output-last-message".into(), answer.display().to_string()]);
+            }
             invocations.push((program, args, env));
+            answers.push(answer);
         }
         for node in &mut self.org.nodes {
             node.output.clear();
@@ -754,14 +779,20 @@ impl OrgPanel {
             invocations,
             next: 0,
             process: None,
+            answers,
+            stopped: false,
             directory: directory.into(),
             watched: (watch.clone(), modified(&watch)),
         });
     }
 
+    /// Stops the agent at work, and keeps the next one from starting.
     pub fn stop(&mut self) {
-        if let Some(process) = self.run.as_ref().and_then(|run| run.process.as_ref()) {
-            process.stop();
+        if let Some(run) = &mut self.run {
+            run.stopped = true;
+            if let Some(process) = &run.process {
+                process.stop();
+            }
         }
     }
 
@@ -770,6 +801,9 @@ impl OrgPanel {
     /// watched file.
     pub fn poll(&mut self, ctx: &egui::Context) -> Option<bool> {
         let run = self.run.as_mut()?;
+        if run.process.is_none() && run.stopped {
+            return self.finish();
+        }
         if run.process.is_none() {
             let id = run.order.get(run.next).copied();
             if let Some(id) = id {
@@ -808,10 +842,25 @@ impl OrgPanel {
                 }
                 Output::Exit(code) => {
                     run.process = None;
+                    let answer = run.answers[run.next].take();
+                    let text = answer
+                        .as_ref()
+                        .and_then(|file| fs::read_to_string(file).ok());
+                    if let Some(file) = &answer {
+                        let _ = fs::remove_file(file);
+                    }
+                    if run.stopped {
+                        node.output.push_str("Stopped.");
+                        node.state = NodeState::Failed;
+                        return self.finish();
+                    }
                     if code != 0 {
                         node.output.push_str(&format!("Exited with code {code}."));
                         node.state = NodeState::Failed;
                         return self.finish();
+                    }
+                    if let Some(text) = text {
+                        node.output = text;
                     }
                     node.state = NodeState::Done;
                     run.next += 1;
@@ -978,6 +1027,10 @@ impl OrgPanel {
     fn canvas(&mut self, ui: &mut Ui) {
         let (rect, background) =
             ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        // Nodes panned past the edge neither draw over the toolbar nor take
+        // its clicks: widgets only sense inside their clip rect.
+        let ui = &mut ui.new_child(UiBuilder::new().max_rect(rect));
+        ui.shrink_clip_rect(rect);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
         if background.dragged() {
@@ -1221,10 +1274,11 @@ impl OrgPanel {
                     .map(|node| node.id)
             });
             if let Some(target) = target
-                && !self.org.link(id, target)
                 && target != id
+                && !self.org.links.contains(&(id, target))
             {
-                self.error = Some("That link would make a loop.".into());
+                self.error =
+                    (!self.org.link(id, target)).then(|| "That link would make a loop.".into());
             }
         }
 
@@ -1567,15 +1621,32 @@ mod tests {
         org.link(code, test);
         let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-run.besfa"));
         panel.org = org;
-        // Each agent prints what it was sent; the last one fails.
-        let echo = || ("findstr".into(), vec!["/r".into(), ".".into()], vec![]);
+        // The designer logs noise and leaves its answer in a file, as codex
+        // does; the programmer prints what it was sent; the tester fails.
+        let answer =
+            std::env::temp_dir().join(format!("besfa-org-answer-{}.txt", std::process::id()));
+        let design_run = (
+            "cmd".into(),
+            vec![
+                "/c".into(),
+                format!(
+                    // No quotes: cmd would take them as part of the path.
+                    "echo Jumps cost stamina.>{}& echo noisy log",
+                    answer.display()
+                ),
+            ],
+            vec![],
+        );
+        let echo = ("findstr".into(), vec!["/r".into(), ".".into()], vec![]);
         let fail = ("cmd".into(), vec!["/c".into(), "exit 3".into()], vec![]);
         panel.run = Some(Run {
             task: "Add a jump.".into(),
             order: vec![design, code, test],
-            invocations: vec![echo(), echo(), fail],
+            invocations: vec![design_run, echo, fail],
             next: 0,
             process: None,
+            answers: vec![Some(answer.clone()), None, None],
+            stopped: false,
             directory: ".".into(),
             watched: ("none".into(), None),
         });
@@ -1590,14 +1661,48 @@ mod tests {
         assert!(!panel.running());
         let node = |id| panel.org.node(id).unwrap();
         assert_eq!(node(design).state, NodeState::Done);
-        // The programmer was sent the designer's whole report.
+        assert_eq!(node(design).output.trim(), "Jumps cost stamina.");
+        assert!(!answer.exists());
+        // The programmer was sent the designer's answer, without its log.
         assert!(
             node(code)
                 .output
-                .contains("## Game Designer\nYou are Game Designer")
+                .contains("## Game Designer\nJumps cost stamina.")
         );
+        assert!(!node(code).output.contains("noisy log"));
         assert_eq!(node(test).state, NodeState::Failed);
         assert!(node(test).output.contains("code 3"));
+    }
+
+    #[test]
+    fn a_stop_between_two_agents_starts_no_more() {
+        let (org, [design, code, _]) = studio();
+        let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-stop.besfa"));
+        panel.org = org;
+        let echo = || ("findstr".into(), vec!["/r".into(), ".".into()], vec![]);
+        panel.run = Some(Run {
+            task: "Add a jump.".into(),
+            order: vec![design, code],
+            invocations: vec![echo(), echo()],
+            next: 1,
+            process: None,
+            answers: vec![None, None],
+            stopped: false,
+            directory: ".".into(),
+            watched: ("none".into(), None),
+        });
+        panel.stop();
+        assert_eq!(panel.poll(&egui::Context::default()), Some(false));
+        assert_eq!(panel.org.node(code).unwrap().state, NodeState::Idle);
+    }
+
+    #[test]
+    fn drops_links_the_editor_cannot_make_when_reading() {
+        let (mut org, [design, code, _]) = studio();
+        org.links = vec![(design, code), (design, code), (code, design), (99, code)];
+        let org = org.tidy();
+        assert_eq!(org.links, [(design, code)]);
+        assert!(org.order().is_ok());
     }
 
     #[test]
