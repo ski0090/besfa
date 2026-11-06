@@ -7,7 +7,10 @@ use besfa_protocol::{ComponentData, TerrainBrush, TerrainTool};
 use eframe::egui::{self, RichText, Slider, Ui};
 use serde_json::{Value, json};
 
-use crate::panels::{MUTED, section};
+use crate::{
+    i18n::t,
+    panels::{MUTED, section},
+};
 
 pub const TERRAIN: &str = "besfa_editor_plugin::terrain::Terrain";
 
@@ -72,15 +75,17 @@ impl TerrainTools {
         section(ui, "Terrain");
         if !can_sculpt {
             ui.label(
-                RichText::new("Update besfa_editor_plugin in the game to sculpt terrain.")
-                    .color(MUTED),
+                RichText::new(t(
+                    "Update besfa_editor_plugin in the game to sculpt terrain.",
+                ))
+                .color(MUTED),
             );
             return None;
         }
         ui.horizontal_wrapped(|ui| {
             for (tool, label) in TOOLS {
                 let picked = self.tool == Some(tool);
-                if ui.add(egui::Button::selectable(picked, label)).clicked() {
+                if ui.add(egui::Button::selectable(picked, t(label))).clicked() {
                     self.tool = (!picked).then_some(tool);
                 }
             }
@@ -89,16 +94,18 @@ impl TerrainTools {
             Slider::new(&mut self.size, 0.5..=50.0)
                 .logarithmic(true)
                 .suffix(" m")
-                .text("Brush size"),
+                .text(t("Brush size")),
         );
-        ui.add(Slider::new(&mut self.strength, 0.05..=1.0).text("Strength"))
-            .on_hover_text("Raise and Lower: up to half the brush size in meters per stroke");
+        ui.add(Slider::new(&mut self.strength, 0.05..=1.0).text(t("Strength")))
+            .on_hover_text(t(
+                "Raise and Lower: up to half the brush size in meters per stroke",
+            ));
         let mut changed = None;
         if self.tool == Some(TerrainTool::Paint) {
             changed = self.layers(ui, terrain.value.as_ref()?);
         }
         if self.tool.is_some() {
-            ui.label(RichText::new("Paint to sculpt; hold Shift to invert.").color(MUTED));
+            ui.label(RichText::new(t("Paint to sculpt; hold Shift to invert.")).color(MUTED));
         }
         changed
     }
@@ -108,7 +115,7 @@ impl TerrainTools {
     fn layers(&mut self, ui: &mut Ui, terrain: &Value) -> Option<Value> {
         let layers = terrain["layers"].as_array().cloned().unwrap_or_default();
         self.layer = self.layer.min(layers.len().saturating_sub(1));
-        ui.label("Layers");
+        ui.label(t("Layers"));
         let mut changed = None;
         for (index, layer) in layers.iter().enumerate() {
             ui.horizontal(|ui| {
@@ -122,10 +129,10 @@ impl TerrainTools {
                     }
                     None => {
                         ui.label(RichText::new("?").color(MUTED))
-                            .on_hover_text("Set as another color space in the file");
+                            .on_hover_text(t("Set as another color space in the file"));
                     }
                 }
-                let label = format!("Layer {}", index + 1);
+                let label = t("Layer {}").replace("{}", &(index + 1).to_string());
                 if ui
                     .add(egui::Button::selectable(self.layer == index, label))
                     .clicked()
@@ -136,8 +143,8 @@ impl TerrainTools {
         }
         let full = layers.len() >= MAX_LAYERS;
         let add = ui
-            .add_enabled(!full, egui::Button::new("➕ Add layer"))
-            .on_disabled_hover_text("A terrain has at most 4 layers.");
+            .add_enabled(!full, egui::Button::new(t("➕ Add layer")))
+            .on_disabled_hover_text(t("A terrain has at most 4 layers."));
         if add.clicked() {
             let mut layers = layers.clone();
             layers.push(srgba([255, 255, 255]));

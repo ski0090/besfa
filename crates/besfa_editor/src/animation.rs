@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    i18n::t,
     inspector::{Action, Inspected, commit_field, format_number, number_field},
     panels::{ACCENT, MUTED, section, tag},
 };
@@ -129,23 +130,23 @@ pub fn ui(ui: &mut Ui, scene: &Inspected) -> Option<Action> {
         if !scene.addable.iter().any(|t| t.path == MACHINE) {
             tag(
                 ui,
-                "Update besfa_editor_plugin in the game to play animation state machines.",
+                t("Update besfa_editor_plugin in the game to play animation state machines."),
             );
             return None;
         }
         tag(
             ui,
-            "Put a state machine on a placed glTF model to play its clips.",
+            t("Put a state machine on a placed glTF model to play its clips."),
         );
         return ui
-            .button("➕ Add state machine")
+            .button(t("➕ Add state machine"))
             .clicked()
             .then(|| Action::Insert(MACHINE.into()));
     };
     let Ok(machine) = serde_json::from_value::<Machine>(value.clone()) else {
         tag(
             ui,
-            "This state machine has a shape the editor does not know.",
+            t("This state machine has a shape the editor does not know."),
         );
         return None;
     };
@@ -166,7 +167,7 @@ pub fn ui(ui: &mut Ui, scene: &Inspected) -> Option<Action> {
 fn playing(ui: &mut Ui, params: &Value) {
     let state = params["state"].as_str().unwrap_or_default();
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Playing").small().color(MUTED));
+        ui.label(RichText::new(t("Playing")).small().color(MUTED));
         ui.label(RichText::new(state).strong().color(ACCENT));
     });
     let mut said: Vec<String> = Vec::new();
@@ -202,14 +203,19 @@ fn states(ui: &mut Ui, id: Id, machine: &mut Machine, clips: &[String]) {
             ui.horizontal(|ui| {
                 if index == 0 {
                     ui.label(RichText::new("▶").color(ACCENT))
-                        .on_hover_text("Plays first");
-                } else if ui.small_button("⏶").on_hover_text("Play first").clicked() {
+                        .on_hover_text(t("Plays first"));
+                } else if ui
+                    .small_button("⏶")
+                    .on_hover_text(t("Play first"))
+                    .clicked()
+                {
                     first = Some(index);
                 }
-                if ui.small_button("🗙").on_hover_text("Remove").clicked() {
+                if ui.small_button("🗙").on_hover_text(t("Remove")).clicked() {
                     removed = Some(index);
                 }
-                if let Some(name) = commit_field(ui, id.with("name"), &state.name, Some("Name ")) {
+                if let Some(name) = commit_field(ui, id.with("name"), &state.name, Some(t("Name ")))
+                {
                     renamed = Some((index, name));
                 }
             });
@@ -223,9 +229,9 @@ fn states(ui: &mut Ui, id: Id, machine: &mut Machine, clips: &[String]) {
                         }
                     })
                     .response
-                    .on_hover_text("The model's clip it plays");
-                ui.checkbox(&mut state.once, "Once")
-                    .on_hover_text("Plays once and holds its last pose");
+                    .on_hover_text(t("The model's clip it plays"));
+                ui.checkbox(&mut state.once, t("Once"))
+                    .on_hover_text(t("Plays once and holds its last pose"));
                 number(ui, id.with("speed"), &mut state.speed, Some("×"));
             });
         });
@@ -240,7 +246,7 @@ fn states(ui: &mut Ui, id: Id, machine: &mut Machine, clips: &[String]) {
     if let Some(index) = removed {
         machine.remove(index);
     }
-    if ui.button("➕ Add state").clicked() {
+    if ui.button(t("➕ Add state")).clicked() {
         let taken = |name: &str| machine.states.iter().any(|state| state.name == name);
         // An unused clip names it, else a number.
         let clip = clips.iter().find(|clip| !taken(clip)).cloned();
@@ -262,7 +268,7 @@ fn transitions(ui: &mut Ui, id: Id, machine: &mut Machine) {
     section(ui, "Transitions");
     tag(
         ui,
-        "Taken first in the list first, once every condition holds.",
+        t("Taken first in the list first, once every condition holds."),
     );
     let names: Vec<String> = machine
         .states
@@ -274,11 +280,11 @@ fn transitions(ui: &mut Ui, id: Id, machine: &mut Machine) {
         let id = id.with(index);
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                if ui.small_button("🗙").on_hover_text("Remove").clicked() {
+                if ui.small_button("🗙").on_hover_text(t("Remove")).clicked() {
                     removed = Some(index);
                 }
                 let from = if transition.from == ANY {
-                    "Any"
+                    t("Any")
                 } else {
                     &transition.from
                 };
@@ -286,8 +292,8 @@ fn transitions(ui: &mut Ui, id: Id, machine: &mut Machine) {
                     .selected_text(from.to_string())
                     .width(80.0)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut transition.from, ANY.into(), "Any")
-                            .on_hover_text("Any state but the one it goes to");
+                        ui.selectable_value(&mut transition.from, ANY.into(), t("Any"))
+                            .on_hover_text(t("Any state but the one it goes to"));
                         for name in &names {
                             ui.selectable_value(&mut transition.from, name.clone(), name);
                         }
@@ -307,18 +313,18 @@ fn transitions(ui: &mut Ui, id: Id, machine: &mut Machine) {
                     ui,
                     id.with("blend"),
                     &mut transition.blend,
-                    Some("Blend s "),
+                    Some(t("Blend s ")),
                 )
-                .on_hover_text("Crossfade seconds");
+                .on_hover_text(t("Crossfade seconds"));
                 number(
                     ui,
                     id.with("exit"),
                     &mut transition.exit_time,
-                    Some("Exit "),
+                    Some(t("Exit ")),
                 )
-                .on_hover_text(
+                .on_hover_text(t(
                     "How much of the clip plays first, 1 for once through; 0 for any time",
-                );
+                ));
             });
             conditions(ui, id.with("conditions"), &mut transition.conditions);
         });
@@ -326,7 +332,7 @@ fn transitions(ui: &mut Ui, id: Id, machine: &mut Machine) {
     if let Some(index) = removed {
         machine.transitions.remove(index);
     }
-    if ui.button("➕ Add transition").clicked() {
+    if ui.button(t("➕ Add transition")).clicked() {
         let end = |index: usize| {
             names
                 .get(index)
@@ -347,7 +353,7 @@ fn conditions(ui: &mut Ui, id: Id, conditions: &mut Vec<Condition>) {
     for (index, condition) in conditions.iter_mut().enumerate() {
         let id = id.with(index);
         ui.horizontal(|ui| {
-            if ui.small_button("🗙").on_hover_text("Remove").clicked() {
+            if ui.small_button("🗙").on_hover_text(t("Remove")).clicked() {
                 removed = Some(index);
             }
             ComboBox::from_id_salt(id.with("test"))
@@ -376,7 +382,7 @@ fn conditions(ui: &mut Ui, id: Id, conditions: &mut Vec<Condition>) {
     if let Some(index) = removed {
         conditions.remove(index);
     }
-    if ui.small_button("➕ Condition").clicked() {
+    if ui.small_button(t("➕ Condition")).clicked() {
         conditions.push(Condition::default());
     }
 }

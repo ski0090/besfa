@@ -22,6 +22,7 @@ use eframe::egui::{self, Button, Color32, DragValue, RichText, ScrollArea, Ui};
 use serde_json::{Value, json};
 
 use crate::{
+    i18n::t,
     inspector::{Action, Inspected, Inspector, TRANSFORM, euler_to_quat, quat_to_euler},
     panels::{ACCENT, ERROR, MUTED, Reimport, TEXT, panel_header, section, tag},
     project,
@@ -404,7 +405,7 @@ impl ModelPreview {
             show_all = (!self.hidden.is_empty() || self.solo.is_some())
                 && ui
                     .small_button("👁")
-                    .on_hover_text("Show all parts")
+                    .on_hover_text(t("Show all parts"))
                     .clicked();
         });
         if show_all {
@@ -449,7 +450,7 @@ impl ModelPreview {
             section(ui, "Light");
             ui.horizontal(|ui| {
                 for (light, label) in LIGHTS {
-                    if ui.selectable_label(self.light == light, label).clicked() {
+                    if ui.selectable_label(self.light == light, t(label)).clicked() {
                         self.light = light;
                         send.push(Command::PreviewLight { light });
                     }
@@ -551,9 +552,9 @@ impl ModelPreview {
                     }
                 });
             };
-        row(ui, "Position", &mut translation, 0.005, "");
-        row(ui, "Rotation", &mut angles, 0.5, "°");
-        row(ui, "Scale", &mut scale, 0.005, "");
+        row(ui, t("Position"), &mut translation, 0.005, "");
+        row(ui, t("Rotation"), &mut angles, 0.5, "°");
+        row(ui, t("Scale"), &mut scale, 0.005, "");
         if !changed {
             return None;
         }
@@ -572,21 +573,21 @@ impl ModelPreview {
         let id = |path: &str| self.id(path);
         ui.horizontal(|ui| {
             if ui
-                .button("Rest")
-                .on_hover_text("Put every part back the way the model loaded")
+                .button(t("Rest"))
+                .on_hover_text(t("Put every part back the way the model loaded"))
                 .clicked()
             {
                 send.extend(edits.rest(id));
             }
             ui.add(
                 egui::TextEdit::singleline(&mut pose_name)
-                    .hint_text("Pose name")
+                    .hint_text(t("Pose name"))
                     .desired_width(110.0),
             );
             let name = pose_name.trim().to_owned();
             if ui
-                .add_enabled(!name.is_empty(), Button::new("Save pose"))
-                .on_hover_text("Keep the parts' changed transforms under this name")
+                .add_enabled(!name.is_empty(), Button::new(t("Save pose")))
+                .on_hover_text(t("Keep the parts' changed transforms under this name"))
                 .clicked()
             {
                 edits.save_pose(&name);
@@ -598,16 +599,19 @@ impl ModelPreview {
             ui.horizontal(|ui| {
                 if ui
                     .small_button("▶")
-                    .on_hover_text("Pose the model")
+                    .on_hover_text(t("Pose the model"))
                     .clicked()
                 {
                     apply = Some(index);
                 }
                 ui.label(RichText::new(&pose.name).color(TEXT));
-                tag(ui, &format!("{} parts", pose.transforms.len()));
+                tag(
+                    ui,
+                    &t("{} parts").replace("{}", &pose.transforms.len().to_string()),
+                );
                 if ui
                     .small_button("🗙")
-                    .on_hover_text("Forget the pose")
+                    .on_hover_text(t("Forget the pose"))
                     .clicked()
                 {
                     delete = Some(index);
@@ -623,11 +627,12 @@ impl ModelPreview {
         if !edits.changes.is_empty() {
             let count = edits.changes.len();
             if ui
-                .button(format!(
-                    "Revert {count} change{}",
-                    if count == 1 { "" } else { "s" }
-                ))
-                .on_hover_text("Take back every change the panel made to the model")
+                .button(if count == 1 {
+                    t("Revert 1 change").to_owned()
+                } else {
+                    t("Revert {} changes").replace("{}", &count.to_string())
+                })
+                .on_hover_text(t("Take back every change the panel made to the model"))
                 .clicked()
             {
                 send.extend(edits.revert_all(id));
@@ -644,12 +649,12 @@ impl ModelPreview {
             return;
         };
         let mut changed = false;
-        const REST: &str = "None (rest pose)";
+        let rest = t("None (rest pose)");
         egui::ComboBox::from_id_salt("preview_clip")
-            .selected_text(if self.rest { REST } else { &clip.name })
+            .selected_text(if self.rest { rest } else { &clip.name })
             .width(ui.available_width())
             .show_ui(ui, |ui| {
-                if ui.selectable_label(self.rest, REST).clicked() && !self.rest {
+                if ui.selectable_label(self.rest, rest).clicked() && !self.rest {
                     self.rest = true;
                     // The rest pose undoes poses too.
                     self.replay = true;
@@ -679,16 +684,20 @@ impl ModelPreview {
         let mut time = self.now();
         ui.horizontal(|ui| {
             let (icon, tip) = if self.playing {
-                ("⏸", "Pause")
+                ("⏸", t("Pause"))
             } else {
-                ("▶", "Play")
+                ("▶", t("Play"))
             };
             if ui.button(icon).on_hover_text(tip).clicked() {
                 self.rebase(time);
                 self.playing = !self.playing;
                 changed = true;
             }
-            if ui.button("⏮").on_hover_text("Back to the start").clicked() {
+            if ui
+                .button("⏮")
+                .on_hover_text(t("Back to the start"))
+                .clicked()
+            {
                 self.rebase(0.0);
                 time = 0.0;
                 changed = true;
@@ -718,7 +727,7 @@ impl ModelPreview {
                     changed = true;
                 }
             }
-            if ui.checkbox(&mut self.looping, "Loop").changed() {
+            if ui.checkbox(&mut self.looping, t("Loop")).changed() {
                 self.rebase(time);
                 changed = true;
             }
@@ -732,7 +741,7 @@ impl ModelPreview {
         section(ui, "View");
         ui.horizontal_wrapped(|ui| {
             for (view, label, tip) in VIEWS {
-                if ui.button(label).on_hover_text(tip).clicked() {
+                if ui.button(t(label)).on_hover_text(t(tip)).clicked() {
                     self.view = view;
                     send.push(Command::PreviewView { view });
                 }
@@ -740,8 +749,8 @@ impl ModelPreview {
         });
         ui.horizontal(|ui| {
             if ui
-                .button("📷 Screenshot")
-                .on_hover_text(format!("Save what the viewport shows to {SCREENSHOTS}/"))
+                .button(t("📷 Screenshot"))
+                .on_hover_text(t("Save what the viewport shows to {}/").replace("{}", SCREENSHOTS))
                 .clicked()
             {
                 let path = self.next_screenshot();
@@ -751,7 +760,7 @@ impl ModelPreview {
                 Some(Ok(path)) => {
                     if ui
                         .small_button("🗁")
-                        .on_hover_text("Open the screenshots folder")
+                        .on_hover_text(t("Open the screenshots folder"))
                         .clicked()
                     {
                         project::reveal(&self.project.join(SCREENSHOTS).to_string_lossy());
@@ -770,20 +779,20 @@ impl ModelPreview {
         section(ui, "Overlays");
         let before = self.overlays;
         ui.horizontal_wrapped(|ui| {
-            let skeleton = format!("Skeleton ({})", model.joints.len());
+            let skeleton = t("Skeleton ({})").replace("{}", &model.joints.len().to_string());
             ui.add_enabled(
                 !model.joints.is_empty(),
                 egui::Checkbox::new(&mut self.overlays.skeleton, skeleton),
             );
-            let markers = format!("Markers ({})", model.markers.len());
+            let markers = t("Markers ({})").replace("{}", &model.markers.len().to_string());
             ui.add_enabled(
                 !model.markers.is_empty(),
                 egui::Checkbox::new(&mut self.overlays.markers, markers),
             )
-            .on_hover_text(
+            .on_hover_text(t(
                 "Parts that mark a place: leaves without a mesh, like Grip or ShotPoint",
-            );
-            ui.checkbox(&mut self.overlays.bounds, "Bounds");
+            ));
+            ui.checkbox(&mut self.overlays.bounds, t("Bounds"));
         });
         if self.overlays != before {
             send.push(Command::PreviewOverlays(self.overlays));
@@ -798,7 +807,7 @@ impl ModelPreview {
                 .find(|part| part.id == id)
                 .map_or_else(String::new, EntityInfo::label)
         };
-        egui::CollapsingHeader::new(RichText::new("Marker positions").small().color(MUTED))
+        egui::CollapsingHeader::new(RichText::new(t("Marker positions")).small().color(MUTED))
             .id_salt("preview_markers")
             .show(ui, |ui| {
                 for marker in &model.markers {
@@ -828,7 +837,9 @@ impl ModelPreview {
         let root_label = RichText::new(format!("⛶ {}", self.name())).color(TEXT);
         if ui
             .selectable_label(self.selected == root, root_label)
-            .on_hover_text("The entity the model spawns under: add the game's components here")
+            .on_hover_text(t(
+                "The entity the model spawns under: add the game's components here",
+            ))
             .clicked()
         {
             pick = Some((self.selected != root).then_some(ROOT.to_owned()));
@@ -852,7 +863,7 @@ impl ModelPreview {
                         let eye = RichText::new("👁").color(if hidden { MUTED } else { TEXT });
                         if ui
                             .add(Button::new(eye).small().frame(false))
-                            .on_hover_text(if hidden { "Show" } else { "Hide" })
+                            .on_hover_text(if hidden { t("Show") } else { t("Hide") })
                             .clicked()
                         {
                             if !self.hidden.remove(path) {
@@ -863,7 +874,7 @@ impl ModelPreview {
                         let solo = self.solo.as_ref() == Some(path);
                         if ui
                             .add(Button::selectable(solo, "S").small())
-                            .on_hover_text("Show only this part")
+                            .on_hover_text(t("Show only this part"))
                             .clicked()
                         {
                             self.solo = (!solo).then(|| path.clone());
@@ -879,7 +890,7 @@ impl ModelPreview {
                         let selected = self.selected.as_ref() == Some(path);
                         if ui
                             .selectable_label(selected, label)
-                            .on_hover_text("Show its components and pose it")
+                            .on_hover_text(t("Show its components and pose it"))
                             .clicked()
                         {
                             pick = Some((!selected).then(|| path.clone()));
@@ -923,7 +934,7 @@ fn stats_ui(ui: &mut Ui, stats: &ModelStats, joints: usize) {
         counts += &format!(" · {joints} joints");
     }
     tag(ui, &counts);
-    let title = format!("Materials ({})", stats.materials.len());
+    let title = t("Materials ({})").replace("{}", &stats.materials.len().to_string());
     egui::CollapsingHeader::new(RichText::new(title).small().color(MUTED))
         .id_salt("preview_materials")
         .show(ui, |ui| {
@@ -937,7 +948,7 @@ fn stats_ui(ui: &mut Ui, stats: &ModelStats, joints: usize) {
                         2.0,
                         Color32::from_rgba_unmultiplied(r, g, b, a),
                     );
-                    let name = material.name.as_deref().unwrap_or("Unnamed");
+                    let name = material.name.as_deref().unwrap_or(t("Unnamed"));
                     ui.label(RichText::new(name).small().color(TEXT))
                         .on_hover_text(format!("#{r:02X}{g:02X}{b:02X}, alpha {a}"));
                     let meshes = material.meshes;

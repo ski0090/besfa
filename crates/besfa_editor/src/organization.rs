@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     agent::{self, AgentSettings, Agents, Provider},
+    i18n::t,
     panels,
     process::{CliProcess, Output},
 };
@@ -52,13 +53,13 @@ impl Effort {
     ];
 
     fn label(self) -> &'static str {
-        match self {
+        t(match self {
             Effort::Default => "CLI default",
             Effort::Low => "Low",
             Effort::Medium => "Medium",
             Effort::High => "High",
             Effort::Max => "Max",
-        }
+        })
     }
 
     /// The flags that ask `provider` for this effort. Gemini's CLI has none.
@@ -102,14 +103,14 @@ impl Department {
     ];
 
     fn label(self) -> &'static str {
-        match self {
+        t(match self {
             Department::Leadership => "Leadership",
             Department::Design => "Design",
             Department::Programming => "Programming",
             Department::ArtAudio => "Art & Audio",
             Department::Quality => "Quality",
             Department::Operations => "Operations",
-        }
+        })
     }
 
     fn color(self) -> Color32 {
@@ -568,7 +569,7 @@ impl Organization {
                 .nodes
                 .iter()
                 .find(|node| waiting.get(&node.id) == Some(&0))
-                .ok_or("The links make a loop.")?
+                .ok_or(t("The links make a loop."))?
                 .id;
             waiting.remove(&next);
             for &(from, to) in &self.links {
@@ -938,9 +939,9 @@ impl OrgPanel {
 
     fn palette(&mut self, ui: &mut Ui) {
         ui.add_space(4.0);
-        ui.label(RichText::new("Roles").strong());
+        ui.label(RichText::new(t("Roles")).strong());
         ui.label(
-            RichText::new("Claude Code Game Studios' agents. Click one to add it.")
+            RichText::new(t("Claude Code Game Studios' agents. Click one to add it."))
                 .small()
                 .color(panels::MUTED),
         );
@@ -948,7 +949,7 @@ impl OrgPanel {
         let running = self.running();
         egui::ScrollArea::vertical().show(ui, |ui| {
             if ui
-                .add_enabled(!running, egui::Button::new("+ Custom agent"))
+                .add_enabled(!running, egui::Button::new(t("+ Custom agent")))
                 .clicked()
             {
                 let id = self.org.add("", self.drop_point(ui));
@@ -982,26 +983,26 @@ impl OrgPanel {
         ui.horizontal_wrapped(|ui| {
             let can_group = !self.selected.is_empty() && !running;
             if ui
-                .add_enabled(can_group, egui::Button::new("Group selection"))
-                .on_hover_text("Puts a box around the selected agents.")
+                .add_enabled(can_group, egui::Button::new(t("Group selection")))
+                .on_hover_text(t("Puts a box around the selected agents."))
                 .clicked()
             {
                 self.group_selection();
             }
             if ui
-                .add_enabled(can_group, egui::Button::new("Delete"))
+                .add_enabled(can_group, egui::Button::new(t("Delete")))
                 .clicked()
             {
                 for id in std::mem::take(&mut self.selected) {
                     self.org.remove(id);
                 }
             }
-            if ui.button("Center view").clicked() {
+            if ui.button(t("Center view")).clicked() {
                 self.pan = Vec2::ZERO;
             }
             ui.label(
                 RichText::new(
-                    "Drag from an agent's right pin to another agent to hand it the result. Right-click a pin to unlink it. Shift-click selects more.",
+                    t("Drag from an agent's right pin to another agent to hand it the result. Right-click a pin to unlink it. Shift-click selects more."),
                 )
                 .small()
                 .color(panels::MUTED),
@@ -1065,7 +1066,7 @@ impl OrgPanel {
             painter.text(
                 rect.center() - Vec2::new(0.0, 20.0),
                 Align2::CENTER_CENTER,
-                "Add agents from the roles on the left.",
+                t("Add agents from the roles on the left."),
                 FontId::proportional(14.0),
                 panels::MUTED,
             );
@@ -1074,7 +1075,7 @@ impl OrgPanel {
                 Vec2::new(160.0, 26.0),
             );
             if ui
-                .put(button, egui::Button::new("Start with a studio"))
+                .put(button, egui::Button::new(t("Start with a studio")))
                 .clicked()
             {
                 self.org.starter();
@@ -1132,7 +1133,7 @@ impl OrgPanel {
                 group.max = (Pos2::from(group.max) + delta).into();
             }
             title.context_menu(|ui| {
-                if ui.button("Remove group").clicked() {
+                if ui.button(t("Remove group")).clicked() {
                     removed = Some(id);
                     ui.close();
                 }
@@ -1248,16 +1249,18 @@ impl OrgPanel {
         let base = ui.id().with(("org_node", id));
         let inlet = ui
             .interact(pin_rect(input_pin), base.with("in"), Sense::click())
-            .on_hover_text(
+            .on_hover_text(t(
                 "Takes the results of the agents linked into it. Right-click to unlink.",
-            );
+            ));
         let outlet = ui
             .interact(
                 pin_rect(output_pin),
                 base.with("out"),
                 Sense::click_and_drag(),
             )
-            .on_hover_text("Drag to an agent to hand it this one's result. Right-click to unlink.");
+            .on_hover_text(t(
+                "Drag to an agent to hand it this one's result. Right-click to unlink.",
+            ));
         if !running {
             if inlet.secondary_clicked() {
                 self.org.links.retain(|&(_, to)| to != id);
@@ -1284,7 +1287,7 @@ impl OrgPanel {
                 && !self.org.links.contains(&(id, target))
             {
                 self.error =
-                    (!self.org.link(id, target)).then(|| "That link would make a loop.".into());
+                    (!self.org.link(id, target)).then(|| t("That link would make a loop.").into());
             }
         }
 
@@ -1322,7 +1325,7 @@ impl OrgPanel {
         let mut remove = false;
         title.context_menu(|ui| {
             if ui
-                .add_enabled(!running, egui::Button::new("Delete agent"))
+                .add_enabled(!running, egui::Button::new(t("Delete agent")))
                 .clicked()
             {
                 remove = true;
@@ -1346,7 +1349,7 @@ impl OrgPanel {
             ui.spacing_mut().interact_size.y = 20.0;
             node_model_picker(ui, id, node);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Effort").small().color(panels::MUTED));
+                ui.label(RichText::new(t("Effort")).small().color(panels::MUTED));
                 egui::ComboBox::from_id_salt(("org_effort", id))
                     .selected_text(node.effort.label())
                     .width(110.0)
@@ -1368,17 +1371,17 @@ impl OrgPanel {
                 ui.label(RichText::new(role).small().color(panels::MUTED));
             }
             NodeState::Waiting => {
-                ui.label(RichText::new("waiting").small().color(panels::MUTED));
+                ui.label(RichText::new(t("waiting")).small().color(panels::MUTED));
             }
             NodeState::Running => {
                 ui.spinner();
-                ui.label(RichText::new("working").small().color(panels::GOOD));
+                ui.label(RichText::new(t("working")).small().color(panels::GOOD));
             }
             NodeState::Done => {
-                ui.label(RichText::new("done").small().color(panels::GOOD));
+                ui.label(RichText::new(t("done")).small().color(panels::GOOD));
             }
             NodeState::Failed => {
-                ui.label(RichText::new("failed").small().color(panels::ERROR));
+                ui.label(RichText::new(t("failed")).small().color(panels::ERROR));
             }
         });
     }
@@ -1391,7 +1394,7 @@ impl OrgPanel {
         {
             ui.add_space(4.0);
             ui.add_enabled_ui(!running, |ui| {
-                ui.label(RichText::new("Agent").strong());
+                ui.label(RichText::new(t("Agent")).strong());
                 ui.add(egui::TextEdit::singleline(&mut node.name).desired_width(f32::INFINITY));
                 if let Some(role) = find_role(&node.role) {
                     ui.horizontal(|ui| {
@@ -1408,27 +1411,27 @@ impl OrgPanel {
                     });
                 }
                 ui.add_space(4.0);
-                ui.label(RichText::new("Role").small().color(panels::MUTED));
+                ui.label(RichText::new(t("Role")).small().color(panels::MUTED));
                 ui.add(
                     egui::TextEdit::multiline(&mut node.instructions)
                         .desired_rows(5)
                         .desired_width(f32::INFINITY)
-                        .hint_text("What this agent does in the team."),
+                        .hint_text(t("What this agent does in the team.")),
                 );
                 if node.provider == Provider::Gemini && node.effort != Effort::Default {
                     ui.colored_label(
                         panels::WARNING,
-                        "Gemini's CLI has no effort setting; it is left out.",
+                        t("Gemini's CLI has no effort setting; it is left out."),
                     );
                 }
             });
             ui.add_space(6.0);
-            ui.label(RichText::new("Last result").small().color(panels::MUTED));
+            ui.label(RichText::new(t("Last result")).small().color(panels::MUTED));
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
                     if node.output.is_empty() {
-                        ui.colored_label(panels::MUTED, "Nothing yet.");
+                        ui.colored_label(panels::MUTED, t("Nothing yet."));
                     } else {
                         ui.label(RichText::new(&node.output).color(panels::TEXT));
                     }
@@ -1437,15 +1440,15 @@ impl OrgPanel {
             && let Some(group) = self.org.groups.iter_mut().find(|group| group.id == id)
         {
             ui.add_space(4.0);
-            ui.label(RichText::new("Group").strong());
+            ui.label(RichText::new(t("Group")).strong());
             ui.add(egui::TextEdit::singleline(&mut group.name).desired_width(f32::INFINITY));
             ui.horizontal(|ui| {
-                ui.label("Color");
+                ui.label(t("Color"));
                 ui.color_edit_button_srgb(&mut group.color);
             });
             if ui
-                .button("Remove group")
-                .on_hover_text("Keeps the agents inside.")
+                .button(t("Remove group"))
+                .on_hover_text(t("Keeps the agents inside."))
                 .clicked()
             {
                 self.org.groups.retain(|group| group.id != id);
@@ -1465,20 +1468,20 @@ impl OrgPanel {
                 egui::TextEdit::multiline(&mut self.task)
                     .desired_rows(2)
                     .desired_width(ui.available_width() - 90.0)
-                    .hint_text("A task for the whole organization. Each agent does its part in link order."),
+                    .hint_text(t("A task for the whole organization. Each agent does its part in link order.")),
             );
             let shortcut = field.has_focus()
                 && ui.input(|input| input.modifiers.command && input.key_pressed(egui::Key::Enter));
             ui.vertical(|ui| {
                 if self.running() {
-                    if ui.button("Stop").clicked() {
+                    if ui.button(t("Stop")).clicked() {
                         self.stop();
                     }
                     return;
                 }
                 let can_run =
                     blocked.is_none() && !self.task.trim().is_empty() && !self.org.nodes.is_empty();
-                let button = ui.add_enabled(can_run, egui::Button::new("Run"));
+                let button = ui.add_enabled(can_run, egui::Button::new(t("Run")));
                 if can_run && (button.clicked() || shortcut) {
                     send = Some(self.task.trim().to_string());
                 }

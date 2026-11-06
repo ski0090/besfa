@@ -15,6 +15,7 @@ use eframe::egui::{
 };
 
 use crate::{
+    i18n::t,
     process::{Prebuild, PrebuildPhase},
     scene::Scene,
 };
@@ -30,7 +31,7 @@ pub const ERROR: Color32 = Color32::from_rgb(0xF2, 0x8B, 0x82);
 pub fn panel_header(ui: &mut Ui, title: &str, actions: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new(title.to_uppercase())
+            RichText::new(t(title).to_uppercase())
                 .small()
                 .strong()
                 .color(MUTED),
@@ -99,7 +100,11 @@ fn tree_row<T>(
             let (id, open) = fold(row);
             let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, open);
             let response = state.show_toggle_button(ui, paint_default_icon);
-            let label = if state.is_open() { "Fold" } else { "Unfold" };
+            let label = if state.is_open() {
+                t("Fold")
+            } else {
+                t("Unfold")
+            };
             response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
             state.store(ui.ctx());
         } else {
@@ -111,11 +116,11 @@ fn tree_row<T>(
 
 pub fn section(ui: &mut Ui, title: &str) {
     ui.add_space(8.0);
-    ui.label(RichText::new(title).small().strong().color(MUTED));
+    ui.label(RichText::new(t(title)).small().strong().color(MUTED));
 }
 
 pub fn tag(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).small().color(MUTED));
+    ui.label(RichText::new(t(text)).small().color(MUTED));
 }
 
 /// The prebuild's message with a spinner, check or warning, for a
@@ -123,9 +128,9 @@ pub fn tag(ui: &mut Ui, text: &str) {
 pub fn prebuild_status(ui: &mut Ui, prebuild: &Prebuild) {
     let text = match (prebuild.phase, prebuild.progress) {
         (PrebuildPhase::Running, Some(progress)) => {
-            format!("{}% · {}", (progress * 100.0).floor(), prebuild.message)
+            format!("{}% · {}", (progress * 100.0).floor(), t(&prebuild.message))
         }
-        _ => prebuild.message.clone(),
+        _ => t(&prebuild.message).to_owned(),
     };
     // Truncated, so a long cargo line does not push the rest away.
     ui.add(Label::new(RichText::new(text).small().color(MUTED)).truncate());
@@ -183,11 +188,16 @@ pub fn hierarchy(
             (
                 can_save_prefab,
                 "📦",
-                "Save as prefab",
+                t("Save as prefab"),
                 HierarchyAction::SavePrefab,
             ),
-            (true, "🗑", "Delete (Delete)", HierarchyAction::Delete),
-            (true, "🗐", "Duplicate (Ctrl+D)", HierarchyAction::Duplicate),
+            (true, "🗑", t("Delete (Delete)"), HierarchyAction::Delete),
+            (
+                true,
+                "🗐",
+                t("Duplicate (Ctrl+D)"),
+                HierarchyAction::Duplicate,
+            ),
         ];
         for (shown, icon, tip, act) in buttons {
             if shown
@@ -204,13 +214,13 @@ pub fn hierarchy(
                 if spawn_protocol(kind) > protocol {
                     continue;
                 }
-                if ui.button(label).clicked() {
+                if ui.button(t(label)).clicked() {
                     action = Some(HierarchyAction::Spawn(kind));
                 }
             }
         })
         .response
-        .on_hover_text("Add entity");
+        .on_hover_text(t("Add entity"));
     });
     let rows = scene.rows();
     let entity = |&(at, _): &(usize, usize)| &scene.entities[at];
@@ -318,11 +328,11 @@ impl Reimport {
         match self {
             Reimport::Running => {
                 ui.add(egui::Spinner::new().size(10.0))
-                    .on_hover_text("Reimporting");
+                    .on_hover_text(t("Reimporting"));
             }
             Reimport::Done(at) if at.elapsed() < REIMPORTED_SHOWN => {
                 ui.label(RichText::new("✔").small().color(GOOD))
-                    .on_hover_text("Reimported");
+                    .on_hover_text(t("Reimported"));
             }
             Reimport::Done(_) => {}
             Reimport::Failed(error) => {
@@ -499,7 +509,7 @@ impl AssetBrowser {
         } = self;
         let Some(rows) = rows else {
             ui.centered_and_justified(|ui| {
-                ui.label(RichText::new("No assets folder").color(MUTED))
+                ui.label(RichText::new(t("No assets folder")).color(MUTED))
             });
             return None;
         };
@@ -549,7 +559,7 @@ impl AssetBrowser {
                                 if let Some(texture) = &thumbnail {
                                     ui.image((texture.id(), egui::Vec2::splat(THUMBNAIL_TIP)));
                                 }
-                                ui.label("Double-click to preview");
+                                ui.label(t("Double-click to preview"));
                             });
                             if name.contains_pointer()
                                 && ui.input(|i| {
@@ -561,7 +571,7 @@ impl AssetBrowser {
                         }
                         if ui
                             .small_button("➕")
-                            .on_hover_text("Add to scene")
+                            .on_hover_text(t("Add to scene"))
                             .clicked()
                         {
                             action = Some(AssetAction::Add(row.path.clone()));
