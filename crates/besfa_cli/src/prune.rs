@@ -60,7 +60,7 @@ impl Locked {
     fn in_use(&self, source: &str) -> bool {
         let source = source.replace('\\', "/");
         let parts: Vec<&str> = source.split('/').collect();
-        for (i, window) in parts.windows(4).enumerate() {
+        for window in parts.windows(4) {
             match window {
                 // registry/src/<index>/<name>-<version>/...
                 ["registry", "src", _, package] => return self.registry.contains(*package),
@@ -71,7 +71,6 @@ impl Locked {
                         .iter()
                         .any(|locked| locked.starts_with(revision));
                 }
-                _ if i + 4 == parts.len() => break,
                 _ => {}
             }
         }
@@ -146,8 +145,10 @@ pub(crate) fn prune(target: &Path, locked: &Locked) -> io::Result<Pruned> {
         // even if a file below fails to go.
         for fingerprint in &fingerprints {
             if fingerprint.to_string_lossy().ends_with(&format!("-{hash}")) {
-                pruned.bytes += dir_size(fingerprint);
-                let _ = fs::remove_dir_all(fingerprint);
+                let bytes = dir_size(fingerprint);
+                if fs::remove_dir_all(fingerprint).is_ok() {
+                    pruned.bytes += bytes;
+                }
             }
         }
         for file in &files {
