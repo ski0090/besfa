@@ -131,6 +131,7 @@ pub fn prebuild_status(ui: &mut Ui, prebuild: &Prebuild) {
     ui.add(Label::new(RichText::new(text).small().color(MUTED)).truncate());
     match prebuild.phase {
         PrebuildPhase::Running => ui.add(egui::Spinner::new().size(12.0)),
+        PrebuildPhase::Stopped => ui.label(RichText::new("⏸").color(MUTED)),
         PrebuildPhase::Ready => ui.label(RichText::new("✔").color(ACCENT)),
         PrebuildPhase::Failed => ui.label(RichText::new("⚠").color(ERROR)),
     };

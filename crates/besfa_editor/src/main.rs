@@ -26,7 +26,12 @@ use eframe::{
     egui_wgpu, wgpu,
 };
 
-use crate::{editor::Editor, hub::Hub, process::Prebuild, project::RecentProjects};
+use crate::{
+    editor::Editor,
+    hub::Hub,
+    process::{Prebuild, PrebuildPhase},
+    project::RecentProjects,
+};
 
 fn main() -> eframe::Result {
     kill_children_with_editor();
@@ -66,7 +71,8 @@ fn main() -> eframe::Result {
 
 struct App {
     render: Option<egui_wgpu::RenderState>,
-    /// Shown on every page; the editor's game waits for it.
+    /// Shown on every page; it runs while the hub shows and stops for a
+    /// project's build.
     prebuild: Prebuild,
     page: Page,
     recent: RecentProjects,
@@ -83,12 +89,17 @@ impl eframe::App for App {
         self.prebuild.poll();
         let next = match &mut self.page {
             Page::Hub(hub) => hub.ui(ui, &self.recent, &self.prebuild).map(|project| {
+                // The project builds now; the prebuild resumes in the hub.
+                self.prebuild.stop();
                 let editor = Editor::new(project, self.render.clone(), &self.prebuild, ui.ctx());
                 Page::Editor(Box::new(editor))
             }),
-            Page::Editor(editor) => editor
-                .ui(ui, &self.prebuild)
-                .then(|| Page::Hub(Hub::new(&self.recent))),
+            Page::Editor(editor) => editor.ui(ui, &self.prebuild).then(|| {
+                if self.prebuild.phase == PrebuildPhase::Stopped {
+                    self.prebuild = Prebuild::start(ui.ctx());
+                }
+                Page::Hub(Hub::new(&self.recent))
+            }),
         };
         // Dropping the editor stops its game.
         if let Some(next) = next {
