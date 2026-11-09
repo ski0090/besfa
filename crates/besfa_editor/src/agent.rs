@@ -13,7 +13,7 @@ use std::{
     time::SystemTime,
 };
 
-use eframe::egui::{self, Key, RichText, Ui};
+use eframe::egui::{self, Color32, Key, RichText, Ui};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use windows::{
@@ -26,6 +26,7 @@ use windows::{
 
 use crate::{
     i18n::t,
+    organization::OrgPanel,
     panels,
     process::{self, CliProcess, Output},
 };
@@ -748,10 +749,15 @@ fn mcp_servers(file: &Path) -> Result<Vec<(String, String)>, String> {
         .collect())
 }
 
-/// One turn of a chat: what the user sent, or what the agent printed back.
-struct Message {
-    user: bool,
-    text: String,
+/// One turn of a chat: what the user sent, or what an agent printed back.
+#[derive(Default)]
+pub struct Message {
+    pub user: bool,
+    pub text: String,
+    /// What the agent thought and did on the way, folded under its name.
+    pub thoughts: String,
+    /// The organization agent that said it, and its color.
+    pub speaker: Option<(String, Color32)>,
 }
 
 #[derive(Default)]
@@ -783,7 +789,11 @@ impl Chat {
         }
         let mut input = String::from("Earlier in this conversation:\n\n");
         for message in &self.messages {
-            let who = if message.user { "User" } else { "You" };
+            let who = match &message.speaker {
+                _ if message.user => "User",
+                Some((name, _)) => name,
+                None => "You",
+            };
             input.push_str(&format!("{who}: {}\n\n", message.text));
         }
         input.push_str(&format!("Now the user says:\n\n{prompt}"));
@@ -796,6 +806,8 @@ impl Chat {
 #[derive(Default)]
 pub struct AgentPanel {
     prompt: String,
+    /// The organization prompts go to, in place of the picked model.
+    organization: Option<String>,
     run: Option<CliProcess>,
     chat: Chat,
     /// Earlier chats, newest last. ponytail: kept until the editor closes;
@@ -824,6 +836,7 @@ impl AgentPanel {
                 .map(|(user, text)| Message {
                     user: *user,
                     text: text.to_string(),
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()
@@ -833,20 +846,28 @@ impl AgentPanel {
             chat(&[(true, "Make the terrain greener")]),
             chat(&[(true, "Add a spawn point for the zombie")]),
         ];
-        panel.chat = chat(&[
-            (
-                true,
-                "Put a rock pile next to the oak tree.
-
-Attached files:
-assets/prefabs/rock-pile.scn.ron",
+        panel.chat = chat(&[(true, "Add a double jump to the player.")]);
+        let agent = |name: &str, color, thoughts: &str, text: &str| Message {
+            text: text.into(),
+            thoughts: thoughts.into(),
+            speaker: Some((name.into(), color)),
+            ..Default::default()
+        };
+        panel.chat.messages.extend([
+            agent(
+                "Game Designer",
+                Color32::from_rgb(0x4F, 0x86, 0x5A),
+                "[Read] design/gdd/movement.md",
+                "A second jump in the air costs 10 stamina, and lands softer than the first.",
             ),
-            (
-                false,
-                "I placed rock-pile.scn.ron 2 meters east of the oak tree and saved the scene.",
+            agent(
+                "Gameplay Programmer",
+                Color32::from_rgb(0x46, 0x6E, 0xA8),
+                "[Grep] fn jump\n[Edit] src/player.rs",
+                "",
             ),
         ]);
-        panel.attached = vec!["assets/models/small-stones.glb".into()];
+        panel.organization = Some("Studio".into());
         panel
     }
 
@@ -860,15 +881,8 @@ assets/prefabs/rock-pile.scn.ron",
         watch: PathBuf,
         ctx: &egui::Context,
     ) {
-        let input = self.chat.input(prompt);
-        self.chat.messages.push(Message {
-            user: true,
-            text: prompt.into(),
-        });
-        self.chat.messages.push(Message {
-            user: false,
-            text: String::new(),
-        });
+        let input = self.ask(prompt);
+        self.chat.messages.push(Message::default());
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let env: Vec<(&str, &str)> = env
             .iter()
@@ -882,6 +896,37 @@ assets/prefabs/rock-pile.scn.ron",
             }
             Err(error) => self.reply(&format!("Could not start {program}: {error}")),
         }
+    }
+
+    /// The organization prompts go to, if not the picked model.
+    pub fn organization(&self) -> Option<&str> {
+        self.organization.as_deref()
+    }
+
+    /// Adds the user's `prompt` to the chat and returns what goes to an
+    /// agent for it.
+    pub fn ask(&mut self, prompt: &str) -> String {
+        let input = self.chat.input(prompt);
+        self.chat.messages.push(Message {
+            user: true,
+            text: prompt.into(),
+            ..Default::default()
+        });
+        input
+    }
+
+    /// Adds a message from the editor, such as why the organization could
+    /// not start.
+    pub fn say(&mut self, text: &str) {
+        self.chat.messages.push(Message {
+            text: text.into(),
+            ..Default::default()
+        });
+    }
+
+    /// The chat the organization's agents answer in.
+    pub fn chat_messages(&mut self) -> &mut Vec<Message> {
+        &mut self.chat.messages
     }
 
     /// Adds a line to the agent's latest message.
@@ -934,23 +979,27 @@ assets/prefabs/rock-pile.scn.ron",
         }
     }
 
-    /// Shows the window's contents, where the provider and model are picked
-    /// too. Returns the prompt to send and every file attached in this chat,
-    /// unless `blocked` says why it cannot go.
+    /// Shows the window's contents, where the provider and model, or `org`,
+    /// are picked too. Returns the prompt to send and every file attached
+    /// in this chat, unless `blocked` says why it cannot go.
     pub fn ui(
         &mut self,
         ui: &mut Ui,
         settings: &mut AgentSettings,
         agents: &Agents,
         blocked: Option<&str>,
+        org: &mut OrgPanel,
     ) -> Option<(String, Vec<PathBuf>)> {
+        let busy = self.running() || org.running();
         if !self.sidebar_closed {
             egui::Panel::left("agent_history")
                 .default_size(190.0)
-                .show(ui, |ui| self.sidebar(ui));
+                .show(ui, |ui| self.sidebar(ui, busy));
         }
         let send = egui::Panel::bottom("agent_prompt")
-            .show(ui, |ui| self.prompt_card(ui, settings, agents, blocked))
+            .show(ui, |ui| {
+                self.prompt_card(ui, settings, agents, blocked, org)
+            })
             .inner;
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -964,22 +1013,22 @@ assets/prefabs/rock-pile.scn.ron",
                 }
                 // The sidebar's "+ New Agent" is gone while it is hidden.
                 let new = egui::Button::new(t("+ New")).small();
-                if ui.add_enabled(!self.running(), new).clicked() {
+                if ui.add_enabled(!busy, new).clicked() {
                     self.new_chat();
                 }
                 ui.label(RichText::new(self.chat.title()).strong());
             });
             ui.separator();
-            self.messages(ui);
+            self.messages(ui, busy);
         });
         send
     }
 
-    fn sidebar(&mut self, ui: &mut Ui) {
+    fn sidebar(&mut self, ui: &mut Ui, busy: bool) {
         ui.add_space(4.0);
         let new_agent =
             egui::Button::new(t("+ New Agent")).min_size(egui::vec2(ui.available_width(), 28.0));
-        if ui.add_enabled(!self.running(), new_agent).clicked() {
+        if ui.add_enabled(!busy, new_agent).clicked() {
             self.new_chat();
         }
         ui.add_space(6.0);
@@ -999,7 +1048,7 @@ assets/prefabs/rock-pile.scn.ron",
                     .frame(false)
                     .truncate()
                     .min_size(egui::vec2(ui.available_width(), 0.0));
-                if ui.add_enabled(!self.running(), row).clicked() {
+                if ui.add_enabled(!busy, row).clicked() {
                     open = Some(index);
                 }
             }
@@ -1010,7 +1059,7 @@ assets/prefabs/rock-pile.scn.ron",
         }
     }
 
-    fn messages(&self, ui: &mut Ui) {
+    fn messages(&self, ui: &mut Ui, busy: bool) {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .stick_to_bottom(true)
@@ -1021,6 +1070,7 @@ assets/prefabs/rock-pile.scn.ron",
                 }
                 let last = self.chat.messages.len().wrapping_sub(1);
                 for (index, message) in self.chat.messages.iter().enumerate() {
+                    let working = message.text.is_empty() && index == last && busy;
                     if message.user {
                         egui::Frame::new()
                             .fill(ui.visuals().extreme_bg_color)
@@ -1030,13 +1080,56 @@ assets/prefabs/rock-pile.scn.ron",
                                 ui.set_width(ui.available_width());
                                 ui.label(&message.text);
                             });
-                    } else if message.text.is_empty() && index == last && self.running() {
+                    } else if let Some((name, color)) = &message.speaker {
+                        // Like a team chat: the agent's initial, its name,
+                        // then what it said.
+                        ui.horizontal_top(|ui| {
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 6.0, *color);
+                            ui.painter().text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                name.chars().next().unwrap_or('?'),
+                                egui::FontId::proportional(15.0),
+                                Color32::WHITE,
+                            );
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(name).strong().color(*color));
+                                    if working {
+                                        ui.spinner();
+                                    }
+                                });
+                                self.thoughts(ui, index, message);
+                                ui.label(RichText::new(&message.text).color(panels::TEXT));
+                            });
+                        });
+                    } else if working {
                         ui.spinner();
                     } else {
                         ui.label(RichText::new(&message.text).color(panels::TEXT));
                     }
                     ui.add_space(8.0);
                 }
+            });
+    }
+
+    /// `message`'s thoughts, folded until clicked.
+    fn thoughts(&self, ui: &mut Ui, index: usize, message: &Message) {
+        if message.thoughts.is_empty() {
+            return;
+        }
+        let count = message.thoughts.lines().count();
+        let heading = format!("{} ({count})", t("Thoughts"));
+        egui::CollapsingHeader::new(RichText::new(heading).small().color(panels::MUTED))
+            .id_salt(("thoughts", self.history.len(), index))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(&message.thoughts)
+                        .small()
+                        .color(panels::MUTED),
+                );
             });
     }
 
@@ -1048,6 +1141,7 @@ assets/prefabs/rock-pile.scn.ron",
         settings: &mut AgentSettings,
         agents: &Agents,
         blocked: Option<&str>,
+        org: &mut OrgPanel,
     ) -> Option<(String, Vec<PathBuf>)> {
         if let Some(picking) = &self.picking {
             match picking.try_recv() {
@@ -1111,11 +1205,17 @@ assets/prefabs/rock-pile.scn.ron",
                         });
                         self.picking = Some(receiver);
                     }
-                    model_picker(ui, settings, agents);
+                    model_picker(ui, settings, agents, org.names(), &mut self.organization);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if let Some(run) = &self.run {
                             if ui.button(t("Stop")).clicked() {
                                 run.stop();
+                            }
+                            return;
+                        }
+                        if org.running() {
+                            if ui.button(t("Stop")).clicked() {
+                                org.stop();
                             }
                             return;
                         }
@@ -1158,14 +1258,24 @@ pub fn model_label(model: &str) -> &str {
 }
 
 /// One list of every provider's models: each provider's name and how it
-/// would be reached, then its models by name alone.
-fn model_picker(ui: &mut Ui, settings: &mut AgentSettings, agents: &Agents) {
+/// would be reached, then its models by name alone. Below them, the
+/// project's organizations by name.
+fn model_picker(
+    ui: &mut Ui,
+    settings: &mut AgentSettings,
+    agents: &Agents,
+    organizations: &[String],
+    organization: &mut Option<String>,
+) {
     let provider = settings.provider;
-    let selected = format!(
-        "{} · {}",
-        provider.label(),
-        model_label(settings.model(provider))
-    );
+    let selected = match organization {
+        Some(name) => format!("{} · {name}", t("Organization")),
+        None => format!(
+            "{} · {}",
+            provider.label(),
+            model_label(settings.model(provider))
+        ),
+    };
     egui::ComboBox::from_id_salt("agent_model")
         .selected_text(selected)
         // Every provider's models at once, without scrolling.
@@ -1194,15 +1304,29 @@ fn model_picker(ui: &mut Ui, settings: &mut AgentSettings, agents: &Agents) {
                 ui.label(heading);
                 ui.indent(provider.label(), |ui| {
                     for model in std::iter::once("").chain(provider.models().iter().copied()) {
-                        let current =
-                            settings.provider == provider && settings.model(provider) == model;
+                        let current = organization.is_none()
+                            && settings.provider == provider
+                            && settings.model(provider) == model;
                         if ui.selectable_label(current, model_label(model)).clicked() {
                             settings.provider = provider;
                             settings.models.insert(provider, model.into());
+                            *organization = None;
                         }
                     }
                 });
             }
+            ui.label(RichText::new(t("Organization")).strong());
+            ui.indent("organization", |ui| {
+                for name in organizations {
+                    let current = organization.as_ref() == Some(name);
+                    let team = ui.selectable_label(current, name).on_hover_text(t(
+                        "Each agent answers in the chat, in link order. Set them up in the Organization tab.",
+                    ));
+                    if team.clicked() {
+                        *organization = Some(name.clone());
+                    }
+                }
+            });
         });
 }
 
@@ -1464,10 +1588,12 @@ mod tests {
                 Message {
                     user: true,
                     text: "Make the tower taller.".into(),
+                    ..Default::default()
                 },
                 Message {
                     user: false,
                     text: "Done.".into(),
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -1513,13 +1639,15 @@ mod tests {
         blocked: Option<&'static str>,
         sent: Option<String>,
         files: Vec<PathBuf>,
+        org: OrgPanel,
     }
 
     fn tab(blocked: Option<&'static str>) -> Harness<'static, Tab> {
         Harness::builder().build_ui_state(
             |ui, tab: &mut Tab| {
                 let blocked = tab.blocked;
-                if let Some(prompt) = tab.panel.ui(ui, &mut tab.settings, &tab.agents, blocked) {
+                let (settings, org) = (&mut tab.settings, &mut tab.org);
+                if let Some(prompt) = tab.panel.ui(ui, settings, &tab.agents, blocked, org) {
                     tab.sent = Some(prompt.0);
                     tab.files = prompt.1;
                 }
@@ -1531,6 +1659,7 @@ mod tests {
                 blocked,
                 sent: None,
                 files: Vec::new(),
+                org: OrgPanel::new(std::env::temp_dir().join("besfa-no-organization.besfa")),
             },
         )
     }
@@ -1541,6 +1670,7 @@ mod tests {
             messages: vec![Message {
                 user: true,
                 text: text.into(),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1580,6 +1710,7 @@ mod tests {
         harness.state_mut().panel.chat.messages.push(Message {
             user: true,
             text: "first".into(),
+            ..Default::default()
         });
         harness.run();
         harness.get_by_label("Hide history").click();
@@ -1656,5 +1787,39 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().settings.provider, Provider::OpenAi);
         assert_eq!(harness.state().settings.model(Provider::Claude), "opus");
+
+        harness.get_by_role(egui::accesskit::Role::ComboBox).click();
+        harness.run();
+        // The last is the organization, under the heading of the same name.
+        harness
+            .get_all_by_label("Organization")
+            .last()
+            .unwrap()
+            .click();
+        harness.run();
+        assert_eq!(harness.state().panel.organization(), Some("Organization"));
+    }
+
+    #[test]
+    fn shows_who_said_what_with_its_thoughts_folded() {
+        let mut harness = tab(None);
+        harness.state_mut().panel = AgentPanel::demo();
+        harness.run();
+        assert!(harness.query_by_label("Game Designer").is_some());
+        assert!(
+            harness
+                .query_by_label("[Read] design/gdd/movement.md")
+                .is_none()
+        );
+        harness.get_by_label("Thoughts (1)").click();
+        harness.run();
+        assert!(
+            harness
+                .query_by_label("[Read] design/gdd/movement.md")
+                .is_some()
+        );
+        // An agent's turn goes into the next prompt under its name.
+        let input = harness.state().panel.chat.input("Now a triple jump.");
+        assert!(input.contains("Game Designer: A second jump"));
     }
 }

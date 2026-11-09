@@ -446,11 +446,9 @@ fn korean(en: &str) -> Option<&'static str> {
         "These choices stay on this computer, not in the project, so a copy of it starts with GitHub off." => {
             "이 선택은 프로젝트가 아니라 이 컴퓨터에 남습니다. 그래서 프로젝트를 복사하면 GitHub는 꺼진 채로 시작합니다."
         }
-        "The organization is working on a task." => "조직이 작업 중입니다.",
         "Save the scene first. The agent may change its file." => {
             "먼저 씬을 저장하세요. 에이전트가 씬 파일을 바꿀 수 있습니다."
         }
-        "The chat's agent is still working." => "채팅 에이전트가 아직 작업 중입니다.",
         // Organization
         "Low" => "낮음",
         "Medium" => "보통",
@@ -511,10 +509,21 @@ fn korean(en: &str) -> Option<&'static str> {
         "Group" => "그룹",
         "Color" => "색상",
         "Keeps the agents inside." => "안의 에이전트는 남겨 둡니다.",
-        "A task for the whole organization. Each agent does its part in link order." => {
-            "조직 전체의 작업. 각 에이전트가 링크 순서대로 자기 몫을 합니다."
+        "The organization has no agents yet. Add them in the Organization tab." => {
+            "조직에 아직 에이전트가 없습니다. 조직 탭에서 추가하세요."
         }
-        "Run" => "실행",
+        "Each agent answers in the chat, in link order. Set them up in the Organization tab." => {
+            "에이전트마다 링크 순서대로 채팅에 답합니다. 에이전트는 조직 탭에서 구성하세요."
+        }
+        "There is no organization named \"{}\"." => "\"{}\" 조직이 없습니다.",
+        "A name cannot be empty or hold \\ / : * ? \" < > |" => {
+            "이름은 비울 수 없고 \\ / : * ? \" < > | 를 쓸 수 없습니다."
+        }
+        "Another organization has that name." => "같은 이름의 조직이 이미 있습니다.",
+        "+ New organization" => "+ 새 조직",
+        "Delete organization" => "조직 삭제",
+        "Name" => "이름",
+        "Thoughts" => "생각",
         // Project hub
         "Start creating" => "만들기 시작",
         "Create a new Besfa project or open one you already have." => {
