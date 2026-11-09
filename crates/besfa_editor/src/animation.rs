@@ -1,4 +1,4 @@
-//! The Animation tab: the selected model's animation state machine, which
+//! The animation window: the selected model's animation state machine, which
 //! the game plays on the model's clips. Its states and transitions are one
 //! component the panel sets as a whole, so undo, saving and `besfa_mcp`'s
 //! `set` treat it like any other component.
@@ -113,7 +113,7 @@ impl Machine {
     }
 }
 
-/// The tab for the selected entity; the change to make to it, if any.
+/// The window for the selected entity; the change to make to it, if any.
 pub fn ui(ui: &mut Ui, scene: &Inspected) -> Option<Action> {
     let Some(selected) = scene.selected.filter(|_| scene.entity.is_some()) else {
         tag(ui, "Select a placed model in the Hierarchy.");
@@ -418,7 +418,7 @@ mod tests {
         }
     }
 
-    /// The tab for an entity with `components`, and what it asked last.
+    /// The window for an entity with `components`, and what it asked last.
     fn tab(components: Vec<ComponentData>) -> Harness<'static, Option<Value>> {
         let entity = EntityInfo {
             id: 7,
