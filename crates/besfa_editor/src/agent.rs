@@ -750,18 +750,22 @@ fn mcp_servers(file: &Path) -> Result<Vec<(String, String)>, String> {
 }
 
 /// One turn of a chat: what the user sent, or what an agent printed back.
-#[derive(Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
 pub struct Message {
     pub user: bool,
     pub text: String,
     /// What the agent thought and did on the way, folded under its name.
     pub thoughts: String,
-    /// The organization agent that said it, and its color.
-    pub speaker: Option<(String, Color32)>,
+    /// The organization agent that said it, and its color as RGB.
+    pub speaker: Option<(String, [u8; 3])>,
 }
 
 #[derive(Default)]
 struct Chat {
+    /// Set once something is sent, so a paused organization run can find
+    /// the chat it answers in.
+    id: u64,
     messages: Vec<Message>,
     /// Every file sent in this chat. The resent chat names them all, so the
     /// CLI needs to reach them all.
@@ -808,6 +812,8 @@ pub struct AgentPanel {
     prompt: String,
     /// The organization prompts go to, in place of the picked model.
     organization: Option<String>,
+    /// Continue was clicked: the paused organization run goes on.
+    continuing: bool,
     run: Option<CliProcess>,
     chat: Chat,
     /// Earlier chats, newest last. ponytail: kept until the editor closes;
@@ -847,7 +853,7 @@ impl AgentPanel {
             chat(&[(true, "Add a spawn point for the zombie")]),
         ];
         panel.chat = chat(&[(true, "Add a double jump to the player.")]);
-        let agent = |name: &str, color, thoughts: &str, text: &str| Message {
+        let agent = |name: &str, color: [u8; 3], thoughts: &str, text: &str| Message {
             text: text.into(),
             thoughts: thoughts.into(),
             speaker: Some((name.into(), color)),
@@ -856,13 +862,13 @@ impl AgentPanel {
         panel.chat.messages.extend([
             agent(
                 "Game Designer",
-                Color32::from_rgb(0x4F, 0x86, 0x5A),
+                [0x4F, 0x86, 0x5A],
                 "[Read] design/gdd/movement.md",
                 "A second jump in the air costs 10 stamina, and lands softer than the first.",
             ),
             agent(
                 "Gameplay Programmer",
-                Color32::from_rgb(0x46, 0x6E, 0xA8),
+                [0x46, 0x6E, 0xA8],
                 "[Grep] fn jump\n[Edit] src/player.rs",
                 "",
             ),
@@ -906,6 +912,12 @@ impl AgentPanel {
     /// Adds the user's `prompt` to the chat and returns what goes to an
     /// agent for it.
     pub fn ask(&mut self, prompt: &str) -> String {
+        if self.chat.id == 0 {
+            // Unique enough to tell this project's chats apart.
+            self.chat.id = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(1, |time| time.as_nanos() as u64);
+        }
         let input = self.chat.input(prompt);
         self.chat.messages.push(Message {
             user: true,
@@ -913,6 +925,34 @@ impl AgentPanel {
             ..Default::default()
         });
         input
+    }
+
+    /// The shown chat, for an organization run to answer in.
+    pub fn chat_id(&self) -> u64 {
+        self.chat.id
+    }
+
+    /// Shows the chat a paused organization run answers in, sending to that
+    /// organization, as it was before the editor closed.
+    pub fn restore(&mut self, (id, messages): (u64, &[Message]), organization: &str) {
+        let mut messages = messages.to_vec();
+        // An agent the editor closed on said nothing yet.
+        for message in &mut messages {
+            if message.speaker.is_some() && message.text.is_empty() {
+                message.text = "Stopped.".into();
+            }
+        }
+        self.show_chat(Chat {
+            id,
+            messages,
+            files: Vec::new(),
+        });
+        self.organization = Some(organization.into());
+    }
+
+    /// Whether Continue was clicked since the last call.
+    pub fn take_continue(&mut self) -> bool {
+        std::mem::take(&mut self.continuing)
     }
 
     /// Adds a message from the editor, such as why the organization could
@@ -1080,7 +1120,8 @@ impl AgentPanel {
                                 ui.set_width(ui.available_width());
                                 ui.label(&message.text);
                             });
-                    } else if let Some((name, color)) = &message.speaker {
+                    } else if let Some((name, [r, g, b])) = &message.speaker {
+                        let color = &Color32::from_rgb(*r, *g, *b);
                         // Like a team chat: the agent's initial, its name,
                         // then what it said.
                         ui.horizontal_top(|ui| {
@@ -1221,6 +1262,20 @@ impl AgentPanel {
                         }
                         let can_send = blocked.is_none() && !self.prompt.trim().is_empty();
                         let button = ui.add_enabled(can_send, egui::Button::new(t("Send")));
+                        let paused = org
+                            .paused()
+                            .filter(|paused| self.chat.id != 0 && paused.chat().0 == self.chat.id);
+                        if let Some(paused) = paused {
+                            let resume = ui
+                                .add_enabled(blocked.is_none(), egui::Button::new(t("Continue")))
+                                .on_hover_text(
+                                    t("Runs the agents of {} that are not done yet, handing on what the others answered.")
+                                        .replace("{}", paused.organization()),
+                                );
+                            if resume.clicked() {
+                                self.continuing = true;
+                            }
+                        }
                         if can_send && (button.clicked() || shortcut) {
                             let mut prompt = std::mem::take(&mut self.prompt).trim().to_string();
                             let files = std::mem::take(&mut self.attached);
@@ -1659,7 +1714,9 @@ mod tests {
                 blocked,
                 sent: None,
                 files: Vec::new(),
-                org: OrgPanel::new(std::env::temp_dir().join("besfa-no-organization")),
+                org: OrgPanel::new(
+                    std::env::temp_dir().join("besfa-no-organization/organizations"),
+                ),
             },
         )
     }
@@ -1798,6 +1855,40 @@ mod tests {
             .click();
         harness.run();
         assert_eq!(harness.state().panel.organization(), Some("Organization"));
+    }
+
+    #[test]
+    fn continues_a_paused_run_in_its_chat_after_a_restart() {
+        let besfa = std::env::temp_dir().join(format!("besfa-paused-{}", std::process::id()));
+        fs::create_dir_all(&besfa).unwrap();
+        fs::write(
+            besfa.join("organization-run.ron"),
+            r#"(organization: "Studio", chat: 5, messages: [(user: true, text: "Add a jump."), (speaker: Some(("Producer", (1, 2, 3))))])"#,
+        )
+        .unwrap();
+        // What the editor does when it opens the project.
+        let org = OrgPanel::new(besfa.join("organizations"));
+        let mut panel = AgentPanel::default();
+        let paused = org.paused().unwrap();
+        panel.restore(paused.chat(), paused.organization());
+        assert_eq!(panel.chat.title(), "Add a jump.");
+        assert_eq!(panel.organization(), Some("Studio"));
+        assert_eq!(panel.chat.messages[1].text, "Stopped.");
+
+        let mut harness = tab(None);
+        harness.state_mut().org = org;
+        harness.state_mut().panel = panel;
+        harness.run();
+        harness.get_by_label("Continue").click();
+        harness.run();
+        assert!(harness.state_mut().panel.take_continue());
+        assert!(!harness.state_mut().panel.take_continue());
+
+        // Another chat has nothing to continue.
+        harness.get_by_label("+ New").click();
+        harness.run();
+        assert!(harness.query_by_label("Continue").is_none());
+        fs::remove_dir_all(&besfa).unwrap();
     }
 
     #[test]

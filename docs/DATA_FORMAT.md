@@ -161,6 +161,8 @@ my-game/
 
 Agent 창의 Organization 탭은 조직마다 에이전트 노드, 결과를 넘기는 링크, 그룹을 프로젝트의 `besfa/organizations/<조직 이름>.besfa`에 RON으로 저장한다. 파일 이름이 곧 조직 이름이므로, 이름을 바꾸면 파일 이름이 바뀌고 조직을 지우면 파일이 지워진다. 바뀌면 마우스 버튼이 눌려 있지 않을 때 쓴다. 드래그 중에는 버튼을 놓을 때 쓴다. 마지막 실행 결과는 저장하지 않는다. 파일을 읽지 못하면 빈 조직으로 시작한다. 조직이 하나도 없으면 빈 조직 하나로 시작하고, 에이전트를 더하면 그때 쓴다. 예전의 `besfa/organization.besfa`는 `besfa/organizations` 폴더가 없을 때 `besfa/organizations/Organization.besfa`로 옮긴다.
 
+조직 작업이 마지막 에이전트까지 끝나지 않고 멈추면(중지, 실패, 에디터를 닫음) 그 상태를 `besfa/organization-run.ron`에 RON으로 저장한다. 조직 이름, 작업, 첨부 파일, 끝난 에이전트마다 id와 답과 생각, 그리고 그 작업이 답하는 채팅의 id와 메시지를 담는다. 에이전트가 하나 시작하거나 끝날 때마다 다시 쓰고, 모든 에이전트가 끝나면 지운다. 에디터는 프로젝트를 열 때 이 파일이 있으면 그 채팅을 열고, 이어서 실행할 수 있게 한다. 새 작업을 시작하면 덮어쓴다.
+
 - `nodes`: `id`, `name`, `role`(CCGS 에이전트 이름, 직접 만든 노드는 빈 문자열), `instructions`, `provider`, `model`(빈 문자열은 CLI 기본값), `effort`(`Default`, `Low`, `Medium`, `High`, `Max`), `pos`(캔버스 좌표).
 - `links`: `(보내는 id, 받는 id)`. 고리를 만드는 링크는 추가하지 않는다.
 - `groups`: `id`, `name`, `min`, `max`(캔버스 좌표의 모서리), `color`(sRGB).

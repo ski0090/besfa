@@ -28,6 +28,9 @@ use crate::{
 /// Where a project keeps its organizations, one file each, named after it.
 pub const ORGANIZATIONS_DIR: &str = "besfa/organizations";
 
+/// Next to that folder: the last run, while it has agents left to go.
+const RUN_FILE: &str = "organization-run.ron";
+
 /// Characters a Windows file name cannot hold.
 const NOT_IN_NAMES: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
 
@@ -562,11 +565,7 @@ pub struct Organization {
 impl Organization {
     /// What `file` keeps, or an empty organization.
     pub fn read(file: &Path) -> Self {
-        fs::read_to_string(file)
-            .ok()
-            .and_then(|text| ron::from_str::<Self>(&text).ok())
-            .map(Self::tidy)
-            .unwrap_or_default()
+        read_ron(file).map(Self::tidy).unwrap_or_default()
     }
 
     /// Without links the editor cannot make, which a hand-edited or merged
@@ -587,12 +586,7 @@ impl Organization {
     }
 
     fn write(&self, file: &Path) -> Result<(), String> {
-        if let Some(folder) = file.parent() {
-            fs::create_dir_all(folder).map_err(|error| error.to_string())?;
-        }
-        let config = ron::ser::PrettyConfig::default().compact_arrays(true);
-        let text = ron::ser::to_string_pretty(self, config).map_err(|error| error.to_string())?;
-        fs::write(file, text).map_err(|error| error.to_string())
+        write_ron(file, self)
     }
 
     fn id(&mut self) -> u32 {
@@ -871,7 +865,11 @@ type Invocation = (String, Vec<String>, Vec<(String, String)>);
 /// agents on separate branches could run at once; run them in parallel if
 /// waiting on them gets slow.
 struct Run {
+    organization: String,
     task: String,
+    files: Vec<PathBuf>,
+    /// The chat it answers in.
+    chat: u64,
     order: Vec<u32>,
     /// Each agent's program, arguments and environment, by its place in
     /// `order`.
@@ -885,6 +883,32 @@ struct Run {
     directory: PathBuf,
     /// A file the run may change, and when it was changed before the run.
     watched: (PathBuf, Option<SystemTime>),
+}
+
+/// A run that stopped before its last agent was done, kept in the project
+/// so it can go on, even after the editor restarts.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct Paused {
+    organization: String,
+    task: String,
+    files: Vec<PathBuf>,
+    /// Each agent that was done: its id, answer and thoughts.
+    done: Vec<(u32, String, String)>,
+    /// The chat it answers in, and that chat's messages.
+    chat: u64,
+    messages: Vec<Message>,
+}
+
+impl Paused {
+    pub fn organization(&self) -> &str {
+        &self.organization
+    }
+
+    /// The chat it answers in, and that chat's messages.
+    pub fn chat(&self) -> (u64, &[Message]) {
+        (self.chat, &self.messages)
+    }
 }
 
 /// Where the pointer is on the graph's zoomed layer that `ui` draws on.
@@ -916,6 +940,8 @@ pub struct OrgPanel {
     /// The node a link is being dragged out of.
     wiring: Option<u32>,
     run: Option<Run>,
+    /// The last run, if it stopped before its last agent was done.
+    paused: Option<Paused>,
     /// Why the last link or name was refused.
     refused: Option<&'static str>,
 }
@@ -950,6 +976,7 @@ impl OrgPanel {
             names.push(t("Organization").into());
         }
         let name = names[0].clone();
+        let paused = read_ron(&dir.with_file_name(RUN_FILE));
         Self {
             org: Organization::read(&dir.join(format!("{name}.besfa"))),
             dir,
@@ -963,6 +990,7 @@ impl OrgPanel {
             group: None,
             wiring: None,
             run: None,
+            paused,
             refused: None,
         }
     }
@@ -971,7 +999,7 @@ impl OrgPanel {
     /// screenshot.
     #[cfg(test)]
     pub fn demo() -> Self {
-        let mut panel = Self::new(std::env::temp_dir().join("besfa-org-demo"));
+        let mut panel = Self::new(std::env::temp_dir().join("besfa-org-demo/organizations"));
         panel.org = Organization::default();
         panel.org.starter();
         let art = panel.org.add("art-director", Pos2::new(300.0, 230.0));
@@ -990,6 +1018,56 @@ impl OrgPanel {
 
     pub fn running(&self) -> bool {
         self.run.is_some()
+    }
+
+    /// The last run, if it stopped before its last agent was done.
+    pub fn paused(&self) -> Option<&Paused> {
+        self.paused.as_ref()
+    }
+
+    fn run_file(&self) -> PathBuf {
+        self.dir.with_file_name(RUN_FILE)
+    }
+
+    /// Where the run is, with `chat`, for a resume after a restart.
+    fn snapshot(&self, chat: &[Message]) -> Option<Paused> {
+        let run = self.run.as_ref()?;
+        let done = run
+            .order
+            .iter()
+            .filter_map(|&id| self.org.node(id))
+            .filter(|node| node.state == NodeState::Done)
+            .map(|node| (node.id, node.output.clone(), node.thoughts.clone()))
+            .collect();
+        Some(Paused {
+            organization: run.organization.clone(),
+            task: run.task.clone(),
+            files: run.files.clone(),
+            done,
+            chat: run.chat,
+            messages: chat.to_vec(),
+        })
+    }
+
+    /// Writes where the run is. ponytail: a failed write only costs the
+    /// resume after a restart; tell the user if that ever bites.
+    fn record(&self, chat: &[Message]) {
+        if let Some(paused) = self.snapshot(chat) {
+            let _ = write_ron(&self.run_file(), &paused);
+        }
+    }
+
+    /// Runs the paused run's agents that were not done, handing on what
+    /// the done ones answered.
+    pub fn resume(
+        &mut self,
+        settings: &AgentSettings,
+        agents: &Agents,
+        directory: &Path,
+        watch: PathBuf,
+    ) -> Result<(), String> {
+        let paused = self.paused.clone().ok_or(t("Nothing to continue."))?;
+        self.begin(paused, settings, agents, directory, watch)
     }
 
     /// Every organization's name, for the chat to pick from.
@@ -1105,24 +1183,47 @@ impl OrgPanel {
 
     /// Runs `task`, with `files` attached, through every agent of the
     /// organization `name` in `directory`, each the way `settings` reaches
-    /// its provider. The tab shows that organization while it runs. `poll`
-    /// tells once it is done whether it changed `watch`. Says why when it
-    /// cannot start.
+    /// its provider, answering in the chat `chat`. The tab shows that
+    /// organization while it runs. `poll` tells once it is done whether it
+    /// changed `watch`. Says why when it cannot start.
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         &mut self,
         name: &str,
         task: String,
         files: &[PathBuf],
+        chat: u64,
         settings: &AgentSettings,
         agents: &Agents,
         directory: &Path,
         watch: PathBuf,
     ) -> Result<(), String> {
+        let run = Paused {
+            organization: name.into(),
+            task,
+            files: files.to_vec(),
+            chat,
+            ..Default::default()
+        };
+        self.begin(run, settings, agents, directory, watch)
+    }
+
+    /// Runs `run`'s organization, the agents it has done keeping their
+    /// answers.
+    fn begin(
+        &mut self,
+        run: Paused,
+        settings: &AgentSettings,
+        agents: &Agents,
+        directory: &Path,
+        watch: PathBuf,
+    ) -> Result<(), String> {
+        let name = run.organization.as_str();
         if !self.names.iter().any(|other| other == name) {
             return Err(t("There is no organization named \"{}\".").replace("{}", name));
         }
         self.open(name)?;
+        let files = run.files.as_slice();
         let order = self.org.order()?;
         if order.is_empty() {
             return Err(
@@ -1162,9 +1263,19 @@ impl OrgPanel {
             node.output.clear();
             node.thoughts.clear();
             node.state = NodeState::Waiting;
+            if let Some((_, output, thoughts)) = run.done.iter().find(|done| done.0 == node.id) {
+                node.output.clone_from(output);
+                node.thoughts.clone_from(thoughts);
+                node.state = NodeState::Done;
+            }
         }
+        // A new run takes the place of a paused one.
+        self.paused = None;
         self.run = Some(Run {
-            task,
+            organization: run.organization,
+            task: run.task,
+            files: run.files,
+            chat: run.chat,
             order,
             invocations,
             next: 0,
@@ -1193,9 +1304,18 @@ impl OrgPanel {
     pub fn poll(&mut self, ctx: &egui::Context, chat: &mut Vec<Message>) -> Option<bool> {
         let run = self.run.as_mut()?;
         if run.process.is_none() && run.stopped {
-            return self.finish();
+            return self.finish(chat);
         }
         if run.process.is_none() {
+            // Ones done before a resume answered already.
+            while let Some(&id) = run.order.get(run.next)
+                && self
+                    .org
+                    .node(id)
+                    .is_some_and(|node| node.state == NodeState::Done)
+            {
+                run.next += 1;
+            }
             let id = run.order.get(run.next).copied();
             if let Some(id) = id {
                 let input = self.org.input(id, &run.task);
@@ -1206,8 +1326,9 @@ impl OrgPanel {
                     .map(|(name, value)| (name.as_str(), value.as_str()))
                     .collect();
                 let node = self.org.node_mut(id).expect("ordered nodes exist");
+                let color = node.color();
                 chat.push(Message {
-                    speaker: Some((node.name.clone(), node.color())),
+                    speaker: Some((node.name.clone(), [color.r(), color.g(), color.b()])),
                     ..Default::default()
                 });
                 match CliProcess::start(&run.directory, program, &args, &env, ctx) {
@@ -1220,11 +1341,13 @@ impl OrgPanel {
                         node.output = format!("Could not start {program}: {error}");
                         node.state = NodeState::Failed;
                         show(node, chat);
-                        return self.finish();
+                        return self.finish(chat);
                     }
                 }
+                // Closing the editor now kills the agent; it runs again.
+                self.record(chat);
             } else {
-                return self.finish();
+                return self.finish(chat);
             }
         }
         let run = self.run.as_mut()?;
@@ -1270,11 +1393,28 @@ impl OrgPanel {
             }
         }
         show(node, chat);
-        if failed { self.finish() } else { None }
+        if failed {
+            return self.finish(chat);
+        }
+        self.record(chat);
+        None
     }
 
-    fn finish(&mut self) -> Option<bool> {
+    /// Ends the run. One with agents left stays paused, in the project too.
+    fn finish(&mut self, chat: &[Message]) -> Option<bool> {
+        let paused = self.snapshot(chat)?;
         let run = self.run.take()?;
+        let all_done = run.order.iter().all(|&id| {
+            self.org
+                .node(id)
+                .is_some_and(|node| node.state == NodeState::Done)
+        });
+        if all_done {
+            let _ = fs::remove_file(self.run_file());
+        } else {
+            let _ = write_ron(&self.run_file(), &paused);
+            self.paused = Some(paused);
+        }
         for node in &mut self.org.nodes {
             if node.state == NodeState::Waiting {
                 node.state = NodeState::Idle;
@@ -1946,6 +2086,19 @@ impl OrgPanel {
     }
 }
 
+fn read_ron<T: serde::de::DeserializeOwned>(file: &Path) -> Option<T> {
+    ron::from_str(&fs::read_to_string(file).ok()?).ok()
+}
+
+fn write_ron(file: &Path, value: &impl Serialize) -> Result<(), String> {
+    if let Some(folder) = file.parent() {
+        fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+    }
+    let config = ron::ser::PrettyConfig::default().compact_arrays(true);
+    let text = ron::ser::to_string_pretty(value, config).map_err(|error| error.to_string())?;
+    fs::write(file, text).map_err(|error| error.to_string())
+}
+
 /// Puts `node`'s answer and thoughts so far in its message, the last of
 /// `chat`.
 fn show(node: &Node, chat: &mut [Message]) {
@@ -2125,8 +2278,13 @@ mod tests {
         org.link(design, code);
         org.link(code, test);
         org.node_mut(design).unwrap().provider = Provider::OpenAi;
-        let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-run"));
+        let besfa = std::env::temp_dir().join(format!("besfa-org-run-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&besfa);
+        let dir = besfa.join("organizations");
+        let mut panel = OrgPanel::new(dir.clone());
         panel.org = org;
+        // Saved before a resume opens it again.
+        panel.unsaved = true;
         // The designer logs noise and leaves its answer in a file, as codex
         // does; the programmer prints what it was sent; the tester fails.
         let answer =
@@ -2146,9 +2304,12 @@ mod tests {
         let echo = ("findstr".into(), vec!["/r".into(), ".".into()], vec![]);
         let fail = ("cmd".into(), vec!["/c".into(), "exit 3".into()], vec![]);
         panel.run = Some(Run {
+            organization: "Organization".into(),
             task: "Add a jump.".into(),
+            files: Vec::new(),
+            chat: 7,
             order: vec![design, code, test],
-            invocations: vec![design_run, echo, fail],
+            invocations: vec![design_run, echo.clone(), fail],
             next: 0,
             process: None,
             answers: vec![Some(answer.clone()), None, None],
@@ -2189,6 +2350,43 @@ mod tests {
         assert_eq!(chat[0].text.trim(), "Jumps cost stamina.");
         assert!(chat[0].thoughts.contains("noisy log"));
         assert!(chat[2].text.contains("code 3"));
+
+        // The run stays paused, in the project too, where a restarted
+        // editor finds it with its chat.
+        let paused = panel.paused().unwrap().clone();
+        let done: Vec<u32> = paused.done.iter().map(|done| done.0).collect();
+        assert_eq!(done, [design, code]);
+        assert_eq!(paused.chat(), (7, chat.as_slice()));
+        assert_eq!(OrgPanel::new(dir.clone()).paused(), Some(&paused));
+
+        // Continue runs only the tester, handing it the programmer's answer.
+        let agents = Agents::fixed([agent::Cli::LoggedIn; 3], &[]);
+        panel
+            .resume(
+                &AgentSettings::default(),
+                &agents,
+                Path::new("."),
+                "none".into(),
+            )
+            .unwrap();
+        panel.run.as_mut().unwrap().invocations = vec![echo.clone(), echo.clone(), echo];
+        let mut finished = None;
+        while finished.is_none() && std::time::Instant::now() < deadline {
+            finished = panel.poll(&ctx, &mut chat);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(finished, Some(false));
+        assert_eq!(chat.len(), 4);
+        assert_eq!(chat[3].speaker.as_ref().unwrap().0, "Qa Tester");
+        assert!(chat[3].text.contains("## Gameplay Programmer\n"));
+        assert_eq!(
+            panel.org.node(design).unwrap().output.trim(),
+            "Jumps cost stamina."
+        );
+        // Done: nothing left to continue.
+        assert!(panel.paused().is_none());
+        assert!(!besfa.join(RUN_FILE).exists());
+        fs::remove_dir_all(&besfa).unwrap();
     }
 
     #[test]
@@ -2222,11 +2420,15 @@ mod tests {
     #[test]
     fn a_stop_between_two_agents_starts_no_more() {
         let (org, [design, code, _]) = studio();
-        let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-stop"));
+        let besfa = std::env::temp_dir().join(format!("besfa-org-stop-{}", std::process::id()));
+        let mut panel = OrgPanel::new(besfa.join("organizations"));
         panel.org = org;
         let echo = || ("findstr".into(), vec!["/r".into(), ".".into()], vec![]);
         panel.run = Some(Run {
+            organization: "Organization".into(),
             task: "Add a jump.".into(),
+            files: Vec::new(),
+            chat: 1,
             order: vec![design, code],
             invocations: vec![echo(), echo()],
             next: 1,
@@ -2242,6 +2444,8 @@ mod tests {
             Some(false)
         );
         assert_eq!(panel.org.node(code).unwrap().state, NodeState::Idle);
+        assert!(panel.paused().is_some());
+        fs::remove_dir_all(&besfa).unwrap();
     }
 
     #[test]
@@ -2357,6 +2561,7 @@ mod tests {
                     "QA team",
                     "Test it.".into(),
                     &[],
+                    1,
                     &AgentSettings::default(),
                     &Agents::fixed([agent::Cli::LoggedIn; 3], &[]),
                     &besfa,
@@ -2370,7 +2575,10 @@ mod tests {
     #[test]
     fn the_wheel_zooms_around_the_pointer() {
         use egui_kittest::{Harness, kittest::Queryable};
-        let file = std::env::temp_dir().join(format!("besfa-org-zoom-{}", std::process::id()));
+        let file = std::env::temp_dir().join(format!(
+            "besfa-org-zoom-{}/organizations",
+            std::process::id()
+        ));
         let mut panel = OrgPanel::new(file.clone());
         panel.org = Organization::default();
         panel.org.starter();
