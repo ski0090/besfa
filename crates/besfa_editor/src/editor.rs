@@ -108,7 +108,6 @@ enum AfterSave {
 enum RightTab {
     Inspector,
     Scatter,
-    Animation,
 }
 
 /// What the bottom panel shows.
@@ -217,6 +216,8 @@ pub struct Editor {
     agent_open: bool,
     /// Whether the Agent chat has its own window.
     agent_chat_open: bool,
+    /// Whether the animation state machine has its own window.
+    animation_open: bool,
     agent_panel: AgentPanel,
     /// Which tab the Agent window shows, and its Organization tab.
     agent_view: AgentView,
@@ -282,6 +283,7 @@ impl Editor {
             agents: Agents::load(),
             agent_open: false,
             agent_chat_open: false,
+            animation_open: false,
             agent_panel: AgentPanel::default(),
             agent_view: AgentView::Chat,
             organization,
@@ -388,7 +390,6 @@ impl Editor {
                             for (tab, label) in [
                                 (RightTab::Inspector, t("Inspector")),
                                 (RightTab::Scatter, t("Scatter")),
-                                (RightTab::Animation, t("Animation")),
                             ] {
                                 ui.selectable_value(&mut self.right_tab, tab, label);
                             }
@@ -397,15 +398,6 @@ impl Editor {
                             egui::ScrollArea::vertical()
                                 .auto_shrink(false)
                                 .show(ui, |ui| self.scatter.ui(ui));
-                        } else if self.right_tab == RightTab::Animation {
-                            let scene = self.scene.inspected();
-                            let action = egui::ScrollArea::vertical()
-                                .auto_shrink(false)
-                                .show(ui, |ui| animation::ui(ui, &scene))
-                                .inner;
-                            if let Some(action) = action {
-                                self.on_inspector(action);
-                            }
                         } else {
                             self.inspector.can_sculpt =
                                 self.protocol >= Some(TERRAIN_PROTOCOL) && !self.playing;
@@ -421,6 +413,7 @@ impl Editor {
         self.dialogs(&ctx);
         self.agent_window(&ctx);
         self.agent_chat(&ctx);
+        self.animation_window(&ctx);
         self.send_brushes(&ctx);
         self.send_snap(&ctx);
 
@@ -1427,17 +1420,11 @@ impl Editor {
                     }
                 });
                 ui.menu_button(t("Window"), |ui| {
-                    if ui.button(t("Animation State Machine")).clicked() {
-                        self.right_tab = RightTab::Animation;
-                        if self.previewing {
-                            self.show_preview(false);
-                        }
-                    }
                     // Unchecking is the window's own close button.
-                    if ui
-                        .checkbox(&mut self.agent_chat_open, t("Agent Window"))
-                        .changed()
-                    {
+                    let animation =
+                        ui.checkbox(&mut self.animation_open, t("Animation State Machine"));
+                    let agent = ui.checkbox(&mut self.agent_chat_open, t("Agent Window"));
+                    if animation.changed() || agent.changed() {
                         ui.close();
                     }
                 });
@@ -1725,6 +1712,30 @@ impl Editor {
         }
     }
 
+    /// The selected model's animation state machine in a window of its
+    /// own; it follows the selection, and edits go through the inspector's
+    /// route for undo and saving.
+    fn animation_window(&mut self, ctx: &egui::Context) {
+        if !self.animation_open {
+            return;
+        }
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Besfa Animation")
+            .with_inner_size([480.0, 640.0]);
+        let mut close = false;
+        let id = egui::ViewportId::from_hash_of("animation_window");
+        let action = ctx.show_viewport_immediate(id, builder, |ui, _| {
+            close = ui.input(|input| input.viewport().close_requested());
+            animation_panel(ui, &self.scene)
+        });
+        if let Some(action) = action {
+            self.on_inspector(action);
+        }
+        if close {
+            self.animation_open = false;
+        }
+    }
+
     /// The Agent chat in a window of its own.
     fn agent_chat(&mut self, ctx: &egui::Context) {
         if !self.agent_chat_open {
@@ -2005,6 +2016,19 @@ fn protocol_warning(version: u32) -> Option<String> {
         "The game's besfa_editor_plugin speaks protocol {version}, {age} than this \
          editor's {VERSION}. Update the {fix}."
     ))
+}
+
+/// The animation window's contents: the state machine of `scene`'s
+/// selection, and the change to make to it, if any.
+fn animation_panel(ui: &mut Ui, scene: &Scene) -> Option<Action> {
+    egui::CentralPanel::default()
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink(false)
+                .show(ui, |ui| animation::ui(ui, &scene.inspected()))
+                .inner
+        })
+        .inner
 }
 
 impl Drop for Editor {
@@ -2549,12 +2573,10 @@ mod tests {
         let editor = &mut harness.state_mut().editor;
         editor.scatter.on = false;
 
-        // The placed zombie's state machine.
+        // The placed zombie's state machine, in its own window.
         select(editor, ZOMBIE);
-        editor.right_tab = RightTab::Animation;
-        harness.run_steps(4);
-        save(&mut harness, "animation-tab", Some(RIGHT_PANEL));
-        harness.state_mut().editor.right_tab = RightTab::Inspector;
+        editor.right_tab = RightTab::Inspector;
+        animation_window_screenshot(&harness.state().editor.scene);
 
         // The Assets tab, with the models' thumbnails.
         harness.state_mut().editor.bottom_tab = BottomTab::Assets;
@@ -2788,6 +2810,25 @@ mod tests {
         save(
             &mut harness,
             "agent-organization",
+            Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+        );
+    }
+
+    /// The animation window, which the editor opens apart from its own,
+    /// showing `scene`'s selection.
+    fn animation_window_screenshot(scene: &Scene) {
+        let size = egui::vec2(480.0, 640.0);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(size + egui::Vec2::splat(2.0 * MARGIN))
+            .with_pixels_per_point(PIXELS_PER_POINT)
+            .build_ui(|ui| {
+                animation_panel(ui, scene);
+            });
+        crate::style(&harness.ctx);
+        harness.run_steps(4);
+        save(
+            &mut harness,
+            "animation-window",
             Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
         );
     }

@@ -4,21 +4,22 @@
 
 씬에 놓은 glTF 모델의 애니메이션 클립(idle, walk, run 등)을 **상태**로 만들고, 어떤 조건에서 다른 상태로 넘어갈지(**전이**)를 정합니다. 게임 코드는 "속도" 같은 **파라미터** 값만 바꾸면, 상태 기계가 알맞은 클립을 틀어 줍니다.
 
-- [Animation 탭 열기](#animation-탭-열기)
+- [창 열기](#창-열기)
 - [상태 기계 붙이기](#상태-기계-붙이기)
 - [상태(States)](#상태states)
 - [전이(Transitions)](#전이transitions)
 - [게임 코드에서 파라미터 쓰기](#게임-코드에서-파라미터-쓰기)
 - [확인하기](#확인하기)
 
-![Animation 탭](../images/animation-tab.png)
+![애니메이션 상태 기계 창](../images/animation-window.png)
 
 위 그림은 zombie 모델에 Idle, Walk, Run 세 상태를 두고, 파라미터 `speed`가 0.1보다 크면 걷고, 3보다 크면 뛰고, 0.1보다 작으면 어느 상태에서든 Idle로 돌아가게 한 예입니다.
 
-## Animation 탭 열기
+## 창 열기
 
-- 오른쪽 패널의 **Animation** 탭을 누르거나, **Window > Animation State Machine**을 고릅니다.
-- 그다음 Hierarchy나 씬 뷰에서 **씬에 놓은 glTF 모델**을 고릅니다. 모델을 놓는 법은 [에셋과 프리팹](07-assets-prefabs.md#씬에-놓기)을 보세요.
+- **Window > Animation State Machine**을 켜면 상태 기계가 에디터와 따로 떨어진 창(`Besfa Animation`)에 뜹니다.
+- 그다음 Hierarchy나 씬 뷰에서 **씬에 놓은 glTF 모델**을 고릅니다. 모델을 놓는 법은 [에셋과 프리팹](07-assets-prefabs.md#씬에-놓기)을 보세요. 창은 에디터에서 고른 것을 따라 바뀝니다.
+- 창의 닫기 단추를 누르거나 메뉴의 체크를 끄면 창이 닫힙니다.
 
 아무것도 고르지 않았으면 `Select a placed model in the Hierarchy.`가 나옵니다.
 
@@ -88,7 +89,7 @@
 ## 확인하기
 
 - 편집 상태에서는 게임 시간이 멈춰 있어 클립이 움직이지 않습니다. **Play**를 눌러 확인하세요.
-- Animation 탭에서 바꾼 것은 Inspector에서 고친 것처럼 [되돌리기](06-undo.md)와 Save scene에 들어갑니다.
+- 이 창에서 바꾼 것은 Inspector에서 고친 것처럼 [되돌리기](06-undo.md)와 Save scene에 들어갑니다.
 - 실행 중에 바꾼 것은 Stop하면 사라집니다.
 - 클립 하나만 따로 틀어 보려면 [모델 미리보기](08-model-preview.md#애니메이션-재생)가 편합니다.
 
