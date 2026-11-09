@@ -177,10 +177,10 @@ fn route(access: Access, cli: Cli, key: &str) -> Result<Route, &'static str> {
         (_, Cli::Missing) => Err(t("Install its command-line tool first.")),
         (Access::Cli, Cli::LoggedIn) => Ok(Route::Cli),
         (Access::Cli, Cli::LoggedOut) => Err(t(
-            "Log in to its command-line tool, or switch it to an API key in File > Agent Settings.",
+            "Log in to its command-line tool, or switch it to an API key in Settings > Agent Settings.",
         )),
         (Access::Key, _) if key.trim().is_empty() => {
-            Err(t("Enter its API key in File > Agent Settings."))
+            Err(t("Enter its API key in Settings > Agent Settings."))
         }
         (Access::Key, _) => Ok(Route::Key(key.trim().into())),
     }

@@ -94,7 +94,7 @@ impl Hub {
                     project::open_url(project::BEVY_ASSETS);
                 }
                 ui.add_space(24.0);
-                if let Some(error) = i18n::settings_menu(ui) {
+                if let Some(error) = i18n::settings_menu(ui, |_| {}) {
                     self.show_message(t("Could not save the settings: {}").replace("{}", &error));
                 }
                 ui.add_space(24.0);

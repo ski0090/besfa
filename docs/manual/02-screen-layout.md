@@ -25,7 +25,10 @@
 | **Edit** | **Undo** (Ctrl+Z), **Redo** (Ctrl+Y) | 되돌리기와 다시 하기. [되돌리기](06-undo.md) |
 | | **Drop to surface** (End) | 고른 물건을 아래 땅으로 내립니다. [씬 뷰 조작](04-scene-view.md#땅에-내려놓기) |
 | **Window** | **Animation State Machine** | 오른쪽 패널의 Animation 탭을 엽니다. [애니메이션 상태 기계](11-animation.md) |
-| | **Bevy Assets** (Ctrl+9) | 브라우저로 Bevy 커뮤니티 에셋 목록을 엽니다. |
+| | **Agent Window** (체크 상자) | Claude, ChatGPT, Gemini와 대화하는 Agent 창을 켜고 끕니다. 끄는 것은 창을 닫는 것과 같고, 일하던 에이전트는 계속 일합니다. [Claude Code로 다루기](14-claude-code.md) |
+| **Settings** | **Language** | 에디터를 영어로 볼지 한국어로 볼지 고릅니다. |
+| | **Agent Settings...** | 제공자마다 명령줄 도구(CLI)로 연결할지 API 키로 연결할지 고르고, 키를 넣습니다. |
+| **Help** | **Bevy Assets** (Ctrl+9) | 브라우저로 Bevy 커뮤니티 에셋 목록을 엽니다. |
 
 ![Edit 메뉴](../images/menu-edit.png)
 

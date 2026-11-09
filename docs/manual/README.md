@@ -44,7 +44,7 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 | 화면에서 본 것 | 설명 |
 | --- | --- |
 | 허브의 **New project**, **Open folder**, **Recent projects** | [설치와 시작](01-getting-started.md#프로젝트-허브) |
-| 메뉴 **File**, **Edit**, **Window** | [화면 둘러보기 - 메뉴](02-screen-layout.md#1-메뉴) |
+| 메뉴 **File**, **Edit**, **Window**, **Settings**, **Help** | [화면 둘러보기 - 메뉴](02-screen-layout.md#1-메뉴) |
 | 툴바 **▶ Play**, **⏹ Stop** | [실행과 저장](05-play-and-save.md#play와-stop) |
 | 툴바 **Standalone** 목록 | [서버와 클라이언트로 실행](05-play-and-save.md#서버와-클라이언트로-실행) |
 | 툴바 이동·회전·크기 버튼, **#**, **Grid** | [씬 뷰 조작 - 핸들](04-scene-view.md#이동회전크기-핸들) |
