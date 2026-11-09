@@ -430,8 +430,8 @@ fn korean(en: &str) -> Option<&'static str> {
         "Let Claude commit, push and open pull requests" => {
             "Claude가 커밋하고 푸시하고 풀 리퀘스트를 열게 하기"
         }
-        "It then runs git and gh in this project without asking. Deny rules in the project's .claude/settings.json, such as against force pushes, still hold." => {
-            "그러면 Claude가 이 프로젝트에서 git과 gh를 묻지 않고 실행합니다. 강제 푸시 금지처럼 프로젝트의 .claude/settings.json에 있는 거부 규칙은 그대로 지켜집니다."
+        "It then runs git and gh without asking, and gh reaches every repository your GitHub login can. Deny rules in the project's .claude/settings.json still win, but only over commands they match as written, so block force pushes with branch protection on GitHub." => {
+            "그러면 Claude가 git과 gh를 묻지 않고 실행하고, gh는 GitHub 로그인으로 닿는 모든 저장소에 닿습니다. 프로젝트 .claude/settings.json의 거부 규칙은 여전히 우선하지만 적힌 그대로 맞는 명령에만 적용되므로, 강제 푸시는 GitHub의 브랜치 보호로 막으세요."
         }
         "MCP servers" => "MCP 서버",
         "Open .mcp.json" => ".mcp.json 열기",
