@@ -1332,11 +1332,9 @@ impl Editor {
         let pressed = |modifiers, key| {
             ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(modifiers, key)))
         };
-        if pressed(Modifiers::COMMAND, Key::S) {
-            // The focused field commits as it loses focus this frame.
-            ctx.memory_mut(|memory| memory.stop_text_input());
-            self.save_after_ui = true;
-            return;
+        // Undo would change the scene out of sight of the model preview.
+        if let Some(key) = EditKey::pressed(ctx, !self.previewing) {
+            return self.on_edit_key(key, ctx);
         }
         // Unity's key for its Asset Store.
         if pressed(Modifiers::COMMAND, Key::Num9) {
@@ -1359,12 +1357,6 @@ impl Editor {
             self.drop_to_surface();
         } else if pressed(Modifiers::COMMAND, Key::D) {
             self.duplicate();
-        } else if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
-            || pressed(Modifiers::COMMAND, Key::Y)
-        {
-            self.replay(false);
-        } else if pressed(Modifiers::COMMAND, Key::Z) {
-            self.replay(true);
         } else if pressed(Modifiers::NONE, Key::Delete) {
             self.delete();
         } else if pressed(Modifiers::NONE, Key::F) {
@@ -1374,6 +1366,19 @@ impl Editor {
             .find(|(.., key)| pressed(Modifiers::NONE, *key))
         {
             self.set_tool(tool);
+        }
+    }
+
+    /// Does what `key` asks, pressed in the window `ctx` is drawing.
+    fn on_edit_key(&mut self, key: EditKey, ctx: &egui::Context) {
+        match key {
+            EditKey::Save => {
+                // The focused field commits as it loses focus this frame.
+                ctx.memory_mut(|memory| memory.stop_text_input());
+                self.save_after_ui = true;
+            }
+            EditKey::Undo => self.replay(true),
+            EditKey::Redo => self.replay(false),
         }
     }
 
@@ -1726,6 +1731,14 @@ impl Editor {
         let id = egui::ViewportId::from_hash_of("animation_window");
         let action = ctx.show_viewport_immediate(id, builder, |ui, _| {
             close = ui.input(|input| input.viewport().close_requested());
+            // Keys pressed here reach only this window's pass. Undo works
+            // during the model preview too, like Edit > Undo: the window
+            // shows what it undoes.
+            if !self.playing
+                && let Some(key) = EditKey::pressed(ui.ctx(), true)
+            {
+                self.on_edit_key(key, ui.ctx());
+            }
             animation_panel(ui, &self.scene)
         });
         if let Some(action) = action {
@@ -2018,6 +2031,36 @@ fn protocol_warning(version: u32) -> Option<String> {
     ))
 }
 
+/// Save, undo and redo, which work from the editor's own windows too.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EditKey {
+    Save,
+    Undo,
+    Redo,
+}
+
+impl EditKey {
+    /// The one pressed in the window `ctx` is drawing, taken from its keys.
+    /// Undo and redo only if `undo`, and not while a text field, which has
+    /// its own, is focused.
+    fn pressed(ctx: &egui::Context, undo: bool) -> Option<Self> {
+        let pressed = |modifiers, key| {
+            ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(modifiers, key)))
+        };
+        if pressed(Modifiers::COMMAND, Key::S) {
+            Some(Self::Save)
+        } else if !undo || ctx.text_edit_focused() {
+            None
+        } else if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
+            || pressed(Modifiers::COMMAND, Key::Y)
+        {
+            Some(Self::Redo)
+        } else {
+            pressed(Modifiers::COMMAND, Key::Z).then_some(Self::Undo)
+        }
+    }
+}
+
 /// The animation window's contents: the state machine of `scene`'s
 /// selection, and the change to make to it, if any.
 fn animation_panel(ui: &mut Ui, scene: &Scene) -> Option<Action> {
@@ -2180,6 +2223,46 @@ mod tests {
         poll_until(&mut editor, &|editor| editor.relaunch.is_none());
         assert_eq!(server_exits(&editor), 2, "{:?}", editor.logs);
         assert!(editor.game.is_some() && !editor.playing);
+        drop(editor);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Keys pressed in the animation window reach only its own pass, so it
+    /// takes undo itself, during the model preview too.
+    #[test]
+    fn undoes_with_keys_pressed_in_the_animation_window() {
+        let dir = std::env::temp_dir().join(format!("besfa_anim_keys_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
+        let mut editor = Editor::new(Project::new(dir.to_string_lossy()), None, &waiting, &ctx);
+        editor.animation_open = true;
+        editor.previewing = true;
+        editor.edit(Command::Focus, vec![Command::Focus]);
+        // As eframe does, the window runs a pass of its own, with Ctrl+Z.
+        ctx.set_embed_viewports(false);
+        egui::Context::set_immediate_viewport_renderer(|ctx, mut viewport| {
+            let id = viewport.ids.this;
+            let mut input = egui::RawInput {
+                viewport_id: id,
+                events: vec![egui::Event::Key {
+                    key: Key::Z,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::COMMAND,
+                }],
+                ..Default::default()
+            };
+            input.viewports.insert(id, Default::default());
+            let mut output = ctx.run_ui(input, |ui| (viewport.viewport_ui_cb)(ui));
+            output.textures_delta.clear();
+        });
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            editor.animation_window(ui.ctx())
+        });
+        output.textures_delta.clear();
+        assert!(editor.history.can_redo() && !editor.history.can_undo());
         drop(editor);
         let _ = fs::remove_dir_all(dir);
     }
