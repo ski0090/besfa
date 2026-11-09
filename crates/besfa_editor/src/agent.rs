@@ -78,10 +78,18 @@ impl Provider {
 
     /// Headless, with the prompt on stdin. Nobody can answer a permission
     /// prompt, so each may edit files in the project without asking and
-    /// nothing more.
+    /// nothing more. Claude may also call the `besfa mcp` server a game's
+    /// .mcp.json starts; headless, it loads that server unasked.
+    /// ponytail: Codex and Gemini do not read .mcp.json; add theirs when asked.
     fn args(self) -> &'static [&'static str] {
         match self {
-            Provider::Claude => &["-p", "--permission-mode", "acceptEdits"],
+            Provider::Claude => &[
+                "-p",
+                "--permission-mode",
+                "acceptEdits",
+                "--allowedTools",
+                "mcp__besfa",
+            ],
             Provider::OpenAi => &[
                 "exec",
                 "--sandbox",
@@ -1021,7 +1029,15 @@ mod tests {
         assert_eq!(program, "claude");
         assert_eq!(
             args,
-            ["-p", "--permission-mode", "acceptEdits", "--model", "opus"]
+            [
+                "-p",
+                "--permission-mode",
+                "acceptEdits",
+                "--allowedTools",
+                "mcp__besfa",
+                "--model",
+                "opus"
+            ]
         );
         assert!(env.is_empty());
 
@@ -1042,7 +1058,7 @@ mod tests {
             PathBuf::from(r"C:\My Art\a,b.png"),
         ];
         let (_, args, _) = invocation(Provider::Claude, &Route::Cli, "", &files);
-        assert_eq!(args[3..], ["--add-dir", r"C:\My Art"]);
+        assert_eq!(args[5..], ["--add-dir", r"C:\My Art"]);
         let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &files);
         assert_eq!(args[4..], ["--include-directories", r"C:\My Art"]);
         let (_, args, _) = invocation(Provider::OpenAi, &Route::Cli, "", &files);
