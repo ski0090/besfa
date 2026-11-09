@@ -1157,6 +1157,13 @@ impl OrgPanel {
         self.names.retain(|other| *other != self.name);
         self.names.push(name.clone());
         self.names.sort();
+        // A paused run goes on under the new name.
+        if let Some(paused) = &mut self.paused
+            && paused.organization == self.name
+        {
+            paused.organization.clone_from(&name);
+            write_ron(&self.dir.with_file_name(RUN_FILE), paused)?;
+        }
         self.name = name;
         self.refused = None;
         Ok(())
@@ -1171,6 +1178,16 @@ impl OrgPanel {
         }
         self.unsaved = false;
         self.names.retain(|other| *other != self.name);
+        // Its paused run would hand its answers to another organization
+        // that takes the name, whose agents can have the same ids.
+        if self
+            .paused
+            .as_ref()
+            .is_some_and(|paused| paused.organization == self.name)
+        {
+            self.paused = None;
+            let _ = fs::remove_file(self.run_file());
+        }
         match self.names.first().cloned() {
             Some(name) => self.open(&name),
             None => {
@@ -1392,11 +1409,14 @@ impl OrgPanel {
                 }
             }
         }
+        let done = node.state == NodeState::Done;
         show(node, chat);
         if failed {
             return self.finish(chat);
         }
-        self.record(chat);
+        if done {
+            self.record(chat);
+        }
         None
     }
 
@@ -2501,6 +2521,32 @@ mod tests {
         assert!(dir.join("Organization 2.besfa").is_file());
         assert_eq!(Organization::read(&file).nodes.len(), 5);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_paused_run_follows_its_organization_renamed_and_goes_with_it_deleted() {
+        let besfa = std::env::temp_dir().join(format!("besfa-paused-org-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&besfa);
+        let dir = besfa.join("organizations");
+        let mut panel = OrgPanel::new(dir.clone());
+        panel.paused = Some(Paused {
+            organization: "Organization".into(),
+            chat: 3,
+            ..Default::default()
+        });
+        panel.rename = "Team".into();
+        panel.rename_to_field().unwrap();
+        assert_eq!(panel.paused().unwrap().organization(), "Team");
+        assert_eq!(
+            OrgPanel::new(dir.clone()).paused().unwrap().organization(),
+            "Team"
+        );
+        // Deleted, a new organization of the same name and ids must not
+        // take its answers.
+        panel.delete_organization().unwrap();
+        assert!(panel.paused().is_none());
+        assert!(!besfa.join(RUN_FILE).exists());
+        fs::remove_dir_all(&besfa).unwrap();
     }
 
     #[test]
