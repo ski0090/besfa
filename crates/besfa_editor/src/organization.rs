@@ -706,8 +706,10 @@ impl Organization {
                 input.push_str(&format!("\n## {}\n{}\n", node.name, node.output.trim()));
             }
         }
+        // Role files that wait for the user's yes before writing would
+        // otherwise end on a question nobody reads until the run is over.
         input.push_str(
-            "\nDo your part of the task only. End with a short report of what you did and decided, for the agents after you.",
+            "\nThis run is headless: the agents go one after another and nobody reads your questions until the last one is done. The user's task is their approval for the work it asks of you, files, commits and pull requests included, so do that work now rather than asking whether you may. Where the task leaves a choice open, decide, act on it and say what you chose. Put anything only the user can settle under a heading \"For the user\" at the end of your report, and do not stop for it.\n\nDo your part of the task only. End with a short report of what you did and decided, for the agents after you.",
         );
         input
     }
@@ -2235,6 +2237,7 @@ mod tests {
         assert!(input.contains("Implements designed mechanics"));
         assert!(input.contains("Add a jump."));
         assert!(input.contains("## Game Designer\nJumping costs stamina."));
+        assert!(input.contains("rather than asking whether you may"));
         assert!(
             !org.input(design, "Add a jump.")
                 .contains("before you reported")
