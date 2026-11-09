@@ -909,6 +909,11 @@ impl Paused {
     pub fn chat(&self) -> (u64, &[Message]) {
         (self.chat, &self.messages)
     }
+
+    /// The files attached in that chat.
+    pub fn files(&self) -> &[PathBuf] {
+        &self.files
+    }
 }
 
 /// Where the pointer is on the graph's zoomed layer that `ui` draws on.
@@ -976,7 +981,8 @@ impl OrgPanel {
             names.push(t("Organization").into());
         }
         let name = names[0].clone();
-        let paused = read_ron(&dir.with_file_name(RUN_FILE));
+        let paused = read_ron::<Paused>(&dir.with_file_name(RUN_FILE))
+            .filter(|paused| dir.join(format!("{}.besfa", paused.organization)).is_file());
         Self {
             org: Organization::read(&dir.join(format!("{name}.besfa"))),
             dir,
@@ -1157,15 +1163,15 @@ impl OrgPanel {
         self.names.retain(|other| *other != self.name);
         self.names.push(name.clone());
         self.names.sort();
+        let old = std::mem::replace(&mut self.name, name);
+        self.refused = None;
         // A paused run goes on under the new name.
         if let Some(paused) = &mut self.paused
-            && paused.organization == self.name
+            && paused.organization == old
         {
-            paused.organization.clone_from(&name);
-            write_ron(&self.dir.with_file_name(RUN_FILE), paused)?;
+            paused.organization.clone_from(&self.name);
+            let _ = write_ron(&self.dir.with_file_name(RUN_FILE), paused);
         }
-        self.name = name;
-        self.refused = None;
         Ok(())
     }
 
@@ -1251,6 +1257,11 @@ impl OrgPanel {
         let mut invocations = Vec::new();
         let mut answers = Vec::new();
         for &id in &order {
+            if run.done.iter().any(|done| done.0 == id) {
+                invocations.push(Invocation::default());
+                answers.push(None);
+                continue;
+            }
             let node = self.org.node(id).expect("ordered nodes exist");
             let route = agents
                 .route(node.provider, settings.access(node.provider))
@@ -2303,8 +2314,9 @@ mod tests {
         let dir = besfa.join("organizations");
         let mut panel = OrgPanel::new(dir.clone());
         panel.org = org;
-        // Saved before a resume opens it again.
+        // On disk, as an organization a run goes through is.
         panel.unsaved = true;
+        panel.save().unwrap();
         // The designer logs noise and leaves its answer in a file, as codex
         // does; the programmer prints what it was sent; the tester fails.
         let answer =
@@ -2380,7 +2392,16 @@ mod tests {
         assert_eq!(OrgPanel::new(dir.clone()).paused(), Some(&paused));
 
         // Continue runs only the tester, handing it the programmer's answer.
-        let agents = Agents::fixed([agent::Cli::LoggedIn; 3], &[]);
+        // The designer's Codex is logged out by now; it is done, so that
+        // does not matter.
+        let agents = Agents::fixed(
+            [
+                agent::Cli::LoggedIn,
+                agent::Cli::LoggedOut,
+                agent::Cli::LoggedIn,
+            ],
+            &[],
+        );
         panel
             .resume(
                 &AgentSettings::default(),
@@ -2529,6 +2550,8 @@ mod tests {
         let _ = fs::remove_dir_all(&besfa);
         let dir = besfa.join("organizations");
         let mut panel = OrgPanel::new(dir.clone());
+        panel.unsaved = true;
+        panel.save().unwrap();
         panel.paused = Some(Paused {
             organization: "Organization".into(),
             chat: 3,
@@ -2541,6 +2564,10 @@ mod tests {
             OrgPanel::new(dir.clone()).paused().unwrap().organization(),
             "Team"
         );
+        // One whose organization went from the folder behind the editor's
+        // back is dropped.
+        fs::remove_file(dir.join("Team.besfa")).ok();
+        assert!(OrgPanel::new(dir.clone()).paused().is_none());
         // Deleted, a new organization of the same name and ids must not
         // take its answers.
         panel.delete_organization().unwrap();

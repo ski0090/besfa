@@ -934,7 +934,12 @@ impl AgentPanel {
 
     /// Shows the chat a paused organization run answers in, sending to that
     /// organization, as it was before the editor closed.
-    pub fn restore(&mut self, (id, messages): (u64, &[Message]), organization: &str) {
+    pub fn restore(
+        &mut self,
+        (id, messages): (u64, &[Message]),
+        files: &[PathBuf],
+        organization: &str,
+    ) {
         let mut messages = messages.to_vec();
         // An agent the editor closed on said nothing yet.
         for message in &mut messages {
@@ -945,7 +950,7 @@ impl AgentPanel {
         self.show_chat(Chat {
             id,
             messages,
-            files: Vec::new(),
+            files: files.to_vec(),
         });
         self.organization = Some(organization.into());
     }
@@ -1860,7 +1865,8 @@ mod tests {
     #[test]
     fn continues_a_paused_run_in_its_chat_after_a_restart() {
         let besfa = std::env::temp_dir().join(format!("besfa-paused-{}", std::process::id()));
-        fs::create_dir_all(&besfa).unwrap();
+        fs::create_dir_all(besfa.join("organizations")).unwrap();
+        fs::write(besfa.join("organizations/Studio.besfa"), "()").unwrap();
         fs::write(
             besfa.join("organization-run.ron"),
             r#"(organization: "Studio", chat: 5, messages: [(user: true, text: "Add a jump."), (speaker: Some(("Producer", (1, 2, 3))))])"#,
@@ -1870,7 +1876,7 @@ mod tests {
         let org = OrgPanel::new(besfa.join("organizations"));
         let mut panel = AgentPanel::default();
         let paused = org.paused().unwrap();
-        panel.restore(paused.chat(), paused.organization());
+        panel.restore(paused.chat(), &[], paused.organization());
         assert_eq!(panel.chat.title(), "Add a jump.");
         assert_eq!(panel.organization(), Some("Studio"));
         assert_eq!(panel.chat.messages[1].text, "Stopped.");

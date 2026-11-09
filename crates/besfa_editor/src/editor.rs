@@ -240,7 +240,7 @@ impl Editor {
         // A run the editor closed on goes on from its chat.
         let mut agent_panel = AgentPanel::default();
         if let Some(paused) = organization.paused() {
-            agent_panel.restore(paused.chat(), paused.organization());
+            agent_panel.restore(paused.chat(), paused.files(), paused.organization());
         }
         let mut editor = Self {
             source: SourceWatch::new(project.file("src")),
