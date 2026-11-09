@@ -2627,6 +2627,7 @@ mod tests {
             .find(|node| node.rect().min.x < 300.0)
             .unwrap()
             .click();
+        harness.remove_cursor();
         harness.run_steps(4);
 
         // Terrain painting, and the sky.
