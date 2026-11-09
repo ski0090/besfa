@@ -33,7 +33,7 @@ use crate::{
 /// Tells Claude why the `besfa mcp` warning against running a game beside
 /// the editor does not hold here. An installed `besfa` CLI keeps the
 /// warning it was built with, so the editor says it outright.
-const AGENT_WINDOW: &str = "You run headless from the Besfa editor's Agent window, which has this game project open. The editor sent your task only once its scene was saved, and it reloads the scene file when you finish. So where the besfa start tool says not to run a game on a project the editor has open, that does not apply to you: you may start the game with the besfa tools and save the scene through it.";
+const AGENT_WINDOW: &str = "You run headless from the Besfa editor's Agent window, which has this game project open. The editor started this task with its scene saved, and when the task ends it reloads the scene file unless someone changed the scene in the editor meanwhile. So where the besfa start tool says not to run a game on a project the editor has open, that does not apply to you: if you have the besfa tools, you may start the game with them and save the scene through it.";
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Provider {
