@@ -10,7 +10,7 @@
 - [2. 툴바](#2-툴바)
 - [3. Hierarchy 패널](#3-hierarchy-패널)
 - [4. 뷰포트](#4-뷰포트)
-- [5. 오른쪽 패널: Inspector, Scatter, Animation](#5-오른쪽-패널-inspector-scatter-animation)
+- [5. 오른쪽 패널: Inspector와 Scatter](#5-오른쪽-패널-inspector와-scatter)
 - [6. 아래 패널: Log와 Assets](#6-아래-패널-log와-assets)
 - [창 제목](#창-제목)
 
@@ -24,7 +24,7 @@
 | | **Back to Project Hub** | 프로젝트를 닫고 허브로 돌아갑니다. |
 | **Edit** | **Undo** (Ctrl+Z), **Redo** (Ctrl+Y) | 되돌리기와 다시 하기. [되돌리기](06-undo.md) |
 | | **Drop to surface** (End) | 고른 물건을 아래 땅으로 내립니다. [씬 뷰 조작](04-scene-view.md#땅에-내려놓기) |
-| **Window** | **Animation State Machine** | 오른쪽 패널의 Animation 탭을 엽니다. [애니메이션 상태 기계](11-animation.md) |
+| **Window** | **Animation State Machine** (체크 상자) | 고른 모델의 애니메이션 상태 기계를 보여 주는 창을 켜고 끕니다. 끄는 것은 창을 닫는 것과 같습니다. [애니메이션 상태 기계](11-animation.md) |
 | | **Agent Window** (체크 상자) | Claude, ChatGPT, Gemini와 대화하는 Agent 창을 켜고 끕니다. 끄는 것은 창을 닫는 것과 같고, 일하던 에이전트는 계속 일합니다. [Claude Code로 다루기](14-claude-code.md) |
 | **Settings** | **Language** | 에디터를 영어로 볼지 한국어로 볼지 고릅니다. |
 | | **Agent Settings...** | 제공자마다 명령줄 도구(CLI)로 연결할지 API 키로 연결할지 고르고, 키를 넣습니다. |
@@ -65,7 +65,7 @@ Play 중에는 핸들 버튼과 맞춤 버튼이 꺼집니다.
 
 [모델 미리보기](08-model-preview.md)를 열면 뷰포트 위에 **Scene** 탭과 모델 탭이 생깁니다.
 
-## 5. 오른쪽 패널: Inspector, Scatter, Animation
+## 5. 오른쪽 패널: Inspector와 Scatter
 
 위쪽 탭으로 바꿉니다.
 
@@ -73,9 +73,8 @@ Play 중에는 핸들 버튼과 맞춤 버튼이 꺼집니다.
 | --- | --- |
 | **Inspector** | 고른 엔티티의 이름과 컴포넌트를 보여 주고 고칩니다. [엔티티와 Inspector](03-hierarchy-inspector.md#inspector-패널) |
 | **Scatter** | 흩뿌릴 모델과 붓 설정. [흩뿌리기](10-scatter.md) |
-| **Animation** | 고른 모델의 애니메이션 상태 기계. [애니메이션 상태 기계](11-animation.md) |
 
-모델 미리보기 탭을 보는 동안에는 이 자리에 모델 패널이 나옵니다.
+모델 미리보기 탭을 보는 동안에는 이 자리에 모델 패널이 나옵니다. 애니메이션 상태 기계는 오른쪽 패널이 아니라 따로 뜨는 창에 나옵니다(**Window > Animation State Machine**).
 
 ## 6. 아래 패널: Log와 Assets
 

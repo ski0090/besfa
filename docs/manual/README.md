@@ -54,7 +54,7 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 | 왼쪽 **Hierarchy** 패널 | [엔티티와 Inspector](03-hierarchy-inspector.md#hierarchy-패널) |
 | 오른쪽 **Inspector** 탭 | [엔티티와 Inspector](03-hierarchy-inspector.md#inspector-패널) |
 | 오른쪽 **Scatter** 탭 | [흩뿌리기](10-scatter.md) |
-| 오른쪽 **Animation** 탭 | [애니메이션 상태 기계](11-animation.md) |
+| **Window > Animation State Machine** 창 | [애니메이션 상태 기계](11-animation.md) |
 | 아래 **Log** 탭 | [화면 둘러보기 - 아래 패널](02-screen-layout.md#6-아래-패널-log와-assets) |
 | 아래 **Assets** 탭 | [에셋과 프리팹](07-assets-prefabs.md) |
 | 뷰포트 위 **Scene** \| **모델 이름** 탭 | [모델 미리보기](08-model-preview.md) |
