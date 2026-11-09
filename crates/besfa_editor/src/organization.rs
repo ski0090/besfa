@@ -11,8 +11,8 @@ use std::{
 };
 
 use eframe::egui::{
-    self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder,
-    Vec2, epaint::CubicBezierShape,
+    self, Align2, Color32, FontId, LayerId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui,
+    UiBuilder, Vec2, emath::TSTransform, epaint::CubicBezierShape,
 };
 use serde::{Deserialize, Serialize};
 
@@ -795,6 +795,13 @@ struct Run {
     watched: (PathBuf, Option<SystemTime>),
 }
 
+/// Where the pointer is on the graph's zoomed layer that `ui` draws on.
+fn graph_pointer(ui: &Ui) -> Option<Pos2> {
+    let pointer = ui.input(|input| input.pointer.latest_pos())?;
+    let from_global = ui.ctx().layer_transform_from_global(ui.layer_id());
+    Some(from_global.map_or(pointer, |from_global| from_global * pointer))
+}
+
 /// The Organization tab: the role palette, the graph, the picked node or
 /// group, and the task card.
 pub struct OrgPanel {
@@ -804,6 +811,8 @@ pub struct OrgPanel {
     unsaved: bool,
     task: String,
     pan: Vec2,
+    /// How big the graph is drawn, 1 for its own size.
+    zoom: f32,
     selected: Vec<u32>,
     group: Option<u32>,
     /// The node a link is being dragged out of.
@@ -821,6 +830,7 @@ impl OrgPanel {
             unsaved: false,
             task: String::new(),
             pan: Vec2::ZERO,
+            zoom: 1.0,
             selected: Vec::new(),
             group: None,
             wiring: None,
@@ -1065,7 +1075,7 @@ impl OrgPanel {
     fn drop_point(&self, ui: &Ui) -> Pos2 {
         let view = ui.ctx().content_rect().size();
         let step = (self.org.nodes.len() % 6) as f32 * 24.0;
-        Pos2::new(view.x * 0.3, view.y * 0.2) - self.pan + Vec2::splat(step)
+        (Vec2::new(view.x * 0.3, view.y * 0.2) / self.zoom).to_pos2() - self.pan + Vec2::splat(step)
     }
 
     fn palette(&mut self, ui: &mut Ui) {
@@ -1155,10 +1165,11 @@ impl OrgPanel {
             }
             if ui.button(t("Center view")).clicked() {
                 self.pan = Vec2::ZERO;
+                self.zoom = 1.0;
             }
             ui.label(
                 RichText::new(
-                    t("Drag from an agent's right pin to another agent to hand it the result. Right-click a pin to unlink it. Shift-click selects more."),
+                    t("Drag from an agent's right pin to another agent to hand it the result. Right-click a pin to unlink it. Shift-click selects more. The mouse wheel zooms."),
                 )
                 .small()
                 .color(panels::MUTED),
@@ -1188,17 +1199,35 @@ impl OrgPanel {
     }
 
     fn canvas(&mut self, ui: &mut Ui) {
-        let (rect, background) =
+        let (outer, background) =
             ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        // The wheel zooms around the pointer, keeping what is under it there.
+        // Popups over the canvas are layers of their own and keep the wheel.
+        if ui.rect_contains_pointer(outer)
+            && let Some(pointer) = ui.input(|input| input.pointer.latest_pos())
+        {
+            let (scroll, pinch) =
+                ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
+            let zoom = (self.zoom * pinch * (scroll / 200.0).exp()).clamp(0.25, 2.0);
+            self.pan += (pointer - outer.min) * (1.0 / zoom - 1.0 / self.zoom);
+            self.zoom = zoom;
+        }
+        if background.dragged() {
+            self.pan += background.drag_delta() / self.zoom;
+        }
+        // The graph draws on its own layer, scaled about the canvas corner;
+        // egui maps the pointer into it for the widgets there.
+        let to_global = TSTransform::new(outer.min.to_vec2() * (1.0 - self.zoom), self.zoom);
+        let layer = LayerId::new(ui.layer_id().order, ui.id().with("org_graph"));
+        ui.ctx().set_sublayer(ui.layer_id(), layer);
+        ui.ctx().set_transform_layer(layer, to_global);
+        let rect = to_global.inverse() * outer;
         // Nodes panned past the edge neither draw over the toolbar nor take
         // its clicks: widgets only sense inside their clip rect.
-        let ui = &mut ui.new_child(UiBuilder::new().max_rect(rect));
-        ui.shrink_clip_rect(rect);
+        let ui = &mut ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
+        ui.set_clip_rect(rect);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-        if background.dragged() {
-            self.pan += background.drag_delta();
-        }
         if background.clicked() {
             self.selected.clear();
             self.group = None;
@@ -1342,7 +1371,7 @@ impl OrgPanel {
             }
         }
         if let Some(from) = self.wiring.and_then(|id| self.org.node(id))
-            && let Some(pointer) = ui.input(|input| input.pointer.latest_pos())
+            && let Some(pointer) = graph_pointer(ui)
         {
             painter.add(curve(output(from), pointer, panels::WARNING));
         }
@@ -1429,8 +1458,7 @@ impl OrgPanel {
             }
         }
         if outlet.drag_stopped() && self.wiring.take() == Some(id) {
-            let pointer = ui.input(|input| input.pointer.latest_pos());
-            let target = pointer.and_then(|pointer| {
+            let target = graph_pointer(ui).and_then(|pointer| {
                 self.org
                     .nodes
                     .iter()
@@ -1958,5 +1986,48 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().2.as_deref(), Some("Add a jump."));
         fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn the_wheel_zooms_around_the_pointer() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let file =
+            std::env::temp_dir().join(format!("besfa-org-zoom-{}.besfa", std::process::id()));
+        let mut panel = OrgPanel::new(file.clone());
+        panel.org = Organization::default();
+        panel.org.starter();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1200.0, 700.0))
+            .build_ui_state(|ui, panel: &mut OrgPanel| drop(panel.ui(ui, None)), panel);
+        let pointer = egui::pos2(600.0, 350.0);
+        let wheel = |harness: &mut Harness<OrgPanel>, notches: f32| {
+            harness.event(egui::Event::PointerMoved(pointer));
+            harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, notches),
+                phase: egui::TouchPhase::Move,
+                modifiers: Default::default(),
+            });
+            // Smooth scrolling hands the wheel out over a few frames.
+            for _ in 0..30 {
+                harness.step();
+            }
+        };
+        harness.run();
+        let before = harness.state().pan;
+        wheel(&mut harness, 2.0);
+        let zoomed = harness.state().zoom;
+        assert!(zoomed > 1.2, "{zoomed}");
+        // Out again around the same point lands where it started.
+        wheel(&mut harness, -2.0);
+        let state = harness.state();
+        assert!((state.zoom - 1.0).abs() < 0.01, "{}", state.zoom);
+        assert!((state.pan - before).length() < 1.0, "{:?}", state.pan);
+        wheel(&mut harness, -40.0);
+        assert_eq!(harness.state().zoom, 0.25);
+        harness.get_by_label("Center view").click();
+        harness.run();
+        assert_eq!(harness.state().zoom, 1.0);
+        let _ = fs::remove_file(&file);
     }
 }
