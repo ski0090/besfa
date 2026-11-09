@@ -17,7 +17,7 @@ Besfa is a desktop editor for the [Bevy](https://bevy.org/) game engine on Windo
 - **World building**: sculpt and paint terrain, grow foliage, scatter props with a brush, set the sky.
 - **Animation**: animation state machines over a model's clips.
 - **Multiplayer**: play a dedicated server with clients joined to it.
-- **Agent chat**: the editor's Agent button opens a chat in its own window with Claude, ChatGPT or Gemini. Start new chats, reopen earlier ones from a collapsible history, and attach files to a prompt.
+- **Agent chat**: Window > Agent Window in the editor's menu bar opens a chat in its own window with Claude, ChatGPT or Gemini. Start new chats, reopen earlier ones from a collapsible history, and attach files to a prompt.
 - **Agent organization**: the Agent window's Organization tab wires agents into a team like a Blueprint graph. Each agent has a role (Claude Code Game Studios' roles come ready to add), its own model and effort, and hands its result to the agents it links to; nodes can be boxed into groups. A task runs through every agent in link order.
 - **Agents**: `besfa mcp` lets Claude Code run the game without the editor and edit its scene.
 

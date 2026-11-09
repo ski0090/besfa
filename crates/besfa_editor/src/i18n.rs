@@ -78,9 +78,9 @@ pub fn load() {
     Settings::read(&Settings::file()).language.set();
 }
 
-/// The Settings menu: picks the language and keeps it. Returns why it could
-/// not be kept.
-pub fn settings_menu(ui: &mut Ui) -> Option<String> {
+/// The Settings menu: picks the language and keeps it, then shows `more`.
+/// Returns why the language could not be kept.
+pub fn settings_menu(ui: &mut Ui, more: impl FnOnce(&mut Ui)) -> Option<String> {
     let mut error = None;
     ui.menu_button(t("Settings"), |ui| {
         ui.menu_button(t("Language"), |ui| {
@@ -93,6 +93,7 @@ pub fn settings_menu(ui: &mut Ui) -> Option<String> {
                 }
             }
         });
+        more(ui);
     });
     error
 }
@@ -110,11 +111,10 @@ fn korean(en: &str) -> Option<&'static str> {
         // Menus
         "Settings" => "설정",
         "Language" => "언어",
+        "Agent Settings..." => "에이전트 설정...",
         "Could not save the settings: {}" => "설정을 저장하지 못했습니다: {}",
-        "Agent" => "에이전트",
         "File" => "파일",
         "Save scene" => "씬 저장",
-        "Agent Settings..." => "에이전트 설정...",
         "Back to Project Hub" => "프로젝트 허브로 돌아가기",
         "Edit" => "편집",
         "Undo" => "실행 취소",
@@ -122,6 +122,9 @@ fn korean(en: &str) -> Option<&'static str> {
         "Drop to surface" => "표면에 내려놓기",
         "Window" => "창",
         "Animation State Machine" => "애니메이션 상태 머신",
+        "Agent" => "에이전트",
+        "Agent Window" => "에이전트 창",
+        "Help" => "도움말",
         "Bevy Assets" => "Bevy 에셋",
         // Toolbar and panels
         "Move (W)" => "이동 (W)",
@@ -395,11 +398,11 @@ fn korean(en: &str) -> Option<&'static str> {
         "{} API key" => "{} API 키",
         "Checking the command-line tool." => "명령줄 도구를 확인하는 중입니다.",
         "Install its command-line tool first." => "먼저 명령줄 도구를 설치하세요.",
-        "Log in to its command-line tool, or switch it to an API key in File > Agent Settings." => {
-            "명령줄 도구에 로그인하거나, 파일 > 에이전트 설정에서 API 키로 바꾸세요."
+        "Log in to its command-line tool, or switch it to an API key in Settings > Agent Settings." => {
+            "명령줄 도구에 로그인하거나, 설정 > 에이전트 설정에서 API 키로 바꾸세요."
         }
-        "Enter its API key in File > Agent Settings." => {
-            "파일 > 에이전트 설정에서 API 키를 입력하세요."
+        "Enter its API key in Settings > Agent Settings." => {
+            "설정 > 에이전트 설정에서 API 키를 입력하세요."
         }
         "New chat" => "새 채팅",
         "Show history" => "기록 보기",

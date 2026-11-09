@@ -1387,9 +1387,6 @@ impl Editor {
     fn menu_bar(&mut self, ui: &mut Ui) {
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                if ui.button(t("Agent")).clicked() {
-                    self.agent_chat_open = true;
-                }
                 ui.menu_button(t("File"), |ui| {
                     // Only the edit session's scene is worth keeping.
                     let can_save = self.game.is_some() && !self.playing;
@@ -1401,10 +1398,6 @@ impl Editor {
                         .clicked()
                     {
                         self.save_after_ui = true;
-                    }
-                    if ui.button(t("Agent Settings...")).clicked() {
-                        self.agent_open = true;
-                        self.agents.check(ui.ctx());
                     }
                     if ui.button(t("Back to Project Hub")).clicked() {
                         self.request_leave();
@@ -1440,14 +1433,29 @@ impl Editor {
                             self.show_preview(false);
                         }
                     }
+                    // Unchecking is the window's own close button.
+                    if ui
+                        .checkbox(&mut self.agent_chat_open, t("Agent Window"))
+                        .changed()
+                    {
+                        ui.close();
+                    }
+                });
+                let agent_settings = |ui: &mut Ui| {
+                    if ui.button(t("Agent Settings...")).clicked() {
+                        self.agent_open = true;
+                        self.agents.check(ui.ctx());
+                    }
+                };
+                if let Some(error) = i18n::settings_menu(ui, agent_settings) {
+                    self.log(format!("Could not save the settings: {error}"));
+                }
+                ui.menu_button(t("Help"), |ui| {
                     let assets = Button::new(t("Bevy Assets")).shortcut_text("Ctrl+9");
                     if ui.add(assets).on_hover_text(project::BEVY_ASSETS).clicked() {
                         project::open_url(project::BEVY_ASSETS);
                     }
                 });
-                if let Some(error) = i18n::settings_menu(ui) {
-                    self.log(format!("Could not save the settings: {error}"));
-                }
             });
         });
     }
@@ -2478,7 +2486,7 @@ mod tests {
         // The whole window with the cube selected, its parts numbered.
         select(&mut harness.state_mut().editor, CUBE);
         harness.state_mut().callouts = vec![
-            egui::pos2(143.0, 11.0),
+            egui::pos2(250.0, 11.0),
             egui::pos2(427.0, 33.0),
             egui::pos2(87.0, 57.0),
             egui::pos2(590.0, 293.0),
