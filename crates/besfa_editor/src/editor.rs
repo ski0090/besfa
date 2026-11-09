@@ -237,6 +237,11 @@ impl Editor {
     ) -> Self {
         let snapping = Snapping::read(&project.file(SNAP_FILE));
         let organization = OrgPanel::new(project.file(ORGANIZATIONS_DIR));
+        // A run the editor closed on goes on from its chat.
+        let mut agent_panel = AgentPanel::default();
+        if let Some(paused) = organization.paused() {
+            agent_panel.restore(paused.chat(), paused.files(), paused.organization());
+        }
         let mut editor = Self {
             source: SourceWatch::new(project.file("src")),
             assets: AssetBrowser::new(project.file("assets")),
@@ -285,7 +290,7 @@ impl Editor {
             agent_open: false,
             agent_chat_open: false,
             animation_open: false,
-            agent_panel: AgentPanel::default(),
+            agent_panel,
             agent_view: AgentView::Chat,
             organization,
             closing: false,
@@ -1807,6 +1812,16 @@ impl Editor {
             blocked,
             &mut self.organization,
         );
+        if self.agent_panel.take_continue() {
+            let directory = self.project.file("");
+            let scene = self.project.file(SCENE_FILE);
+            let resumed = self
+                .organization
+                .resume(&self.agent, &self.agents, &directory, scene);
+            if let Err(error) = resumed {
+                self.agent_panel.say(&error);
+            }
+        }
         if self.agent != before
             && let Err(error) = self.agent.write(&AgentSettings::file())
         {
@@ -1822,6 +1837,7 @@ impl Editor {
                 &name,
                 task,
                 files,
+                self.agent_panel.chat_id(),
                 &self.agent,
                 &self.agents,
                 &directory,
