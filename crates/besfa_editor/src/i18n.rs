@@ -446,8 +446,8 @@ fn korean(en: &str) -> Option<&'static str> {
         "Group selection" => "선택 항목 묶기",
         "Puts a box around the selected agents." => "선택한 에이전트를 상자로 묶습니다.",
         "Center view" => "뷰 가운데로",
-        "Drag from an agent's right pin to another agent to hand it the result. Right-click a pin to unlink it. Shift-click selects more." => {
-            "에이전트의 오른쪽 핀을 다른 에이전트로 드래그하면 결과를 넘깁니다. 핀을 오른쪽 클릭하면 연결을 끊습니다. Shift+클릭으로 여러 개를 선택합니다."
+        "Drag from an agent's right pin to another agent to hand it the result. Right-click a pin to unlink it. Shift-click selects more. The mouse wheel zooms." => {
+            "에이전트의 오른쪽 핀을 다른 에이전트로 드래그하면 결과를 넘깁니다. 핀을 오른쪽 클릭하면 연결을 끊습니다. Shift+클릭으로 여러 개를 선택합니다. 마우스 휠로 확대/축소합니다."
         }
         "Add agents from the roles on the left." => "왼쪽 역할 목록에서 에이전트를 추가하세요.",
         "Start with a studio" => "스튜디오로 시작",
