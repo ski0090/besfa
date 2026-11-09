@@ -1273,6 +1273,11 @@ impl OrgPanel {
         for id in ids {
             self.node(ui, rect, origin, id, running);
         }
+        // A link dragged out of a node the wheel zoomed off the canvas ends
+        // here: `node` skips nodes it does not draw.
+        if self.wiring.is_some() && !ui.input(|input| input.pointer.any_down()) {
+            self.wiring = None;
+        }
     }
 
     fn groups(&mut self, ui: &mut Ui, painter: &egui::Painter, origin: Vec2, running: bool) {
@@ -2028,6 +2033,13 @@ mod tests {
         harness.get_by_label("Center view").click();
         harness.run();
         assert_eq!(harness.state().zoom, 1.0);
+
+        // A link whose node was zoomed off the canvas still ends on release.
+        let from = harness.state().org.nodes[0].id;
+        harness.state_mut().wiring = Some(from);
+        harness.state_mut().pan = Vec2::new(-5000.0, 0.0);
+        harness.run();
+        assert_eq!(harness.state().wiring, None);
         let _ = fs::remove_file(&file);
     }
 }
