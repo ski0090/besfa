@@ -152,7 +152,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "start",
-            "description": "Builds and runs the Besfa game project at `project` in edit mode, paused, as the editor's Run does (`cargo run --features bevy/dynamic_linking`, plus `besfa_editor` when the game declares it). Returns once cargo starts; the other tools wait for the game. The game runs without a window, so nothing on screen shows it; `screenshot` and `thumbnail` still render. One game at a time; do not run one on a project the editor has open, since both would write its scene file.",
+            "description": "Builds and runs the Besfa game project at `project` in edit mode, paused, as the editor's Run does (`cargo run --features bevy/dynamic_linking`, plus `besfa_editor` when the game declares it). Returns once cargo starts; the other tools wait for the game. The game runs without a window, so nothing on screen shows it; `screenshot` and `thumbnail` still render. One game at a time. This game and an editor with the project open both write its scene file, so do not run one on a project the editor has open, unless the editor's Agent window started you: it saves the scene before your task and reloads it after.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

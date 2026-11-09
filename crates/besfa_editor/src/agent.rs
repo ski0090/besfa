@@ -30,6 +30,11 @@ use crate::{
     process::{self, CliProcess, Output},
 };
 
+/// Tells Claude why the `besfa mcp` warning against running a game beside
+/// the editor does not hold here. An installed `besfa` CLI keeps the
+/// warning it was built with, so the editor says it outright.
+const AGENT_WINDOW: &str = "You run headless from the Besfa editor's Agent window, which has this game project open. The editor sent your task only once its scene was saved, and it reloads the scene file when you finish. So where the besfa start tool says not to run a game on a project the editor has open, that does not apply to you: you may start the game with the besfa tools and save the scene through it.";
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Provider {
     #[default]
@@ -78,8 +83,10 @@ impl Provider {
 
     /// Headless, with the prompt on stdin. Nobody can answer a permission
     /// prompt, so each may edit files in the project without asking and
-    /// nothing more. Claude may also call the `besfa mcp` server a game's
-    /// .mcp.json starts; headless, it loads that server unasked.
+    /// nothing more, except Claude: it may also call the tools of the
+    /// `besfa mcp` server a game's .mcp.json starts (headless, it loads that
+    /// server unasked). Those build and run the game, so code Claude edited
+    /// runs too.
     /// ponytail: Codex and Gemini do not read .mcp.json; add theirs when asked.
     fn args(self) -> &'static [&'static str] {
         match self {
@@ -89,6 +96,8 @@ impl Provider {
                 "acceptEdits",
                 "--allowedTools",
                 "mcp__besfa",
+                "--append-system-prompt",
+                AGENT_WINDOW,
             ],
             Provider::OpenAi => &[
                 "exec",
@@ -1035,6 +1044,8 @@ mod tests {
                 "acceptEdits",
                 "--allowedTools",
                 "mcp__besfa",
+                "--append-system-prompt",
+                AGENT_WINDOW,
                 "--model",
                 "opus"
             ]
@@ -1058,7 +1069,7 @@ mod tests {
             PathBuf::from(r"C:\My Art\a,b.png"),
         ];
         let (_, args, _) = invocation(Provider::Claude, &Route::Cli, "", &files);
-        assert_eq!(args[5..], ["--add-dir", r"C:\My Art"]);
+        assert_eq!(args[7..], ["--add-dir", r"C:\My Art"]);
         let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &files);
         assert_eq!(args[4..], ["--include-directories", r"C:\My Art"]);
         let (_, args, _) = invocation(Provider::OpenAi, &Route::Cli, "", &files);
