@@ -4,7 +4,7 @@
 //! The Agent tab picks the provider and model and sends the prompt.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::Stdio,
@@ -83,19 +83,14 @@ impl Provider {
 
     /// Headless, with the prompt on stdin. Nobody can answer a permission
     /// prompt, so each may edit files in the project without asking and
-    /// nothing more, except Claude: it may also call the tools of the
-    /// `besfa mcp` server a game's .mcp.json starts (headless, it loads that
-    /// server unasked). Those build and run the game, so code Claude edited
-    /// runs too.
-    /// ponytail: Codex and Gemini do not read .mcp.json; add theirs when asked.
+    /// nothing more, except Claude, which `invocation` allows what the
+    /// project's `ProjectAccess` holds.
     fn args(self) -> &'static [&'static str] {
         match self {
             Provider::Claude => &[
                 "-p",
                 "--permission-mode",
                 "acceptEdits",
-                "--allowedTools",
-                "mcp__besfa",
                 "--append-system-prompt",
                 AGENT_WINDOW,
             ],
@@ -187,14 +182,21 @@ fn route(access: Access, cli: Cli, key: &str) -> Result<Route, &'static str> {
 }
 
 /// The program, arguments and environment that send a prompt with `files`
-/// attached.
+/// attached, allowing what `access` holds.
 pub fn invocation(
     provider: Provider,
     route: &Route,
     model: &str,
     files: &[PathBuf],
+    access: &ProjectAccess,
 ) -> (String, Vec<String>, Vec<(String, String)>) {
     let mut args: Vec<String> = provider.args().iter().map(|arg| arg.to_string()).collect();
+    let rules = access.rules();
+    if provider == Provider::Claude && !rules.is_empty() {
+        // The list takes every value up to the next flag.
+        args.push("--allowedTools".into());
+        args.extend(rules);
+    }
     if !model.is_empty() {
         args.extend(["--model".into(), model.into()]);
     }
@@ -238,14 +240,83 @@ fn is_image(file: &Path) -> bool {
         })
 }
 
+/// What Claude may do in a project besides editing its files. The user's
+/// settings keep it, not the project, so a copy of the project allows none
+/// of it until its own user says so.
+/// ponytail: Claude only; Codex's sandbox and Gemini's approval mode need
+/// flags of their own.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct ProjectAccess {
+    /// The .mcp.json servers whose tools it may call. Headless, Claude
+    /// starts every server there unasked, but calls only these.
+    pub servers: BTreeSet<String>,
+    /// Whether it may run git and gh, to commit, push and open pull requests.
+    pub github: bool,
+}
+
+impl Default for ProjectAccess {
+    /// The game's own `besfa mcp`, which builds and runs the game, so code
+    /// Claude edited runs too.
+    fn default() -> Self {
+        Self {
+            servers: BTreeSet::from(["besfa".to_string()]),
+            github: false,
+        }
+    }
+}
+
+impl ProjectAccess {
+    /// Claude's allow rules for it. The project's own deny rules, such as
+    /// against force pushes, still win.
+    fn rules(&self) -> Vec<String> {
+        let mut rules: Vec<String> = self
+            .servers
+            .iter()
+            .map(|server| {
+                // Claude's tool names keep only these characters of a
+                // server's name.
+                let name: String = server
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || "_-".contains(c) {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                format!("mcp__{name}")
+            })
+            .collect();
+        if self.github {
+            rules.extend(["Bash(git *)".into(), "Bash(gh *)".into()]);
+        }
+        rules
+    }
+}
+
+/// `project` as one key however it is written: Windows ignores case, takes
+/// either slash, and the Organization tab's path ends in one.
+fn project_key(project: &Path) -> String {
+    project
+        .to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
+}
+
 /// The provider and model the Agent tab last picked, each provider's model
-/// (empty for the CLI's default), and how each provider is reached.
+/// (empty for the CLI's default), how each provider is reached, and what
+/// the agents may use in each project.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentSettings {
     pub provider: Provider,
     pub models: BTreeMap<Provider, String>,
     pub access: BTreeMap<Provider, Access>,
+    /// By `project_key`; a project missing here has the defaults.
+    pub projects: BTreeMap<String, ProjectAccess>,
 }
 
 impl AgentSettings {
@@ -278,13 +349,24 @@ impl AgentSettings {
     pub fn access(&self, provider: Provider) -> Access {
         self.access.get(&provider).copied().unwrap_or_default()
     }
+
+    /// What the agents may use in `project`.
+    pub fn project(&self, project: &Path) -> ProjectAccess {
+        self.projects
+            .get(&project_key(project))
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
-/// Each provider's CLI state and saved API key.
+/// Each provider's CLI state and saved API key, and the GitHub CLI's state.
 pub struct Agents {
     cli: BTreeMap<Provider, Cli>,
     keys: BTreeMap<Provider, String>,
     checks: Option<Receiver<(Provider, Cli)>>,
+    /// Where `gh` stands, for the agents' GitHub access.
+    gh: Cli,
+    gh_check: Option<Receiver<Cli>>,
     /// Why the last key could not be saved.
     key_error: Option<String>,
 }
@@ -305,6 +387,8 @@ impl Agents {
                 })
                 .into(),
             checks: None,
+            gh: Cli::Checking,
+            gh_check: None,
             key_error: None,
         }
     }
@@ -321,6 +405,14 @@ impl Agents {
             });
         }
         self.checks = Some(receiver);
+        self.gh = Cli::Checking;
+        let (sender, receiver) = mpsc::channel();
+        let ctx = ctx.clone();
+        thread::spawn(move || {
+            let _ = sender.send(check_gh());
+            ctx.request_repaint();
+        });
+        self.gh_check = Some(receiver);
     }
 
     /// Agents whose CLIs stand as `cli`, in `Provider::ALL` order, with
@@ -334,6 +426,8 @@ impl Agents {
                 .map(|(provider, key)| (*provider, key.to_string()))
                 .collect(),
             checks: Some(mpsc::channel().1),
+            gh: Cli::LoggedIn,
+            gh_check: None,
             key_error: None,
         }
     }
@@ -348,6 +442,13 @@ impl Agents {
     pub fn poll(&mut self) {
         if let Some(checks) = &self.checks {
             self.cli.extend(checks.try_iter());
+        }
+        if let Some(gh) = self
+            .gh_check
+            .as_ref()
+            .and_then(|check| check.try_iter().last())
+        {
+            self.gh = gh;
         }
     }
 
@@ -370,6 +471,24 @@ impl Agents {
             Cli::Checking => None,
             _ => Some(self.route(provider, access).is_ok()),
         }
+    }
+}
+
+/// Where the GitHub CLI stands. Run off the UI thread.
+fn check_gh() -> Cli {
+    if process::find_program_on_path("gh").is_none() {
+        return Cli::Missing;
+    }
+    let status = process::command("gh")
+        .args(["auth", "status"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if status.is_ok_and(|status| status.success()) {
+        Cli::LoggedIn
+    } else {
+        Cli::LoggedOut
     }
 }
 
@@ -506,6 +625,127 @@ fn show(ui: &mut Ui, settings: &mut AgentSettings, agents: &mut Agents) -> bool 
         });
     });
     *settings != before
+}
+
+/// The Agent window's Settings tab: how each provider is reached, and what
+/// the agents may use in the project in `directory`. Returns true when
+/// `settings` changed, so the caller saves them.
+pub fn settings_tab(
+    ui: &mut Ui,
+    settings: &mut AgentSettings,
+    agents: &mut Agents,
+    directory: &Path,
+) -> bool {
+    let mut changed = false;
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        changed = show(ui, settings, agents);
+        ui.add_space(8.0);
+        let before = settings.project(directory);
+        let mut access = before.clone();
+        let note = |ui: &mut Ui, text: &str| {
+            ui.label(RichText::new(text).color(panels::MUTED).small());
+        };
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.strong("GitHub");
+            ui.checkbox(
+                &mut access.github,
+                t("Let Claude commit, push and open pull requests"),
+            );
+            note(ui, t("It then runs git and gh in this project without asking. Deny rules in the project's .claude/settings.json, such as against force pushes, still hold."));
+            let gh = match agents.gh {
+                Cli::Checking => t("Checking `{}`.").replace("{}", "gh"),
+                Cli::Missing => t("`{}` is not installed.").replace("{}", "gh"),
+                Cli::LoggedOut => t("`{}` is not logged in. Run `{}` in a terminal to log in.")
+                    .replacen("{}", "gh", 1)
+                    .replacen("{}", "gh auth login", 1),
+                Cli::LoggedIn => t("`{}` is logged in.").replace("{}", "gh"),
+            };
+            let color = match agents.gh {
+                Cli::Missing | Cli::LoggedOut => panels::WARNING,
+                _ => panels::MUTED,
+            };
+            ui.label(RichText::new(gh).color(color).small());
+        });
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            let file = directory.join(".mcp.json");
+            ui.horizontal(|ui| {
+                ui.strong(t("MCP servers"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(t("Open .mcp.json")).clicked() {
+                        if !file.exists() {
+                            let _ = fs::write(&file, "{\n  \"mcpServers\": {}\n}\n");
+                        }
+                        crate::project::open_url(&file.display().to_string());
+                    }
+                });
+            });
+            note(ui, t("The servers in the project's .mcp.json. Claude may call the tools of those checked."));
+            match mcp_servers(&file) {
+                Err(error) => {
+                    ui.colored_label(
+                        panels::ERROR,
+                        t("Could not read .mcp.json: {}").replace("{}", &error),
+                    );
+                }
+                Ok(servers) if servers.is_empty() => note(ui, t("It lists no servers.")),
+                Ok(servers) => {
+                    for (name, start) in servers {
+                        let mut on = access.servers.contains(&name);
+                        ui.horizontal(|ui| {
+                            if ui.checkbox(&mut on, &name).changed() {
+                                if on {
+                                    access.servers.insert(name.clone());
+                                } else {
+                                    access.servers.remove(&name);
+                                }
+                            }
+                            ui.add(
+                                egui::Label::new(RichText::new(start).color(panels::MUTED).small())
+                                    .truncate(),
+                            );
+                        });
+                    }
+                }
+            }
+            note(ui, t("Codex and Gemini do not read .mcp.json. An Organization agent playing a CCGS role uses only the tools its role file lists."));
+        });
+        note(ui, t("These choices stay on this computer, not in the project, so a copy of it starts with GitHub off."));
+        if access != before {
+            settings.projects.insert(project_key(directory), access);
+            changed = true;
+        }
+    });
+    changed
+}
+
+/// Each server in the .mcp.json `file`, with what starts it, or why the
+/// file could not be read. No file lists none.
+fn mcp_servers(file: &Path) -> Result<Vec<(String, String)>, String> {
+    let text = match fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let config: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    let Some(servers) = config["mcpServers"].as_object() else {
+        return Ok(Vec::new());
+    };
+    Ok(servers
+        .iter()
+        .map(|(name, server)| {
+            let start = match server["url"].as_str() {
+                Some(url) => url.to_string(),
+                None => std::iter::once(&server["command"])
+                    .chain(server["args"].as_array().into_iter().flatten())
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            };
+            (name.clone(), start)
+        })
+        .collect())
 }
 
 /// One turn of a chat: what the user sent, or what the agent printed back.
@@ -1034,7 +1274,8 @@ mod tests {
 
     #[test]
     fn passes_the_key_in_the_variable_each_cli_reads() {
-        let (program, args, env) = invocation(Provider::Claude, &Route::Cli, "opus", &[]);
+        let besfa = ProjectAccess::default();
+        let (program, args, env) = invocation(Provider::Claude, &Route::Cli, "opus", &[], &besfa);
         assert_eq!(program, "claude");
         assert_eq!(
             args,
@@ -1042,23 +1283,159 @@ mod tests {
                 "-p",
                 "--permission-mode",
                 "acceptEdits",
-                "--allowedTools",
-                "mcp__besfa",
                 "--append-system-prompt",
                 AGENT_WINDOW,
+                "--allowedTools",
+                "mcp__besfa",
                 "--model",
                 "opus"
             ]
         );
         assert!(env.is_empty());
 
-        let (program, args, env) = invocation(Provider::OpenAi, &Route::Key("sk".into()), "", &[]);
+        let (program, args, env) =
+            invocation(Provider::OpenAi, &Route::Key("sk".into()), "", &[], &besfa);
         assert_eq!(program, "codex");
         assert_eq!(args[0], "exec");
         assert_eq!(env, [("CODEX_API_KEY".to_string(), "sk".to_string())]);
 
-        let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &[]);
+        let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &[], &besfa);
         assert_eq!(args, ["--prompt", "", "--approval-mode", "auto_edit"]);
+    }
+
+    #[test]
+    fn allows_claude_what_the_project_allows() {
+        let allowed = |access: &ProjectAccess| {
+            let (_, args, _) = invocation(Provider::Claude, &Route::Cli, "opus", &[], access);
+            let Some(start) = args.iter().position(|arg| arg == "--allowedTools") else {
+                return Vec::new();
+            };
+            // The list must end at a flag, or it would take the model too.
+            assert_eq!(args[args.len() - 2..], ["--model", "opus"]);
+            args[start + 1..args.len() - 2].to_vec()
+        };
+        assert_eq!(allowed(&ProjectAccess::default()), ["mcp__besfa"]);
+
+        let mut access = ProjectAccess {
+            servers: ["besfa", "my.server"].map(String::from).into(),
+            github: true,
+        };
+        assert_eq!(
+            allowed(&access),
+            ["mcp__besfa", "mcp__my_server", "Bash(git *)", "Bash(gh *)"]
+        );
+
+        access.servers.clear();
+        access.github = false;
+        assert!(allowed(&access).is_empty(), "no flag at all");
+
+        // Codex and Gemini get none of it.
+        access.github = true;
+        for provider in [Provider::OpenAi, Provider::Gemini] {
+            let (_, args, _) = invocation(provider, &Route::Cli, "", &[], &access);
+            assert!(!args.iter().any(|arg| arg.contains("Bash(")), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn keeps_each_projects_access_under_the_user_not_the_project() {
+        let mut settings = AgentSettings::default();
+        assert_eq!(
+            settings.project(Path::new(r"C:\Games\Dusk")),
+            ProjectAccess::default()
+        );
+        let access = ProjectAccess {
+            github: true,
+            ..Default::default()
+        };
+        settings
+            .projects
+            .insert(project_key(Path::new(r"C:\Games\Dusk\")), access.clone());
+        // The Organization tab's path ends in a slash; the hub's may differ
+        // in case.
+        assert_eq!(settings.project(Path::new("c:/games/dusk")), access);
+        assert_eq!(
+            settings.project(Path::new(r"C:\Games\Other")),
+            ProjectAccess::default()
+        );
+
+        let text = ron::to_string(&settings).unwrap();
+        let back: AgentSettings = ron::from_str(&text).unwrap();
+        assert_eq!(back, settings);
+        // A settings file from before projects had access loads unchanged.
+        let old: AgentSettings = ron::from_str("(provider: OpenAi)").unwrap();
+        assert_eq!(old.provider, Provider::OpenAi);
+        assert!(old.projects.is_empty());
+    }
+
+    #[test]
+    fn lists_the_mcp_servers_and_what_starts_them() {
+        let dir = std::env::temp_dir().join(format!("besfa_mcp_json_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(".mcp.json");
+        let _ = fs::remove_file(&file);
+        assert_eq!(mcp_servers(&file), Ok(Vec::new()), "no file lists none");
+
+        fs::write(
+            &file,
+            r#"{"mcpServers": {
+                "besfa": {"command": "besfa", "args": ["mcp"]},
+                "github": {"type": "http", "url": "https://api.githubcopilot.com/mcp/"}
+            }}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            mcp_servers(&file).unwrap(),
+            [
+                ("besfa".to_string(), "besfa mcp".to_string()),
+                (
+                    "github".to_string(),
+                    "https://api.githubcopilot.com/mcp/".to_string()
+                ),
+            ]
+        );
+
+        fs::write(&file, "{not json").unwrap();
+        assert!(mcp_servers(&file).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_settings_tab_lets_claude_use_github_and_each_server() {
+        let dir = std::env::temp_dir().join(format!("besfa_settings_tab_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(".mcp.json"),
+            r#"{"mcpServers": {"besfa": {"command": "besfa", "args": ["mcp"]}, "github": {"url": "https://example.com/mcp"}}}"#,
+        )
+        .unwrap();
+        let directory = dir.clone();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(600.0, 900.0))
+            .build_ui_state(
+                move |ui, (settings, agents): &mut (AgentSettings, Agents)| {
+                    settings_tab(ui, settings, agents, &directory);
+                },
+                (AgentSettings::default(), agents(Cli::LoggedIn)),
+            );
+        harness.run();
+        assert!(
+            harness
+                .query_by_label_contains("`gh` is logged in.")
+                .is_some()
+        );
+        assert!(harness.query_by_label("https://example.com/mcp").is_some());
+
+        harness
+            .get_by_label("Let Claude commit, push and open pull requests")
+            .click();
+        harness.get_by_label("github").click();
+        harness.get_by_label("besfa").click();
+        harness.run();
+        let access = harness.state().0.project(&dir);
+        assert!(access.github);
+        assert_eq!(access.servers, ["github".to_string()].into());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1068,11 +1445,15 @@ mod tests {
             PathBuf::from(r"C:\My Art\notes.txt"),
             PathBuf::from(r"C:\My Art\a,b.png"),
         ];
-        let (_, args, _) = invocation(Provider::Claude, &Route::Cli, "", &files);
-        assert_eq!(args[7..], ["--add-dir", r"C:\My Art"]);
-        let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &files);
+        let none = ProjectAccess {
+            servers: Default::default(),
+            github: false,
+        };
+        let (_, args, _) = invocation(Provider::Claude, &Route::Cli, "", &files, &none);
+        assert_eq!(args[5..], ["--add-dir", r"C:\My Art"]);
+        let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &files, &none);
         assert_eq!(args[4..], ["--include-directories", r"C:\My Art"]);
-        let (_, args, _) = invocation(Provider::OpenAi, &Route::Cli, "", &files);
+        let (_, args, _) = invocation(Provider::OpenAi, &Route::Cli, "", &files, &none);
         assert_eq!(args[4..], [r"--image=C:\My Art\ref.PNG"]);
     }
 

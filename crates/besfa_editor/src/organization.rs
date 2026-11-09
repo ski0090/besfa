@@ -884,6 +884,7 @@ impl OrgPanel {
                 return;
             }
         };
+        let access = settings.project(directory);
         let mut invocations = Vec::new();
         let mut answers = Vec::new();
         for &id in &order {
@@ -900,7 +901,7 @@ impl OrgPanel {
                 }
             };
             let (program, mut args, env) =
-                agent::invocation(node.provider, &route, &node.model, &[]);
+                agent::invocation(node.provider, &route, &node.model, &[], &access);
             args.extend(node.effort.args(node.provider));
             // In a CCGS game Claude can play the role's own agent file.
             let agent_file = directory.join(format!(".claude/agents/{}.md", node.role));

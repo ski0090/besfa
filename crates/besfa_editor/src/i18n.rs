@@ -424,6 +424,28 @@ fn korean(en: &str) -> Option<&'static str> {
         "Agents with roles that work on a task together." => {
             "역할을 맡은 에이전트들이 함께 작업합니다."
         }
+        "How each provider is reached, and what the agents may use in this project." => {
+            "제공자마다 연결하는 방법과, 이 프로젝트에서 에이전트가 쓸 수 있는 것"
+        }
+        "Let Claude commit, push and open pull requests" => {
+            "Claude가 커밋하고 푸시하고 풀 리퀘스트를 열게 하기"
+        }
+        "It then runs git and gh in this project without asking. Deny rules in the project's .claude/settings.json, such as against force pushes, still hold." => {
+            "그러면 Claude가 이 프로젝트에서 git과 gh를 묻지 않고 실행합니다. 강제 푸시 금지처럼 프로젝트의 .claude/settings.json에 있는 거부 규칙은 그대로 지켜집니다."
+        }
+        "MCP servers" => "MCP 서버",
+        "Open .mcp.json" => ".mcp.json 열기",
+        "The servers in the project's .mcp.json. Claude may call the tools of those checked." => {
+            "프로젝트의 .mcp.json에 있는 서버입니다. Claude는 체크한 서버의 도구만 부를 수 있습니다."
+        }
+        "Could not read .mcp.json: {}" => ".mcp.json을 읽지 못했습니다: {}",
+        "It lists no servers." => "서버가 하나도 없습니다.",
+        "Codex and Gemini do not read .mcp.json. An Organization agent playing a CCGS role uses only the tools its role file lists." => {
+            "Codex와 Gemini는 .mcp.json을 읽지 않습니다. 조직 탭에서 CCGS 역할을 맡은 에이전트는 역할 파일에 적힌 도구만 씁니다."
+        }
+        "These choices stay on this computer, not in the project, so a copy of it starts with GitHub off." => {
+            "이 선택은 프로젝트가 아니라 이 컴퓨터에 남습니다. 그래서 프로젝트를 복사하면 GitHub는 꺼진 채로 시작합니다."
+        }
         "The organization is working on a task." => "조직이 작업 중입니다.",
         "Save the scene first. The agent may change its file." => {
             "먼저 씬을 저장하세요. 에이전트가 씬 파일을 바꿀 수 있습니다."

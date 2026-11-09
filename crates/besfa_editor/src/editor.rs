@@ -121,6 +121,7 @@ enum BottomTab {
 enum AgentView {
     Chat,
     Organization,
+    Settings,
 }
 
 enum Dialog {
@@ -1769,11 +1770,16 @@ impl Editor {
                         t("Organization"),
                     )
                     .on_hover_text(t("Agents with roles that work on a task together."));
+                    ui.selectable_value(&mut self.agent_view, AgentView::Settings, t("Settings"))
+                        .on_hover_text(t(
+                            "How each provider is reached, and what the agents may use in this project.",
+                        ));
                 });
             });
             match self.agent_view {
                 AgentView::Chat => self.agent_tab(ui),
                 AgentView::Organization => self.organization_tab(ui),
+                AgentView::Settings => self.agent_settings_tab(ui),
             }
             close = ui.input(|input| input.viewport().close_requested());
         });
@@ -1807,9 +1813,14 @@ impl Editor {
         // The pick may have changed this frame, so the route is asked again.
         if let (Some((prompt, files)), Ok(route)) = (prompt, self.agent_route()) {
             let provider = self.agent.provider;
-            let invocation =
-                agent::invocation(provider, &route, self.agent.model(provider), &files);
             let directory = self.project.file("");
+            let invocation = agent::invocation(
+                provider,
+                &route,
+                self.agent.model(provider),
+                &files,
+                &self.agent.project(&directory),
+            );
             let scene = self.project.file(SCENE_FILE);
             self.agent_panel
                 .start(invocation, &prompt, &directory, scene, ctx);
@@ -1837,6 +1848,19 @@ impl Editor {
             let scene = self.project.file(SCENE_FILE);
             self.organization
                 .start(task, &self.agent, &self.agents, &directory, scene);
+        }
+    }
+
+    fn agent_settings_tab(&mut self, ui: &mut Ui) {
+        self.agents.check_once(ui.ctx());
+        let directory = self.project.file("");
+        let changed = egui::CentralPanel::default()
+            .show(ui, |ui| {
+                agent::settings_tab(ui, &mut self.agent, &mut self.agents, &directory)
+            })
+            .inner;
+        if changed && let Err(error) = self.agent.write(&AgentSettings::file()) {
+            self.log(format!("Could not save the agent settings: {error}"));
         }
     }
 
