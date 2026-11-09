@@ -267,8 +267,8 @@ impl Default for ProjectAccess {
 }
 
 impl ProjectAccess {
-    /// Claude's allow rules for it. The project's own deny rules, such as
-    /// against force pushes, still win.
+    /// Claude's allow rules for it. The project's own deny rules still win,
+    /// but only over commands they match as written.
     fn rules(&self) -> Vec<String> {
         let mut rules: Vec<String> = self
             .servers
@@ -297,7 +297,7 @@ impl ProjectAccess {
 }
 
 /// `project` as one key however it is written: Windows ignores case, takes
-/// either slash, and the Organization tab's path ends in one.
+/// either slash, and the path every Agent window tab passes ends in one.
 fn project_key(project: &Path) -> String {
     project
         .to_string_lossy()
@@ -652,7 +652,7 @@ pub fn settings_tab(
                 &mut access.github,
                 t("Let Claude commit, push and open pull requests"),
             );
-            note(ui, t("It then runs git and gh in this project without asking. Deny rules in the project's .claude/settings.json, such as against force pushes, still hold."));
+            note(ui, t("It then runs git and gh without asking, and gh reaches every repository your GitHub login can. Deny rules in the project's .claude/settings.json still win, but only over commands they match as written, so block force pushes with branch protection on GitHub."));
             let gh = match agents.gh {
                 Cli::Checking => t("Checking `{}`.").replace("{}", "gh"),
                 Cli::Missing => t("`{}` is not installed.").replace("{}", "gh"),
@@ -1351,7 +1351,7 @@ mod tests {
         settings
             .projects
             .insert(project_key(Path::new(r"C:\Games\Dusk\")), access.clone());
-        // The Organization tab's path ends in a slash; the hub's may differ
+        // The tabs pass the path with a trailing slash; the hub's may differ
         // in case.
         assert_eq!(settings.project(Path::new("c:/games/dusk")), access);
         assert_eq!(
