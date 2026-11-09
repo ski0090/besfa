@@ -3,7 +3,7 @@
 //! transitions move between them when the game's [`AnimationParams`] say
 //! so, crossfading on the model's `AnimationPlayer`s. The game writes the
 //! parameters and nothing else; the scene file keeps the machine, so the
-//! editor's Animation tab and `set` from `besfa_mcp` change it live.
+//! editor's animation window and `set` from `besfa_mcp` change it live.
 // ponytail: the machine sits inline on each root; a zombie horde shares one
 // through a prefab. Move it to a file under assets/ when that stops being
 // enough.
