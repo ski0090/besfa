@@ -133,27 +133,43 @@ impl Department {
     }
 }
 
-/// A CCGS agent: its file name in `.claude/agents/`, its department, the
-/// Claude model CCGS gives it ("" where CCGS inherits the session's) and
-/// what it does.
+/// A CCGS agent: its file name in `.claude/agents/`, its department and
+/// what it does. Its model comes from its tier in `CCGS_CHART`.
 struct Role {
     name: &'static str,
     department: Department,
-    model: &'static str,
     summary: &'static str,
 }
 
-const fn role(
-    name: &'static str,
-    department: Department,
-    model: &'static str,
-    summary: &'static str,
-) -> Role {
+const fn role(name: &'static str, department: Department, summary: &'static str) -> Role {
     Role {
         name,
         department,
-        model,
         summary,
+    }
+}
+
+/// The Claude model and effort a CCGS role starts with, by its tier in
+/// `CCGS_CHART`: directors decide, leads plan, specialists do the work.
+fn tier(role: &str) -> (&'static str, Effort) {
+    if CCGS_CHART.iter().any(|&(director, _, _)| director == role) {
+        ("opus", Effort::High)
+    } else if CCGS_CHART.iter().any(|&(_, lead, _)| lead == role) {
+        ("opus", Effort::Medium)
+    } else {
+        ("sonnet", Effort::Default)
+    }
+}
+
+/// What a CCGS role started with before the tiers (organization files at
+/// version 0): CCGS's own models, opus and high effort for Leadership.
+fn former_tier(role: &Role) -> (&'static str, Effort) {
+    match role.name {
+        _ if role.department == Department::Leadership => ("opus", Effort::High),
+        "lead-programmer" | "prototyper" | "devops-engineer" | "community-manager" => {
+            ("sonnet", Effort::Default)
+        }
+        _ => ("", Effort::Default),
     }
 }
 
@@ -165,211 +181,176 @@ const ROLES: &[Role] = {
         role(
             "creative-director",
             Leadership,
-            "opus",
             "Highest creative authority: vision, tone and aesthetic direction; settles deadlocks between department leads.",
         ),
         role(
             "technical-director",
             Leadership,
-            "opus",
             "High-level technical decisions: engine architecture, technology choices, performance strategy, technical risk.",
         ),
         role(
             "producer",
             Leadership,
-            "opus",
             "Production: sprint planning, milestones, risk, scope, and coordination across departments.",
         ),
         role(
             "game-designer",
             Design,
-            "",
             "Mechanics and systems design: core loops, progression, combat, economy, player-facing rules.",
         ),
         role(
             "systems-designer",
             Design,
-            "",
             "Detailed subsystem mechanics: combat formulas, progression curves, crafting recipes, status effects.",
         ),
         role(
             "level-designer",
             Design,
-            "",
             "Spatial design of levels: encounter layouts, pacing, difficulty, environmental storytelling.",
         ),
         role(
             "economy-designer",
             Design,
-            "",
             "Resource economies: loot tables, sinks and faucets, progression curve calibration, balance.",
         ),
         role(
             "narrative-director",
             Design,
-            "",
             "Story architecture, world-building, character design and dialogue strategy.",
         ),
         role(
             "writer",
             Design,
-            "",
             "Player-facing text: dialogue, lore entries, item and ability descriptions.",
         ),
         role(
             "world-builder",
             Design,
-            "",
             "Lore: factions, cultures, history, geography, ecology and world rules.",
         ),
         role(
             "ux-designer",
             Design,
-            "",
             "User flows, interaction design, information architecture and onboarding.",
         ),
         role(
             "live-ops-designer",
             Design,
-            "",
             "Post-launch content: seasonal events, battle passes, content cadence, retention.",
         ),
         role(
             "lead-programmer",
             Programming,
-            "sonnet",
             "Code architecture, coding standards, code review, API design; assigns work to the programmers.",
         ),
         role(
             "gameplay-programmer",
             Programming,
-            "",
             "Implements designed mechanics as code: player systems, combat, interactive features.",
         ),
         role(
             "engine-programmer",
             Programming,
-            "",
             "Core engine systems: rendering pipeline, physics, memory, resource loading, scenes.",
         ),
         role(
             "ai-programmer",
             Programming,
-            "",
             "Game AI: behavior trees, state machines, pathfinding, perception, NPC and enemy behavior.",
         ),
         role(
             "network-programmer",
             Programming,
-            "",
             "Multiplayer: state replication, lag compensation, matchmaking, netcode and bandwidth.",
         ),
         role(
             "ui-programmer",
             Programming,
-            "",
             "User interface systems: menus, HUDs, inventory screens, dialogue boxes, screen flow.",
         ),
         role(
             "tools-programmer",
             Programming,
-            "",
             "Internal tools: editor extensions, content authoring tools, debug utilities, pipelines.",
         ),
         role(
             "bevy-specialist",
             Programming,
-            "",
             "Bevy patterns and APIs: ECS, plugins and schedules, messages and observers, rendering, bevy_ui.",
         ),
         role(
             "prototyper",
             Programming,
-            "sonnet",
             "Throwaway builds that test whether an idea is fun. Speed over standards.",
         ),
         role(
             "art-director",
             ArtAudio,
-            "",
             "Visual identity: style guides, art bible, asset standards, color palettes, UI look.",
         ),
         role(
             "technical-artist",
             ArtAudio,
-            "",
             "Shaders, VFX, rendering optimization and the art pipeline between art and engineering.",
         ),
         role(
             "audio-director",
             ArtAudio,
-            "",
             "Sonic identity: music direction, sound palette, audio implementation, mix balance.",
         ),
         role(
             "sound-designer",
             ArtAudio,
-            "",
             "SFX specifications: audio events, mixing parameters, sound categories.",
         ),
         role(
             "qa-lead",
             Quality,
-            "",
             "Test strategy: test plans, bug severity, regression planning, release quality gates.",
         ),
         role(
             "qa-tester",
             Quality,
-            "",
             "Writes test cases, bug reports and regression checklists.",
         ),
         role(
             "performance-analyst",
             Quality,
-            "",
             "Profiling, bottlenecks, memory and frame time; recommends optimizations.",
         ),
         role(
             "accessibility-specialist",
             Quality,
-            "",
             "Remapping, text scaling, colorblind modes, screen reader support.",
         ),
         role(
             "security-engineer",
             Quality,
-            "",
             "Anti-cheat, exploits, secure saves and network traffic, player privacy.",
         ),
         role(
             "release-manager",
             Operations,
-            "",
             "Release pipeline: certification, store submissions, version numbers, release day.",
         ),
         role(
             "devops-engineer",
             Operations,
-            "sonnet",
             "Build pipelines, CI/CD, version control workflow and test automation.",
         ),
         role(
             "analytics-engineer",
             Operations,
-            "",
             "Telemetry: event tracking, player behavior, A/B tests, dashboards.",
         ),
         role(
             "localization-lead",
             Operations,
-            "",
             "Internationalization: string extraction, translation pipeline, locale testing.",
         ),
         role(
             "community-manager",
             Operations,
-            "sonnet",
             "Patch notes, social posts, community updates, player feedback and bug triage.",
         ),
     ]
@@ -560,12 +541,37 @@ pub struct Organization {
     links: Vec<(u32, u32)>,
     groups: Vec<Group>,
     next_id: u32,
+    /// 0 in files from before roles started with their tier's model; reading
+    /// one moves its agents still on CCGS's own models to their tier's.
+    version: u32,
 }
 
 impl Organization {
     /// What `file` keeps, or an empty organization.
     pub fn read(file: &Path) -> Self {
-        read_ron(file).map(Self::tidy).unwrap_or_default()
+        read_ron(file)
+            .map(Self::tidy)
+            .map(Self::upgrade)
+            .unwrap_or_default()
+    }
+
+    fn upgrade(mut self) -> Self {
+        if self.version == 0 {
+            for node in &mut self.nodes {
+                let Some(role) = find_role(&node.role) else {
+                    continue;
+                };
+                let (model, effort) = former_tier(role);
+                if node.provider == Provider::Claude && node.model == model && node.effort == effort
+                {
+                    let (model, effort) = tier(role.name);
+                    node.model = model.into();
+                    node.effort = effort;
+                }
+            }
+        }
+        self.version = 1;
+        self
     }
 
     /// Without links the editor cannot make, which a hand-edited or merged
@@ -586,7 +592,13 @@ impl Organization {
     }
 
     fn write(&self, file: &Path) -> Result<(), String> {
-        write_ron(file, self)
+        write_ron(
+            file,
+            &Self {
+                version: 1,
+                ..self.clone()
+            },
+        )
     }
 
     fn id(&mut self) -> u32 {
@@ -607,16 +619,14 @@ impl Organization {
     fn add(&mut self, name: &str, pos: Pos2) -> u32 {
         let id = self.id();
         let role = find_role(name);
+        let (model, effort) = role.map_or(("", Effort::Default), |role| tier(role.name));
         self.nodes.push(Node {
             id,
             name: role.map_or_else(|| "Agent".into(), |role| title(role.name)),
             role: name.into(),
             instructions: role.map_or_else(String::new, |role| role.summary.into()),
-            model: role.map_or_else(String::new, |role| role.model.into()),
-            effort: match role.map(|role| role.department) {
-                Some(Department::Leadership) => Effort::High,
-                _ => Effort::Default,
-            },
+            model: model.into(),
+            effort,
             pos: pos.into(),
             ..Default::default()
         });
@@ -696,8 +706,10 @@ impl Organization {
                 input.push_str(&format!("\n## {}\n{}\n", node.name, node.output.trim()));
             }
         }
+        // Role files that wait for the user's yes before writing would
+        // otherwise end on a question nobody reads until the run is over.
         input.push_str(
-            "\nDo your part of the task only. End with a short report of what you did and decided, for the agents after you.",
+            "\nThis run is headless: the agents go one after another and nobody reads your questions until the last one is done. The user's task is their approval for the work it asks of you, files, commits and pull requests included, so do that work now rather than asking whether you may. Where the task leaves a choice open, decide, act on it and say what you chose. Put anything only the user can settle under a heading \"For the user\" at the end of your report, and do not stop for it.\n\nDo your part of the task only. End with a short report of what you did and decided, for the agents after you.",
         );
         input
     }
@@ -804,7 +816,8 @@ impl Organization {
 }
 
 /// CCGS's chart, a row for each department lead: the director it answers
-/// to, the lead, and its specialists. shortcut: CCGS's README names the
+/// to, the lead, and its specialists. The tiers also set each role's
+/// model; see `tier`. shortcut: CCGS's README names the
 /// three tiers but not who reports to whom, so leads take their
 /// department's specialists; follow CCGS if it publishes its chart.
 const CCGS_CHART: &[(&str, &str, &[&str])] = &[
@@ -2224,6 +2237,7 @@ mod tests {
         assert!(input.contains("Implements designed mechanics"));
         assert!(input.contains("Add a jump."));
         assert!(input.contains("## Game Designer\nJumping costs stamina."));
+        assert!(input.contains("rather than asking whether you may"));
         assert!(
             !org.input(design, "Add a jump.")
                 .contains("before you reported")
@@ -2231,17 +2245,17 @@ mod tests {
     }
 
     #[test]
-    fn starts_a_role_with_its_ccgs_model_and_effort() {
+    fn starts_a_role_with_its_tiers_model_and_effort() {
         let mut org = Organization::default();
         let director = org.add("creative-director", Pos2::ZERO);
-        let lead = org.add("lead-programmer", Pos2::ZERO);
+        let lead = org.add("localization-lead", Pos2::ZERO);
+        let specialist = org.add("prototyper", Pos2::ZERO);
         let custom = org.add("", Pos2::ZERO);
         let node = |id| org.node(id).unwrap();
-        assert_eq!(
-            (node(director).model.as_str(), node(director).effort),
-            ("opus", Effort::High)
-        );
-        assert_eq!(node(lead).model, "sonnet");
+        let tier = |id| (node(id).model.as_str(), node(id).effort);
+        assert_eq!(tier(director), ("opus", Effort::High));
+        assert_eq!(tier(lead), ("opus", Effort::Medium));
+        assert_eq!(tier(specialist), ("sonnet", Effort::Default));
         assert_eq!(
             (node(custom).name.as_str(), node(custom).model.as_str()),
             ("Agent", "")
@@ -2253,6 +2267,44 @@ mod tests {
         );
         assert!(Effort::High.args(Provider::Gemini).is_empty());
         assert!(Effort::Default.args(Provider::Claude).is_empty());
+    }
+
+    #[test]
+    fn moves_agents_still_on_ccgs_models_to_their_tier_once() {
+        let mut org = Organization::default();
+        let lead = org.add("lead-programmer", Pos2::ZERO);
+        let writer = org.add("writer", Pos2::ZERO);
+        let chosen = org.add("qa-lead", Pos2::ZERO);
+        let gemini = org.add("qa-tester", Pos2::ZERO);
+        for (id, model) in [
+            (lead, "sonnet"),
+            (writer, ""),
+            (chosen, "haiku"),
+            (gemini, ""),
+        ] {
+            let node = org.node_mut(id).unwrap();
+            node.model = model.into();
+            node.effort = Effort::Default;
+        }
+        org.node_mut(gemini).unwrap().provider = Provider::Gemini;
+        let file = std::env::temp_dir().join(format!("besfa-org-v0-{}.besfa", std::process::id()));
+        write_ron(&file, &org).unwrap();
+        let mut back = Organization::read(&file);
+        let model = |org: &Organization, id| org.node(id).unwrap().model.clone();
+        assert_eq!(model(&back, lead), "opus");
+        assert_eq!(model(&back, writer), "sonnet");
+        assert_eq!(
+            model(&back, chosen),
+            "haiku",
+            "a model the user picked stays"
+        );
+        assert_eq!(model(&back, gemini), "");
+        // Once written at version 1, a CLI default picked after stays.
+        back.node_mut(writer).unwrap().model.clear();
+        back.write(&file).unwrap();
+        let again = Organization::read(&file);
+        fs::remove_file(&file).unwrap();
+        assert_eq!(model(&again, writer), "");
     }
 
     #[test]

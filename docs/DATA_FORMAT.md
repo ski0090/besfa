@@ -167,6 +167,7 @@ Agent 창의 Organization 탭은 조직마다 에이전트 노드, 결과를 넘
 - `links`: `(보내는 id, 받는 id)`. 고리를 만드는 링크는 추가하지 않는다.
 - `groups`: `id`, `name`, `min`, `max`(캔버스 좌표의 모서리), `color`(sRGB).
 - `next_id`: 다음 노드·그룹 id를 만들 때 쓰는 카운터.
+- `version`: 쓸 때 항상 `1`. 없거나 `0`인 파일은 CCGS 역할이 CCGS 원본 모델로 시작하던 때의 파일이라, 읽을 때 원본 기본값(Leadership은 `opus`와 `High`, `lead-programmer`·`prototyper`·`devops-engineer`·`community-manager`는 `sonnet`, 나머지는 빈 문자열, 모두 Claude) 그대로인 노드만 계층 기본값으로 바꾼다. 계층 기본값은 디렉터 `opus`와 `High`, 리드 `opus`와 `Medium`, 전문가 `sonnet`과 `Default`.
 
 ## 버전 관리
 
