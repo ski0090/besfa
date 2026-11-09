@@ -1,6 +1,7 @@
 //! The Agent window's Organization tab: agents with roles, wired like a
 //! Blueprint graph. A link hands one agent's result to the next, and a task
-//! runs every agent once, in link order. The roles to start from are Claude
+//! sent to the organization from the chat runs every agent once, in link
+//! order, each answering in the chat. The roles to start from are Claude
 //! Code Game Studios' (CCGS) agents.
 
 use std::{
@@ -15,16 +16,20 @@ use eframe::egui::{
     UiBuilder, Vec2, emath::TSTransform, epaint::CubicBezierShape,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
-    agent::{self, AgentSettings, Agents, Provider},
+    agent::{self, AgentSettings, Agents, Message, Provider},
     i18n::t,
     panels,
     process::{CliProcess, Output},
 };
 
-/// Where a project keeps its organization.
-pub const ORGANIZATION_FILE: &str = "besfa/organization.besfa";
+/// Where a project keeps its organizations, one file each, named after it.
+pub const ORGANIZATIONS_DIR: &str = "besfa/organizations";
+
+/// Characters a Windows file name cannot hold.
+const NOT_IN_NAMES: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
 
 const NODE_SIZE: Vec2 = Vec2::new(210.0, 118.0);
 const HEADER: f32 = 26.0;
@@ -384,6 +389,66 @@ fn title(name: &str) -> String {
         .join(" ")
 }
 
+/// What a line an agent's CLI printed adds to its message.
+#[derive(Debug, PartialEq)]
+enum Streamed {
+    Thought(String),
+    /// Part of the answer.
+    Text(String),
+    /// The whole answer.
+    Answer(String),
+    Nothing,
+}
+
+/// Reads a line of Claude's `--output-format stream-json`: what it says and
+/// the tools it calls on the way are thoughts, and the result is the answer.
+/// Its thinking arrives empty unless the CLI is set to show it.
+fn streamed(line: &str) -> Streamed {
+    let Ok(event) = serde_json::from_str::<Value>(line) else {
+        // A warning or error printed as it is.
+        return Streamed::Text(line.into());
+    };
+    match event["type"].as_str() {
+        Some("assistant") => {
+            let blocks = event["message"]["content"].as_array();
+            let said: Vec<String> = blocks
+                .into_iter()
+                .flatten()
+                .filter_map(|block| match block["type"].as_str()? {
+                    "text" => block["text"].as_str().map(str::to_string),
+                    "thinking" => block["thinking"].as_str().map(str::to_string),
+                    "tool_use" => {
+                        // Bash's command, Read's path, Glob's pattern...
+                        let input = block["input"].as_object();
+                        let what = input
+                            .and_then(|input| input.values().find_map(Value::as_str))
+                            .and_then(|what| what.lines().next())
+                            .unwrap_or_default();
+                        let what: String = what.chars().take(120).collect();
+                        Some(format!("[{}] {what}", block["name"].as_str()?))
+                    }
+                    _ => None,
+                })
+                .filter(|text| !text.trim().is_empty())
+                .collect();
+            if said.is_empty() {
+                Streamed::Nothing
+            } else {
+                Streamed::Thought(said.join("\n"))
+            }
+        }
+        Some("result") => Streamed::Answer(event["result"].as_str().unwrap_or_default().into()),
+        _ => Streamed::Nothing,
+    }
+}
+
+fn push_line(text: &mut String, line: &str) {
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(line);
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum NodeState {
     #[default]
@@ -408,14 +473,40 @@ pub struct Node {
     model: String,
     effort: Effort,
     pos: [f32; 2],
-    /// What it printed on the last run.
+    /// What it answered on the last run.
     #[serde(skip)]
     output: String,
+    /// What it thought and did on the way to that answer.
+    #[serde(skip)]
+    thoughts: String,
     #[serde(skip)]
     state: NodeState,
 }
 
 impl Node {
+    /// Takes a line its CLI printed: Claude's are stream-json events, Codex
+    /// logs its run and leaves the answer in a file, Gemini prints the
+    /// answer.
+    fn take(&mut self, line: &str) {
+        let line = match self.provider {
+            Provider::Claude => streamed(line),
+            Provider::OpenAi => Streamed::Thought(line.into()),
+            Provider::Gemini => Streamed::Text(line.into()),
+        };
+        match line {
+            Streamed::Thought(text) => push_line(&mut self.thoughts, &text),
+            Streamed::Text(text) => push_line(&mut self.output, &text),
+            Streamed::Answer(text) => {
+                // The answer is also the last thing it said on the way.
+                if let Some(rest) = self.thoughts.trim_end().strip_suffix(text.trim()) {
+                    self.thoughts = rest.trim_end().into();
+                }
+                self.output = text;
+            }
+            Streamed::Nothing => {}
+        }
+    }
+
     fn color(&self) -> Color32 {
         find_role(&self.role).map_or(Color32::from_gray(0x5A), |role| role.department.color())
     }
@@ -802,14 +893,20 @@ fn graph_pointer(ui: &Ui) -> Option<Pos2> {
     Some(from_global.map_or(pointer, |from_global| from_global * pointer))
 }
 
-/// The Organization tab: the role palette, the graph, the picked node or
-/// group, and the task card.
+/// The Organization tab: the role palette, the graph and the picked node or
+/// group. Tasks come from the chat.
 pub struct OrgPanel {
     org: Organization,
-    file: PathBuf,
+    /// The folder of every organization.
+    dir: PathBuf,
+    /// The one shown, and the one a run goes through.
+    name: String,
+    /// Every organization's name, sorted.
+    names: Vec<String>,
+    /// The name field, which renames the organization once left.
+    rename: String,
     /// The organization changed since it was last written.
     unsaved: bool,
-    task: String,
     pan: Vec2,
     /// How big the graph is drawn, 1 for its own size.
     zoom: f32,
@@ -818,24 +915,55 @@ pub struct OrgPanel {
     /// The node a link is being dragged out of.
     wiring: Option<u32>,
     run: Option<Run>,
-    error: Option<String>,
+    /// Why the last link or name was refused.
+    refused: Option<&'static str>,
 }
 
 impl OrgPanel {
     /// The organization `file` keeps.
-    pub fn new(file: PathBuf) -> Self {
+    /// The organizations `dir` keeps, showing the first. A project's one
+    /// organization from before there could be more moves in with the
+    /// name "Organization".
+    pub fn new(dir: PathBuf) -> Self {
+        let old = dir.parent().map(|besfa| besfa.join("organization.besfa"));
+        if let Some(old) = old
+            && old.is_file()
+            && !dir.exists()
+            && fs::create_dir_all(&dir).is_ok()
+        {
+            let _ = fs::rename(&old, dir.join("Organization.besfa"));
+        }
+        let mut names: Vec<String> = fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "besfa")
+            })
+            .filter_map(|path| Some(path.file_stem()?.to_str()?.to_string()))
+            .collect();
+        names.sort();
+        // Written once it has something in it.
+        if names.is_empty() {
+            names.push(t("Organization").into());
+        }
+        let name = names[0].clone();
         Self {
-            org: Organization::read(&file),
-            file,
+            org: Organization::read(&dir.join(format!("{name}.besfa"))),
+            dir,
+            rename: name.clone(),
+            name,
+            names,
             unsaved: false,
-            task: String::new(),
             pan: Vec2::ZERO,
             zoom: 1.0,
             selected: Vec::new(),
             group: None,
             wiring: None,
             run: None,
-            error: None,
+            refused: None,
         }
     }
 
@@ -857,7 +985,6 @@ impl OrgPanel {
         }
         panel.org.nodes[1].output = "Jumping costs 10 stamina and works once in the air.".into();
         panel.selected = vec![ids[1]];
-        panel.task = "Add a double jump to the player.".into();
         panel
     }
 
@@ -865,44 +992,148 @@ impl OrgPanel {
         self.run.is_some()
     }
 
-    /// Runs `task` through every agent in `directory`, each the way
-    /// `settings` reaches its provider. `poll` tells once it is done whether
-    /// it changed `watch`.
+    /// Every organization's name, for the chat to pick from.
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    fn file(&self, name: &str) -> PathBuf {
+        self.dir.join(format!("{name}.besfa"))
+    }
+
+    /// Writes the shown organization if it changed.
+    fn save(&mut self) -> Result<(), String> {
+        if !self.unsaved {
+            return Ok(());
+        }
+        self.unsaved = false;
+        self.org.write(&self.file(&self.name))
+    }
+
+    /// Shows `name`'s organization in place of this one, which is saved
+    /// first.
+    fn open(&mut self, name: &str) -> Result<(), String> {
+        self.save()?;
+        self.org = Organization::read(&self.file(name));
+        self.name = name.into();
+        self.rename = name.into();
+        self.selected.clear();
+        self.group = None;
+        self.wiring = None;
+        self.refused = None;
+        Ok(())
+    }
+
+    /// Adds an empty organization and shows it.
+    fn add_organization(&mut self) -> Result<(), String> {
+        let base = t("Organization");
+        let name = (1..)
+            .map(|n| {
+                if n == 1 {
+                    base.to_string()
+                } else {
+                    format!("{base} {n}")
+                }
+            })
+            .find(|name| !self.names.contains(name))
+            .expect("some number is free");
+        self.open(&name)?;
+        self.names.push(name);
+        self.names.sort();
+        self.unsaved = true;
+        Ok(())
+    }
+
+    /// Gives the shown organization the name in the name field.
+    fn rename_to_field(&mut self) -> Result<(), String> {
+        let name = self.rename.trim().to_string();
+        if name == self.name {
+            return Ok(());
+        }
+        let refused = if name.is_empty() || name.contains(NOT_IN_NAMES) {
+            Some(t("A name cannot be empty or hold \\ / : * ? \" < > |"))
+        } else if self.names.contains(&name) {
+            Some(t("Another organization has that name."))
+        } else {
+            None
+        };
+        if let Some(refused) = refused {
+            self.refused = Some(refused);
+            self.rename = self.name.clone();
+            return Ok(());
+        }
+        let old = self.file(&self.name);
+        if old.is_file() {
+            fs::rename(&old, self.file(&name)).map_err(|error| error.to_string())?;
+        }
+        self.names.retain(|other| *other != self.name);
+        self.names.push(name.clone());
+        self.names.sort();
+        self.name = name;
+        self.refused = None;
+        Ok(())
+    }
+
+    /// Deletes the shown organization's file and shows another, or a new
+    /// empty one if it was the last.
+    fn delete_organization(&mut self) -> Result<(), String> {
+        let file = self.file(&self.name);
+        if file.is_file() {
+            fs::remove_file(&file).map_err(|error| error.to_string())?;
+        }
+        self.unsaved = false;
+        self.names.retain(|other| *other != self.name);
+        match self.names.first().cloned() {
+            Some(name) => self.open(&name),
+            None => {
+                self.names.clear();
+                self.org = Organization::default();
+                self.add_organization()
+            }
+        }
+    }
+
+    /// Runs `task`, with `files` attached, through every agent of the
+    /// organization `name` in `directory`, each the way `settings` reaches
+    /// its provider. The tab shows that organization while it runs. `poll`
+    /// tells once it is done whether it changed `watch`. Says why when it
+    /// cannot start.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         &mut self,
+        name: &str,
         task: String,
+        files: &[PathBuf],
         settings: &AgentSettings,
         agents: &Agents,
         directory: &Path,
         watch: PathBuf,
-    ) {
-        self.error = None;
-        let order = match self.org.order() {
-            Ok(order) => order,
-            Err(error) => {
-                self.error = Some(error.into());
-                return;
-            }
-        };
+    ) -> Result<(), String> {
+        if !self.names.iter().any(|other| other == name) {
+            return Err(t("There is no organization named \"{}\".").replace("{}", name));
+        }
+        self.open(name)?;
+        let order = self.org.order()?;
+        if order.is_empty() {
+            return Err(
+                t("The organization has no agents yet. Add them in the Organization tab.").into(),
+            );
+        }
         let access = settings.project(directory);
         let mut invocations = Vec::new();
         let mut answers = Vec::new();
         for &id in &order {
             let node = self.org.node(id).expect("ordered nodes exist");
-            let route = match agents.route(node.provider, settings.access(node.provider)) {
-                Ok(route) => route,
-                Err(error) => {
-                    self.error = Some(format!(
-                        "{} ({}): {error}",
-                        node.name,
-                        node.provider.label()
-                    ));
-                    return;
-                }
-            };
+            let route = agents
+                .route(node.provider, settings.access(node.provider))
+                .map_err(|error| format!("{} ({}): {error}", node.name, node.provider.label()))?;
             let (program, mut args, env) =
-                agent::invocation(node.provider, &route, &node.model, &[], &access);
+                agent::invocation(node.provider, &route, &node.model, files, &access);
             args.extend(node.effort.args(node.provider));
+            if node.provider == Provider::Claude {
+                // What it thinks and does on the way, not just its answer.
+                args.extend(["--output-format", "stream-json", "--verbose"].map(String::from));
+            }
             // In a CCGS game Claude can play the role's own agent file.
             let agent_file = directory.join(format!(".claude/agents/{}.md", node.role));
             if node.provider == Provider::Claude && !node.role.is_empty() && agent_file.is_file() {
@@ -919,6 +1150,7 @@ impl OrgPanel {
         }
         for node in &mut self.org.nodes {
             node.output.clear();
+            node.thoughts.clear();
             node.state = NodeState::Waiting;
         }
         self.run = Some(Run {
@@ -932,6 +1164,7 @@ impl OrgPanel {
             directory: directory.into(),
             watched: (watch.clone(), modified(&watch)),
         });
+        Ok(())
     }
 
     /// Stops the agent at work, and keeps the next one from starting.
@@ -944,10 +1177,10 @@ impl OrgPanel {
         }
     }
 
-    /// Starts the next agent once the one before it exits. Once the last
-    /// one is done, or one fails, returns whether the run changed the
-    /// watched file.
-    pub fn poll(&mut self, ctx: &egui::Context) -> Option<bool> {
+    /// Starts the next agent once the one before it exits, each answering
+    /// in a message of its own at the end of `chat`. Once the last one is
+    /// done, or one fails, returns whether the run changed the watched file.
+    pub fn poll(&mut self, ctx: &egui::Context, chat: &mut Vec<Message>) -> Option<bool> {
         let run = self.run.as_mut()?;
         if run.process.is_none() && run.stopped {
             return self.finish();
@@ -963,6 +1196,10 @@ impl OrgPanel {
                     .map(|(name, value)| (name.as_str(), value.as_str()))
                     .collect();
                 let node = self.org.node_mut(id).expect("ordered nodes exist");
+                chat.push(Message {
+                    speaker: Some((node.name.clone(), node.color())),
+                    ..Default::default()
+                });
                 match CliProcess::start(&run.directory, program, &args, &env, ctx) {
                     Ok(mut process) => {
                         process.send_all(input);
@@ -972,6 +1209,7 @@ impl OrgPanel {
                     Err(error) => {
                         node.output = format!("Could not start {program}: {error}");
                         node.state = NodeState::Failed;
+                        show(node, chat);
                         return self.finish();
                     }
                 }
@@ -981,13 +1219,15 @@ impl OrgPanel {
         }
         let run = self.run.as_mut()?;
         let id = run.order[run.next];
-        for output in run.process.as_ref()?.poll() {
-            let node = self.org.node_mut(id)?;
+        let outputs = run.process.as_ref()?.poll();
+        if outputs.is_empty() {
+            return None;
+        }
+        let node = self.org.node_mut(id)?;
+        let mut failed = false;
+        for output in outputs {
             match output {
-                Output::Line(line) => {
-                    node.output.push_str(&line);
-                    node.output.push('\n');
-                }
+                Output::Line(line) => node.take(&line),
                 Output::Exit(code) => {
                     run.process = None;
                     let answer = run.answers[run.next].take();
@@ -998,15 +1238,16 @@ impl OrgPanel {
                         let _ = fs::remove_file(file);
                     }
                     // One that finished as Stop came keeps its answer.
-                    if run.stopped && code != 0 {
-                        node.output.push_str("Stopped.");
+                    failed = code != 0;
+                    if failed {
+                        let why = if run.stopped {
+                            "Stopped.".to_string()
+                        } else {
+                            format!("Exited with code {code}.")
+                        };
+                        push_line(&mut node.output, &why);
                         node.state = NodeState::Failed;
-                        return self.finish();
-                    }
-                    if code != 0 {
-                        node.output.push_str(&format!("Exited with code {code}."));
-                        node.state = NodeState::Failed;
-                        return self.finish();
+                        break;
                     }
                     if let Some(text) = text {
                         node.output = text;
@@ -1018,7 +1259,8 @@ impl OrgPanel {
                 }
             }
         }
-        None
+        show(node, chat);
+        if failed { self.finish() } else { None }
     }
 
     fn finish(&mut self) -> Option<bool> {
@@ -1032,10 +1274,10 @@ impl OrgPanel {
         Some(modified(&file) != before)
     }
 
-    /// Shows the tab. Returns the task to run unless `blocked` says why it
-    /// cannot go, and an error if the organization could not be saved.
-    pub fn ui(&mut self, ui: &mut Ui, blocked: Option<&str>) -> (Option<String>, Option<String>) {
-        let before = self.org.clone();
+    /// Shows the tab. Returns an error if an organization could not be
+    /// saved, renamed or deleted.
+    pub fn ui(&mut self, ui: &mut Ui) -> Option<String> {
+        let before = (self.name.clone(), self.org.clone());
         egui::Panel::left("org_roles")
             .default_size(200.0)
             .show(ui, |ui| self.palette(ui));
@@ -1044,24 +1286,27 @@ impl OrgPanel {
                 .default_size(260.0)
                 .show(ui, |ui| self.details(ui));
         }
-        let task = egui::Panel::bottom("org_task")
-            .show(ui, |ui| self.task_card(ui, blocked))
+        let picked = egui::CentralPanel::default()
+            .show(ui, |ui| {
+                let picked = self.organizations(ui);
+                self.toolbar(ui);
+                self.canvas(ui);
+                picked
+            })
             .inner;
-        egui::CentralPanel::default().show(ui, |ui| {
-            self.toolbar(ui);
-            self.canvas(ui);
-        });
-        // Outputs change while it runs and are not kept.
-        if self.org != before {
+        // Outputs change while it runs and are not kept. Another one shown
+        // is not a change.
+        if self.name == before.0 && self.org != before.1 {
             self.unsaved = true;
         }
-        let mut error = None;
-        // Not on every frame of a drag.
-        if self.unsaved && !ui.input(|input| input.pointer.any_down()) {
-            self.unsaved = false;
-            error = self.org.write(&self.file).err();
+        if let Err(error) = picked {
+            return Some(error);
         }
-        (task, error)
+        // Not on every frame of a drag.
+        if !ui.input(|input| input.pointer.any_down()) {
+            return self.save().err();
+        }
+        None
     }
 
     fn picked_node(&self) -> Option<u32> {
@@ -1121,6 +1366,46 @@ impl OrgPanel {
         });
     }
 
+    /// Which organization is shown, its name, and adding or deleting one.
+    fn organizations(&mut self, ui: &mut Ui) -> Result<(), String> {
+        let mut result = Ok(());
+        ui.add_enabled_ui(!self.running(), |ui| {
+            ui.horizontal(|ui| {
+                let mut pick = None;
+                egui::ComboBox::from_id_salt("org_pick")
+                    .selected_text(&self.name)
+                    .show_ui(ui, |ui| {
+                        for name in &self.names {
+                            if ui.selectable_label(*name == self.name, name).clicked() {
+                                pick = Some(name.clone());
+                            }
+                        }
+                    });
+                if let Some(name) = pick {
+                    result = self.open(&name);
+                }
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut self.rename)
+                        .desired_width(160.0)
+                        .hint_text(t("Name")),
+                );
+                if field.lost_focus() {
+                    result = result.clone().and(self.rename_to_field());
+                }
+                if ui.button(t("+ New organization")).clicked() {
+                    result = result.clone().and(self.add_organization());
+                }
+                ui.menu_button("...", |ui| {
+                    if ui.button(t("Delete organization")).clicked() {
+                        result = result.clone().and(self.delete_organization());
+                        ui.close();
+                    }
+                });
+            });
+        });
+        result
+    }
+
     fn toolbar(&mut self, ui: &mut Ui) {
         let running = self.running();
         ui.horizontal_wrapped(|ui| {
@@ -1175,6 +1460,9 @@ impl OrgPanel {
                 .small()
                 .color(panels::MUTED),
             );
+            if let Some(refused) = self.refused {
+                ui.colored_label(panels::ERROR, refused);
+            }
         });
     }
 
@@ -1476,8 +1764,8 @@ impl OrgPanel {
                 && target != id
                 && !self.org.links.contains(&(id, target))
             {
-                self.error =
-                    (!self.org.link(id, target)).then(|| t("That link would make a loop.").into());
+                self.refused =
+                    (!self.org.link(id, target)).then(|| t("That link would make a loop."));
             }
         }
 
@@ -1646,42 +1934,18 @@ impl OrgPanel {
             }
         }
     }
+}
 
-    fn task_card(&mut self, ui: &mut Ui, blocked: Option<&str>) -> Option<String> {
-        let mut send = None;
-        ui.add_space(6.0);
-        if let Some(error) = &self.error {
-            ui.colored_label(panels::ERROR, error);
-        }
-        ui.horizontal(|ui| {
-            let field = ui.add(
-                egui::TextEdit::multiline(&mut self.task)
-                    .desired_rows(2)
-                    .desired_width(ui.available_width() - 90.0)
-                    .hint_text(t("A task for the whole organization. Each agent does its part in link order.")),
-            );
-            let shortcut = field.has_focus()
-                && ui.input(|input| input.modifiers.command && input.key_pressed(egui::Key::Enter));
-            ui.vertical(|ui| {
-                if self.running() {
-                    if ui.button(t("Stop")).clicked() {
-                        self.stop();
-                    }
-                    return;
-                }
-                let can_run =
-                    blocked.is_none() && !self.task.trim().is_empty() && !self.org.nodes.is_empty();
-                let button = ui.add_enabled(can_run, egui::Button::new(t("Run")));
-                if can_run && (button.clicked() || shortcut) {
-                    send = Some(self.task.trim().to_string());
-                }
-            });
-        });
-        if let Some(reason) = blocked {
-            ui.colored_label(panels::WARNING, reason);
-        }
-        ui.add_space(4.0);
-        send
+/// Puts `node`'s answer and thoughts so far in its message, the last of
+/// `chat`.
+fn show(node: &Node, chat: &mut [Message]) {
+    let Some(message) = chat.last_mut() else {
+        return;
+    };
+    message.text.clone_from(&node.output);
+    message.thoughts.clone_from(&node.thoughts);
+    if node.state == NodeState::Done && message.text.trim().is_empty() {
+        message.text = "Done.".into();
     }
 }
 
@@ -1850,6 +2114,7 @@ mod tests {
         let (mut org, [design, code, test]) = studio();
         org.link(design, code);
         org.link(code, test);
+        org.node_mut(design).unwrap().provider = Provider::OpenAi;
         let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-run.besfa"));
         panel.org = org;
         // The designer logs noise and leaves its answer in a file, as codex
@@ -1884,8 +2149,9 @@ mod tests {
         let ctx = egui::Context::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut finished = None;
+        let mut chat = Vec::new();
         while finished.is_none() && std::time::Instant::now() < deadline {
-            finished = panel.poll(&ctx);
+            finished = panel.poll(&ctx, &mut chat);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(finished, Some(false));
@@ -1903,6 +2169,44 @@ mod tests {
         assert!(!node(code).output.contains("noisy log"));
         assert_eq!(node(test).state, NodeState::Failed);
         assert!(node(test).output.contains("code 3"));
+        // Each answered in the chat under its own name, the designer's log
+        // folded away as thoughts.
+        let said: Vec<&str> = chat
+            .iter()
+            .map(|message| message.speaker.as_ref().unwrap().0.as_str())
+            .collect();
+        assert_eq!(said, ["Game Designer", "Gameplay Programmer", "Qa Tester"]);
+        assert_eq!(chat[0].text.trim(), "Jumps cost stamina.");
+        assert!(chat[0].thoughts.contains("noisy log"));
+        assert!(chat[2].text.contains("code 3"));
+    }
+
+    #[test]
+    fn reads_what_claude_says_on_the_way_and_its_answer() {
+        assert_eq!(
+            streamed(
+                r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":""},{"type":"tool_use","name":"Bash","input":{"command":"cargo test\nmore","description":"Run tests"}}]}}"#
+            ),
+            Streamed::Thought("[Bash] cargo test".into())
+        );
+        assert_eq!(
+            streamed(r#"{"type":"system","subtype":"init"}"#),
+            Streamed::Nothing
+        );
+        assert_eq!(
+            streamed("Error: not logged in"),
+            Streamed::Text("Error: not logged in".into())
+        );
+        let mut node = Node::default();
+        node.take(r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Checking the player."}]}}"#);
+        node.take(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Jump added."}]}}"#,
+        );
+        node.take(
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"Jump added."}"#,
+        );
+        assert_eq!(node.output, "Jump added.");
+        assert_eq!(node.thoughts, "Checking the player.");
     }
 
     #[test]
@@ -1923,7 +2227,10 @@ mod tests {
             watched: ("none".into(), None),
         });
         panel.stop();
-        assert_eq!(panel.poll(&egui::Context::default()), Some(false));
+        assert_eq!(
+            panel.poll(&egui::Context::default(), &mut Vec::new()),
+            Some(false)
+        );
         assert_eq!(panel.org.node(code).unwrap().state, NodeState::Idle);
     }
 
@@ -1946,52 +2253,102 @@ mod tests {
     }
 
     #[test]
-    fn starts_a_studio_and_groups_and_runs_only_when_nothing_blocks_it() {
+    fn starts_a_studio_and_groups_it() {
         use egui_kittest::{Harness, kittest::Queryable};
-        let file = std::env::temp_dir().join(format!("besfa-org-ui-{}.besfa", std::process::id()));
-        let _ = fs::remove_file(&file);
+        let dir = std::env::temp_dir().join(format!("besfa-org-ui-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let file = dir.join("Organization.besfa");
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1200.0, 700.0))
             .build_ui_state(
-            |ui, (panel, blocked, sent): &mut (OrgPanel, Option<&'static str>, Option<String>)| {
-                if let (Some(task), _) = panel.ui(ui, *blocked) {
-                    *sent = Some(task);
-                }
-            },
-            (
-                OrgPanel::new(file.clone()),
-                Some("Save the scene first."),
-                None,
-            ),
-        );
+                |ui, panel: &mut OrgPanel| drop(panel.ui(ui)),
+                OrgPanel::new(dir.clone()),
+            );
         harness.run();
         harness.get_by_label("Start with a studio").click();
         harness.run();
-        assert_eq!(harness.state().0.org.nodes.len(), 4);
+        assert_eq!(harness.state().org.nodes.len(), 4);
         // Written once the click is over.
         assert_eq!(Organization::read(&file).nodes.len(), 4);
 
         harness.get_by_label("Producer").click();
         harness.run();
-        assert_eq!(harness.state().0.org.nodes.len(), 5);
-        assert_eq!(harness.state().0.selected.len(), 1);
+        assert_eq!(harness.state().org.nodes.len(), 5);
+        assert_eq!(harness.state().selected.len(), 1);
         harness.get_by_label("Group selection").click();
         harness.run();
-        assert_eq!(harness.state().0.org.groups.len(), 2);
+        assert_eq!(harness.state().org.groups.len(), 2);
 
-        harness.state_mut().0.task = "Add a jump.".into();
+        harness.get_by_label("+ New organization").click();
         harness.run();
-        harness.get_by_label("Run").click();
-        harness.run();
-        assert_eq!(harness.state().2, None);
-        harness.state_mut().1 = None;
-        // The task card shrinks to lose the reason a frame late.
-        harness.run();
-        harness.run();
-        harness.get_by_label("Run").click();
-        harness.run();
-        assert_eq!(harness.state().2.as_deref(), Some("Add a jump."));
-        fs::remove_file(&file).unwrap();
+        let panel = harness.state();
+        assert_eq!(panel.names, ["Organization", "Organization 2"]);
+        assert!(panel.org.nodes.is_empty());
+        assert!(dir.join("Organization 2.besfa").is_file());
+        assert_eq!(Organization::read(&file).nodes.len(), 5);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn keeps_each_organization_in_a_file_named_after_it() {
+        let besfa = std::env::temp_dir().join(format!("besfa-orgs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&besfa);
+        let dir = besfa.join("organizations");
+        // A project's one organization from before moves in.
+        let mut old = Organization::default();
+        old.starter();
+        old.write(&besfa.join("organization.besfa")).unwrap();
+        let mut panel = OrgPanel::new(dir.clone());
+        assert!(!besfa.join("organization.besfa").exists());
+        assert_eq!(panel.names, ["Organization"]);
+        assert_eq!(panel.org.nodes.len(), 4);
+
+        panel.add_organization().unwrap();
+        panel.org.add("producer", Pos2::ZERO);
+        panel.unsaved = true;
+        panel.rename = "QA team".into();
+        panel.rename_to_field().unwrap();
+        assert!(panel.save().is_ok());
+        assert_eq!(panel.names, ["Organization", "QA team"]);
+        assert_eq!(
+            Organization::read(&dir.join("QA team.besfa")).nodes.len(),
+            1
+        );
+        assert!(!dir.join("Organization 2.besfa").exists());
+
+        // A taken or unusable name is refused and the field goes back.
+        for name in ["Organization", "a/b", " "] {
+            panel.rename = name.into();
+            panel.rename_to_field().unwrap();
+            assert_eq!(panel.name, "QA team");
+            assert_eq!(panel.rename, "QA team");
+            assert!(panel.refused.is_some());
+        }
+
+        let reopened = OrgPanel::new(dir.clone());
+        assert_eq!(reopened.names, ["Organization", "QA team"]);
+        panel.open("Organization").unwrap();
+        assert_eq!(panel.org.nodes.len(), 4);
+        panel.delete_organization().unwrap();
+        assert_eq!((panel.name.as_str(), panel.org.nodes.len()), ("QA team", 1));
+        panel.delete_organization().unwrap();
+        // The last one gone leaves a new empty one.
+        assert_eq!(panel.names, ["Organization"]);
+        assert!(panel.org.nodes.is_empty());
+        assert!(
+            panel
+                .start(
+                    "QA team",
+                    "Test it.".into(),
+                    &[],
+                    &AgentSettings::default(),
+                    &Agents::fixed([agent::Cli::LoggedIn; 3], &[]),
+                    &besfa,
+                    "none".into(),
+                )
+                .is_err()
+        );
+        fs::remove_dir_all(&besfa).unwrap();
     }
 
     #[test]
@@ -2004,7 +2361,7 @@ mod tests {
         panel.org.starter();
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1200.0, 700.0))
-            .build_ui_state(|ui, panel: &mut OrgPanel| drop(panel.ui(ui, None)), panel);
+            .build_ui_state(|ui, panel: &mut OrgPanel| drop(panel.ui(ui)), panel);
         let pointer = egui::pos2(600.0, 350.0);
         let wheel = |harness: &mut Harness<OrgPanel>, notches: f32| {
             harness.event(egui::Event::PointerMoved(pointer));

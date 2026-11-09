@@ -32,7 +32,7 @@ use crate::{
     animation,
     i18n::{self, t},
     inspector::{Action, Inspector, TRANSFORM},
-    organization::{ORGANIZATION_FILE, OrgPanel},
+    organization::{ORGANIZATIONS_DIR, OrgPanel},
     panels::{
         self, ACCENT, AssetAction, AssetBrowser, GOOD, HierarchyAction, MUTED, Reimport, WARNING,
         prebuild_status,
@@ -236,7 +236,7 @@ impl Editor {
         ctx: &egui::Context,
     ) -> Self {
         let snapping = Snapping::read(&project.file(SNAP_FILE));
-        let organization = OrgPanel::new(project.file(ORGANIZATION_FILE));
+        let organization = OrgPanel::new(project.file(ORGANIZATIONS_DIR));
         let mut editor = Self {
             source: SourceWatch::new(project.file("src")),
             assets: AssetBrowser::new(project.file("assets")),
@@ -1793,22 +1793,44 @@ impl Editor {
         self.agents.check_once(ctx);
         let before = self.agent.clone();
         let route = self.agent_route();
+        // Each organization agent's way is checked when the task starts.
         let blocked = route
             .as_ref()
             .err()
             .copied()
-            .or(self.agent_blocked())
-            .or(self
-                .organization
-                .running()
-                .then_some(t("The organization is working on a task.")));
-        let prompt = self
-            .agent_panel
-            .ui(ui, &mut self.agent, &self.agents, blocked);
+            .filter(|_| self.agent_panel.organization().is_none())
+            .or(self.agent_blocked());
+        let prompt = self.agent_panel.ui(
+            ui,
+            &mut self.agent,
+            &self.agents,
+            blocked,
+            &mut self.organization,
+        );
         if self.agent != before
             && let Err(error) = self.agent.write(&AgentSettings::file())
         {
             self.log(format!("Could not save the agent settings: {error}"));
+        }
+        if let Some((prompt, files)) = &prompt
+            && let Some(name) = self.agent_panel.organization().map(str::to_string)
+        {
+            let task = self.agent_panel.ask(prompt);
+            let directory = self.project.file("");
+            let scene = self.project.file(SCENE_FILE);
+            let started = self.organization.start(
+                &name,
+                task,
+                files,
+                &self.agent,
+                &self.agents,
+                &directory,
+                scene,
+            );
+            if let Err(error) = started {
+                self.agent_panel.say(&error);
+            }
+            return;
         }
         // The pick may have changed this frame, so the route is asked again.
         if let (Some((prompt, files)), Ok(route)) = (prompt, self.agent_route()) {
@@ -1834,20 +1856,8 @@ impl Editor {
     }
 
     fn organization_tab(&mut self, ui: &mut Ui) {
-        self.agents.check_once(ui.ctx());
-        let blocked = self.agent_blocked().or(self
-            .agent_panel
-            .running()
-            .then_some(t("The chat's agent is still working.")));
-        let (task, error) = self.organization.ui(ui, blocked);
-        if let Some(error) = error {
+        if let Some(error) = self.organization.ui(ui) {
             self.log(format!("Could not save the organization: {error}"));
-        }
-        if let Some(task) = task {
-            let directory = self.project.file("");
-            let scene = self.project.file(SCENE_FILE);
-            self.organization
-                .start(task, &self.agent, &self.agents, &directory, scene);
         }
     }
 
@@ -1867,10 +1877,10 @@ impl Editor {
     /// Reloads the scene the agent changed, unless that would throw away
     /// edits made while it ran.
     fn poll_agent(&mut self, ctx: &egui::Context) {
-        let finished = self
-            .agent_panel
-            .poll()
-            .or_else(|| self.organization.poll(ctx));
+        let finished = self.agent_panel.poll().or_else(|| {
+            self.organization
+                .poll(ctx, self.agent_panel.chat_messages())
+        });
         let Some(scene_changed) = finished else {
             return;
         };
@@ -2884,17 +2894,19 @@ mod tests {
             .with_pixels_per_point(PIXELS_PER_POINT)
             .build_ui_state(
                 |ui,
-                 (panel, settings, agents): &mut (
+                 (panel, settings, agents, org): &mut (
                     crate::agent::AgentPanel,
                     AgentSettings,
                     Agents,
+                    OrgPanel,
                 )| {
-                    panel.ui(ui, settings, agents, None);
+                    panel.ui(ui, settings, agents, None, org);
                 },
                 (
                     crate::agent::AgentPanel::demo(),
                     AgentSettings::default(),
                     Agents::fixed([Cli::LoggedIn; 3], &[]),
+                    OrgPanel::demo(),
                 ),
             );
         harness.run_steps(4);
@@ -2910,7 +2922,7 @@ mod tests {
             .with_pixels_per_point(PIXELS_PER_POINT)
             .build_ui_state(
                 |ui, panel: &mut OrgPanel| {
-                    panel.ui(ui, None);
+                    panel.ui(ui);
                 },
                 OrgPanel::demo(),
             );
