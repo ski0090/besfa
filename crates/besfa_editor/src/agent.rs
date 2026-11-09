@@ -1659,7 +1659,7 @@ mod tests {
                 blocked,
                 sent: None,
                 files: Vec::new(),
-                org: OrgPanel::new(std::env::temp_dir().join("besfa-no-organization.besfa")),
+                org: OrgPanel::new(std::env::temp_dir().join("besfa-no-organization")),
             },
         )
     }

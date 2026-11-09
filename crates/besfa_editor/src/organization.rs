@@ -496,14 +496,15 @@ impl Node {
         match line {
             Streamed::Thought(text) => push_line(&mut self.thoughts, &text),
             Streamed::Text(text) => push_line(&mut self.output, &text),
-            Streamed::Answer(text) => {
+            // An error result can come without one; what it printed stays.
+            Streamed::Answer(text) if !text.trim().is_empty() => {
                 // The answer is also the last thing it said on the way.
                 if let Some(rest) = self.thoughts.trim_end().strip_suffix(text.trim()) {
                     self.thoughts = rest.trim_end().into();
                 }
                 self.output = text;
             }
-            Streamed::Nothing => {}
+            Streamed::Answer(_) | Streamed::Nothing => {}
         }
     }
 
@@ -920,7 +921,6 @@ pub struct OrgPanel {
 }
 
 impl OrgPanel {
-    /// The organization `file` keeps.
     /// The organizations `dir` keeps, showing the first. A project's one
     /// organization from before there could be more moves in with the
     /// name "Organization".
@@ -971,7 +971,7 @@ impl OrgPanel {
     /// screenshot.
     #[cfg(test)]
     pub fn demo() -> Self {
-        let mut panel = Self::new(std::env::temp_dir().join("besfa-org-demo.besfa"));
+        let mut panel = Self::new(std::env::temp_dir().join("besfa-org-demo"));
         panel.org = Organization::default();
         panel.org.starter();
         let art = panel.org.add("art-director", Pos2::new(300.0, 230.0));
@@ -999,6 +999,16 @@ impl OrgPanel {
 
     fn file(&self, name: &str) -> PathBuf {
         self.dir.join(format!("{name}.besfa"))
+    }
+
+    /// Whether another organization than the shown one has `name`'s file.
+    /// Windows file names ignore case, so "studio" would overwrite
+    /// "Studio".
+    fn taken(&self, name: &str) -> bool {
+        let lower = name.to_lowercase();
+        self.names
+            .iter()
+            .any(|other| *other != self.name && other.to_lowercase() == lower)
     }
 
     /// Writes the shown organization if it changed.
@@ -1035,7 +1045,7 @@ impl OrgPanel {
                     format!("{base} {n}")
                 }
             })
-            .find(|name| !self.names.contains(name))
+            .find(|name| !self.taken(name) && name.to_lowercase() != self.name.to_lowercase())
             .expect("some number is free");
         self.open(&name)?;
         self.names.push(name);
@@ -1052,7 +1062,7 @@ impl OrgPanel {
         }
         let refused = if name.is_empty() || name.contains(NOT_IN_NAMES) {
             Some(t("A name cannot be empty or hold \\ / : * ? \" < > |"))
-        } else if self.names.contains(&name) {
+        } else if self.taken(&name) {
             Some(t("Another organization has that name."))
         } else {
             None
@@ -2115,7 +2125,7 @@ mod tests {
         org.link(design, code);
         org.link(code, test);
         org.node_mut(design).unwrap().provider = Provider::OpenAi;
-        let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-run.besfa"));
+        let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-run"));
         panel.org = org;
         // The designer logs noise and leaves its answer in a file, as codex
         // does; the programmer prints what it was sent; the tester fails.
@@ -2212,7 +2222,7 @@ mod tests {
     #[test]
     fn a_stop_between_two_agents_starts_no_more() {
         let (org, [design, code, _]) = studio();
-        let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-stop.besfa"));
+        let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-stop"));
         panel.org = org;
         let echo = || ("findstr".into(), vec!["/r".into(), ".".into()], vec![]);
         panel.run = Some(Run {
@@ -2317,13 +2327,19 @@ mod tests {
         assert!(!dir.join("Organization 2.besfa").exists());
 
         // A taken or unusable name is refused and the field goes back.
-        for name in ["Organization", "a/b", " "] {
+        for name in ["Organization", "organization", "a/b", " "] {
             panel.rename = name.into();
             panel.rename_to_field().unwrap();
             assert_eq!(panel.name, "QA team");
             assert_eq!(panel.rename, "QA team");
             assert!(panel.refused.is_some());
         }
+
+        panel.rename = "QA Team".into();
+        panel.rename_to_field().unwrap();
+        assert_eq!(panel.names, ["Organization", "QA Team"]);
+        panel.rename = "QA team".into();
+        panel.rename_to_field().unwrap();
 
         let reopened = OrgPanel::new(dir.clone());
         assert_eq!(reopened.names, ["Organization", "QA team"]);
@@ -2354,8 +2370,7 @@ mod tests {
     #[test]
     fn the_wheel_zooms_around_the_pointer() {
         use egui_kittest::{Harness, kittest::Queryable};
-        let file =
-            std::env::temp_dir().join(format!("besfa-org-zoom-{}.besfa", std::process::id()));
+        let file = std::env::temp_dir().join(format!("besfa-org-zoom-{}", std::process::id()));
         let mut panel = OrgPanel::new(file.clone());
         panel.org = Organization::default();
         panel.org.starter();
@@ -2398,6 +2413,6 @@ mod tests {
         harness.state_mut().pan = Vec2::new(-5000.0, 0.0);
         harness.run();
         assert_eq!(harness.state().wiring, None);
-        let _ = fs::remove_file(&file);
+        let _ = fs::remove_dir_all(&file);
     }
 }
