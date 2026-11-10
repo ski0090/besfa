@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    agent::{self, AgentSettings, Agents, Message, Provider},
+    agent::{self, AgentSettings, Agents, Ask, Message, Provider},
     i18n::t,
     panels,
     process::{CliProcess, Output},
@@ -375,7 +375,7 @@ fn title(name: &str) -> String {
 
 /// What a line an agent's CLI printed adds to its message.
 #[derive(Debug, PartialEq)]
-enum Streamed {
+pub enum Streamed {
     Thought(String),
     /// Part of the answer.
     Text(String),
@@ -387,7 +387,7 @@ enum Streamed {
 /// Reads a line of Claude's `--output-format stream-json`: what it says and
 /// the tools it calls on the way are thoughts, and the result is the answer.
 /// Its thinking arrives empty unless the CLI is set to show it.
-fn streamed(line: &str) -> Streamed {
+pub fn streamed(line: &str) -> Streamed {
     let Ok(event) = serde_json::from_str::<Value>(line) else {
         // A warning or error printed as it is.
         return Streamed::Text(line.into());
@@ -423,6 +423,24 @@ fn streamed(line: &str) -> Streamed {
         }
         Some("result") => Streamed::Answer(event["result"].as_str().unwrap_or_default().into()),
         _ => Streamed::Nothing,
+    }
+}
+
+/// Adds `line` to what an agent said, `output`, or to what it thought and
+/// did on the way.
+pub fn take(line: Streamed, output: &mut String, thoughts: &mut String) {
+    match line {
+        Streamed::Thought(text) => push_line(thoughts, &text),
+        Streamed::Text(text) => push_line(output, &text),
+        // An error result can come without one; what it printed stays.
+        Streamed::Answer(text) if !text.trim().is_empty() => {
+            // The answer is also the last thing it said on the way.
+            if let Some(rest) = thoughts.trim_end().strip_suffix(text.trim()) {
+                *thoughts = rest.trim_end().into();
+            }
+            *output = text;
+        }
+        Streamed::Answer(_) | Streamed::Nothing => {}
     }
 }
 
@@ -480,19 +498,7 @@ impl Node {
             Provider::OpenAi => Streamed::Thought(line.into()),
             Provider::Gemini => Streamed::Text(line.into()),
         };
-        match line {
-            Streamed::Thought(text) => push_line(&mut self.thoughts, &text),
-            Streamed::Text(text) => push_line(&mut self.output, &text),
-            // An error result can come without one; what it printed stays.
-            Streamed::Answer(text) if !text.trim().is_empty() => {
-                // The answer is also the last thing it said on the way.
-                if let Some(rest) = self.thoughts.trim_end().strip_suffix(text.trim()) {
-                    self.thoughts = rest.trim_end().into();
-                }
-                self.output = text;
-            }
-            Streamed::Answer(_) | Streamed::Nothing => {}
-        }
+        take(line, &mut self.output, &mut self.thoughts);
     }
 
     fn color(&self) -> Color32 {
@@ -1352,10 +1358,6 @@ impl OrgPanel {
             let (program, mut args, env) =
                 agent::invocation(node.provider, &route, &node.model, files, &access);
             args.extend(node.effort.args(node.provider));
-            if node.provider == Provider::Claude {
-                // What it thinks and does on the way, not just its answer.
-                args.extend(["--output-format", "stream-json", "--verbose"].map(String::from));
-            }
             // In a CCGS game Claude can play the role's own agent file.
             let agent_file = directory.join(format!(".claude/agents/{}.md", node.role));
             if node.provider == Provider::Claude && !node.role.is_empty() && agent_file.is_file() {
@@ -1407,6 +1409,13 @@ impl OrgPanel {
     }
 
     /// Stops the agent at work, and keeps the next one from starting.
+    /// Sends `line` to the running agent.
+    pub fn send(&mut self, line: &str) {
+        if let Some(process) = self.run.as_mut().and_then(|run| run.process.as_mut()) {
+            process.send(line);
+        }
+    }
+
     pub fn stop(&mut self) {
         if let Some(run) = &mut self.run {
             run.stopped = true;
@@ -1419,7 +1428,12 @@ impl OrgPanel {
     /// Starts the next agent once the one before it exits, each answering
     /// in a message of its own at the end of `chat`. Once the last one is
     /// done, or one fails, returns whether the run changed the watched file.
-    pub fn poll(&mut self, ctx: &egui::Context, chat: &mut Vec<Message>) -> Option<bool> {
+    /// What the running agent asks the user goes to `asks`.
+    pub fn poll(
+        &mut self,
+        ctx: &egui::Context,
+        (chat, asks): (&mut Vec<Message>, &mut Vec<Ask>),
+    ) -> Option<bool> {
         let run = self.run.as_mut()?;
         if run.process.is_none() && run.stopped {
             return self.finish(chat);
@@ -1458,7 +1472,7 @@ impl OrgPanel {
                 };
                 match started {
                     Ok(mut process) => {
-                        process.send_all(input);
+                        agent::send_prompt(&mut process, program, input);
                         node.state = NodeState::Running;
                         run.process = Some(process);
                     }
@@ -1489,7 +1503,17 @@ impl OrgPanel {
         let mut failed = false;
         for output in outputs {
             match output {
-                Output::Line(line) => node.take(&line),
+                Output::Line(line) => match Ask::read(&line) {
+                    Some(ask) => asks.push(ask),
+                    None => {
+                        if agent::ended(&line)
+                            && let Some(process) = &mut run.process
+                        {
+                            process.close();
+                        }
+                        node.take(&line);
+                    }
+                },
                 Output::Exit(code) => {
                     run.process = None;
                     let answer = run.answers[run.next].clone();
@@ -2547,7 +2571,7 @@ mod tests {
         let mut finished = None;
         let mut chat = Vec::new();
         while finished.is_none() && std::time::Instant::now() < deadline {
-            finished = panel.poll(&ctx, &mut chat);
+            finished = panel.poll(&ctx, (&mut chat, &mut Vec::new()));
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(finished, Some(false));
@@ -2606,7 +2630,7 @@ mod tests {
         panel.run.as_mut().unwrap().invocations = vec![echo.clone(), echo.clone(), echo];
         let mut finished = None;
         while finished.is_none() && std::time::Instant::now() < deadline {
-            finished = panel.poll(&ctx, &mut chat);
+            finished = panel.poll(&ctx, (&mut chat, &mut Vec::new()));
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(finished, Some(false));
@@ -2698,7 +2722,7 @@ mod tests {
             let mut finished = None;
             while finished.is_none() && !until(panel, chat) && std::time::Instant::now() < deadline
             {
-                finished = panel.poll(&ctx, chat);
+                finished = panel.poll(&ctx, (chat, &mut Vec::new()));
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             finished
@@ -2812,7 +2836,10 @@ mod tests {
         });
         panel.stop();
         assert_eq!(
-            panel.poll(&egui::Context::default(), &mut Vec::new()),
+            panel.poll(
+                &egui::Context::default(),
+                (&mut Vec::new(), &mut Vec::new())
+            ),
             Some(false)
         );
         assert_eq!(panel.org.node(code).unwrap().state, NodeState::Idle);

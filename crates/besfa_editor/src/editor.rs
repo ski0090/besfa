@@ -1893,11 +1893,20 @@ impl Editor {
     /// Reloads the scene the agent changed, unless that would throw away
     /// edits made while it ran.
     fn poll_agent(&mut self, ctx: &egui::Context) {
+        let asking = self.agent_panel.asking();
         let finished = self.agent_panel.poll().or_else(|| {
             self.organization
-                .poll(ctx, self.agent_panel.chat_messages())
+                .poll(ctx, self.agent_panel.chat_and_asks())
         });
         let busy = self.agent_panel.running() || self.organization.running();
+        if self.agent_panel.asking() > asking {
+            // The Agent tab may be behind another one.
+            self.log("An agent waits for your permission in the Agent tab.");
+        }
+        self.answer_asks();
+        if !busy {
+            self.agent_panel.drop_asks();
+        }
         let chats = AgentPanel::chats_file(&self.project.file(""));
         if let Err(error) = self.agent_panel.keep(&chats, busy) {
             self.log(format!("Could not save the agent chats: {error}"));
@@ -1916,6 +1925,23 @@ impl Editor {
         } else if !self.playing && !self.starting {
             self.log("The agent changed the scene; reloading it.");
             self.restart(false, ctx);
+        }
+    }
+
+    /// Sends the running agent the user's answers to what it asked, and
+    /// saves what the user allowed for good.
+    fn answer_asks(&mut self) {
+        for (ask, allow, always) in self.agent_panel.take_answers() {
+            let line = ask.answer(allow, always);
+            if !self.agent_panel.send(&line) {
+                self.organization.send(&line);
+            }
+            if allow && always {
+                self.agent.allow(&self.project.file(""), &ask);
+                if let Err(error) = self.agent.write(&AgentSettings::file()) {
+                    self.log(format!("Could not save the agent settings: {error}"));
+                }
+            }
         }
     }
 
