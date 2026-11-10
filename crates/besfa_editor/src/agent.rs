@@ -1459,13 +1459,21 @@ pub fn reply(ui: &mut Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &s
         });
         output.commands.extend(added);
     });
-    for link in links.iter().filter(|link| is_web(link)) {
-        crate::project::open_url(link);
+    for link in links.iter().filter_map(|link| web_link(link)) {
+        crate::project::open_url(&link);
     }
 }
 
-fn is_web(link: &str) -> bool {
-    link.starts_with("https://") || link.starts_with("http://")
+/// `link` as it is safe to hand to `explorer`, if it is a web link. Explorer
+/// splits its command line at commas, so a comma is encoded; a quote,
+/// whitespace or a control character could end the argument, so such a link
+/// is not opened.
+fn web_link(link: &str) -> Option<String> {
+    let web = link.starts_with("https://") || link.starts_with("http://");
+    let plain = !link
+        .chars()
+        .any(|c| c == '"' || c.is_whitespace() || c.is_control());
+    (web && plain).then(|| link.replace(',', "%2C"))
 }
 
 pub fn model_label(model: &str) -> &str {
@@ -2167,7 +2175,7 @@ mod tests {
     fn opens_only_web_links_from_a_reply() {
         let mut harness = tab(None);
         let panel = &mut harness.state_mut().panel;
-        panel.say("Run [this](file:///C:/Windows/notepad.exe).");
+        panel.say("Run [this](file:///C:/nonexistent.exe).");
         harness.run();
         harness.get_by_label("this").click();
         harness.step();
@@ -2175,7 +2183,16 @@ mod tests {
         let open =
             |command: &egui::OutputCommand| matches!(command, egui::OutputCommand::OpenUrl(_));
         assert!(!harness.output().platform_output.commands.iter().any(open));
-        assert!(is_web("https://github.com/ski0090/besfa/pull/43"));
-        assert!(!is_web("file:///C:/Windows/notepad.exe"));
+        let pr = "https://github.com/ski0090/besfa/pull/43";
+        assert_eq!(web_link(pr).as_deref(), Some(pr));
+        assert_eq!(web_link("file:///C:/nonexistent.exe"), None);
+        // Explorer would take what follows a comma as a second target.
+        let comma = web_link(r"https://example.com/,C:\nonexistent.exe");
+        let encoded = r"https://example.com/%2CC:\nonexistent.exe";
+        assert_eq!(comma.as_deref(), Some(encoded));
+        assert_eq!(
+            web_link(r#"https://example.com/" C:\nonexistent.exe"#),
+            None
+        );
     }
 }
