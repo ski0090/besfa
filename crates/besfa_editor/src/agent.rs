@@ -859,6 +859,8 @@ pub struct AgentPanel {
     picking: Option<Receiver<Option<Vec<PathBuf>>>>,
     /// A file the run may change, and when it was changed before the run.
     watched: Option<(PathBuf, Option<SystemTime>)>,
+    /// Laid-out code blocks and the like of the replies' Markdown.
+    markdown: egui_commonmark::CommonMarkCache,
 }
 
 impl AgentPanel {
@@ -1227,7 +1229,8 @@ impl AgentPanel {
         }
     }
 
-    fn messages(&self, ui: &mut Ui, busy: bool) {
+    fn messages(&mut self, ui: &mut Ui, busy: bool) {
+        let mut markdown = std::mem::take(&mut self.markdown);
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .stick_to_bottom(true)
@@ -1271,17 +1274,18 @@ impl AgentPanel {
                                     }
                                 });
                                 self.thoughts(ui, index, message);
-                                ui.label(RichText::new(&message.text).color(panels::TEXT));
+                                reply(ui, &mut markdown, &message.text);
                             });
                         });
                     } else if working {
                         ui.spinner();
                     } else {
-                        ui.label(RichText::new(&message.text).color(panels::TEXT));
+                        reply(ui, &mut markdown, &message.text);
                     }
                     ui.add_space(8.0);
                 }
             });
+        self.markdown = markdown;
     }
 
     /// `message`'s thoughts, folded until clicked.
@@ -1430,6 +1434,46 @@ impl AgentPanel {
             });
         send
     }
+}
+
+/// An agent's reply, rendered from its Markdown. A clicked link opens in the
+/// browser, and only a web link: the reply is the agent's, and `open_url`
+/// hands anything else, like a `file:` link to a program, to `explorer` as is.
+pub fn reply(ui: &mut Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &str) {
+    let start = ui.ctx().output(|output| output.commands.len());
+    ui.scope(|ui| {
+        // Body text only: links keep the hyperlink color.
+        ui.visuals_mut().widgets.noninteractive.fg_stroke.color = panels::TEXT;
+        egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
+    });
+    // eframe is built without its own link opening, so the clicks are ours.
+    let mut links = Vec::new();
+    ui.ctx().output_mut(|output| {
+        let mut added = output.commands.split_off(start);
+        added.retain(|command| match command {
+            egui::OutputCommand::OpenUrl(open) => {
+                links.push(open.url.clone());
+                false
+            }
+            _ => true,
+        });
+        output.commands.extend(added);
+    });
+    for link in links.iter().filter_map(|link| web_link(link)) {
+        crate::project::open_url(&link);
+    }
+}
+
+/// `link` as it is safe to hand to `explorer`, if it is a web link. Explorer
+/// splits its command line at commas, so a comma is encoded; a quote,
+/// whitespace or a control character could end the argument, so such a link
+/// is not opened.
+fn web_link(link: &str) -> Option<String> {
+    let web = link.starts_with("https://") || link.starts_with("http://");
+    let plain = !link
+        .chars()
+        .any(|c| c == '"' || c.is_whitespace() || c.is_control());
+    (web && plain).then(|| link.replace(',', "%2C"))
 }
 
 pub fn model_label(model: &str) -> &str {
@@ -2113,5 +2157,42 @@ mod tests {
         // An agent's turn goes into the next prompt under its name.
         let input = harness.state().panel.chat.input("Now a triple jump.");
         assert!(input.contains("Game Designer: A second jump"));
+    }
+
+    #[test]
+    fn shows_a_reply_as_markdown() {
+        let mut harness = tab(None);
+        let panel = &mut harness.state_mut().panel;
+        panel.say("## Done\n\n- Edited **src/player.rs**");
+        harness.run();
+        assert!(harness.query_by_label("Done").is_some());
+        assert!(harness.query_by_label("src/player.rs").is_some());
+        assert!(harness.query_by_label_contains("**").is_none());
+        assert!(harness.query_by_label_contains("##").is_none());
+    }
+
+    #[test]
+    fn opens_only_web_links_from_a_reply() {
+        let mut harness = tab(None);
+        let panel = &mut harness.state_mut().panel;
+        panel.say("Run [this](file:///C:/nonexistent.exe).");
+        harness.run();
+        harness.get_by_label("this").click();
+        harness.step();
+        // Taken by the reply, which opens nothing but web links.
+        let open =
+            |command: &egui::OutputCommand| matches!(command, egui::OutputCommand::OpenUrl(_));
+        assert!(!harness.output().platform_output.commands.iter().any(open));
+        let pr = "https://github.com/ski0090/besfa/pull/43";
+        assert_eq!(web_link(pr).as_deref(), Some(pr));
+        assert_eq!(web_link("file:///C:/nonexistent.exe"), None);
+        // Explorer would take what follows a comma as a second target.
+        let comma = web_link(r"https://example.com/,C:\nonexistent.exe");
+        let encoded = r"https://example.com/%2CC:\nonexistent.exe";
+        assert_eq!(comma.as_deref(), Some(encoded));
+        assert_eq!(
+            web_link(r#"https://example.com/" C:\nonexistent.exe"#),
+            None
+        );
     }
 }
