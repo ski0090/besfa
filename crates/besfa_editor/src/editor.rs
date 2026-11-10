@@ -238,7 +238,7 @@ impl Editor {
         let snapping = Snapping::read(&project.file(SNAP_FILE));
         let organization = OrgPanel::new(project.file(ORGANIZATIONS_DIR));
         // A run the editor closed on goes on from its chat.
-        let mut agent_panel = AgentPanel::default();
+        let mut agent_panel = AgentPanel::read(&AgentPanel::chats_file(&project.file("")));
         if let Some(paused) = organization.paused() {
             agent_panel.restore(paused.chat(), paused.files(), paused.organization());
         }
@@ -1897,6 +1897,11 @@ impl Editor {
             self.organization
                 .poll(ctx, self.agent_panel.chat_messages())
         });
+        let busy = self.agent_panel.running() || self.organization.running();
+        let chats = AgentPanel::chats_file(&self.project.file(""));
+        if let Err(error) = self.agent_panel.keep(&chats, busy) {
+            self.log(format!("Could not save the agent chats: {error}"));
+        }
         let Some(scene_changed) = finished else {
             return;
         };
