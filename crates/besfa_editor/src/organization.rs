@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    agent::{self, AgentSettings, Agents, Message, Provider},
+    agent::{self, AgentSettings, Agents, Ask, Message, Provider},
     i18n::t,
     panels,
     process::{CliProcess, Output},
@@ -375,7 +375,7 @@ fn title(name: &str) -> String {
 
 /// What a line an agent's CLI printed adds to its message.
 #[derive(Debug, PartialEq)]
-enum Streamed {
+pub enum Streamed {
     Thought(String),
     /// Part of the answer.
     Text(String),
@@ -387,7 +387,7 @@ enum Streamed {
 /// Reads a line of Claude's `--output-format stream-json`: what it says and
 /// the tools it calls on the way are thoughts, and the result is the answer.
 /// Its thinking arrives empty unless the CLI is set to show it.
-fn streamed(line: &str) -> Streamed {
+pub fn streamed(line: &str) -> Streamed {
     let Ok(event) = serde_json::from_str::<Value>(line) else {
         // A warning or error printed as it is.
         return Streamed::Text(line.into());
@@ -423,6 +423,24 @@ fn streamed(line: &str) -> Streamed {
         }
         Some("result") => Streamed::Answer(event["result"].as_str().unwrap_or_default().into()),
         _ => Streamed::Nothing,
+    }
+}
+
+/// Adds `line` to what an agent said, `output`, or to what it thought and
+/// did on the way.
+pub fn take(line: Streamed, output: &mut String, thoughts: &mut String) {
+    match line {
+        Streamed::Thought(text) => push_line(thoughts, &text),
+        Streamed::Text(text) => push_line(output, &text),
+        // An error result can come without one; what it printed stays.
+        Streamed::Answer(text) if !text.trim().is_empty() => {
+            // The answer is also the last thing it said on the way.
+            if let Some(rest) = thoughts.trim_end().strip_suffix(text.trim()) {
+                *thoughts = rest.trim_end().into();
+            }
+            *output = text;
+        }
+        Streamed::Answer(_) | Streamed::Nothing => {}
     }
 }
 
@@ -480,19 +498,7 @@ impl Node {
             Provider::OpenAi => Streamed::Thought(line.into()),
             Provider::Gemini => Streamed::Text(line.into()),
         };
-        match line {
-            Streamed::Thought(text) => push_line(&mut self.thoughts, &text),
-            Streamed::Text(text) => push_line(&mut self.output, &text),
-            // An error result can come without one; what it printed stays.
-            Streamed::Answer(text) if !text.trim().is_empty() => {
-                // The answer is also the last thing it said on the way.
-                if let Some(rest) = self.thoughts.trim_end().strip_suffix(text.trim()) {
-                    self.thoughts = rest.trim_end().into();
-                }
-                self.output = text;
-            }
-            Streamed::Answer(_) | Streamed::Nothing => {}
-        }
+        take(line, &mut self.output, &mut self.thoughts);
     }
 
     fn color(&self) -> Color32 {
@@ -729,7 +735,7 @@ impl Organization {
         // agent of its own if self-review proves too thin.
         if merge {
             input.push_str(
-                "\n\nThe user also lets this run merge its own pull requests, which is their approval for merging even where the project says to ask first. Before you finish, see each pull request you opened through: review its whole diff (`gh pr diff`) as a reviewer who did not write it would, through a fresh subagent if you can start one, fix and push what must change, and review again until nothing must. Once its checks pass, merge it with `gh pr merge` the way the project merges, oldest first where one is based on another, and say in your report what you merged. GitHub does not let you approve your own pull request, so do not try. One you cannot get right, or that GitHub will not let you merge, stays open: say why under \"For the user\".",
+                "\n\nThe user also lets this run merge its own pull requests, which is their approval for merging even where the project says to ask first. Before you finish, see each pull request you opened through: review its whole diff (`gh pr diff`) as a reviewer who did not write it would, through a fresh subagent if you can start one, fix and push what must change, and review again until nothing must. Then merge it with `gh pr merge --merge`, unless the project names another method, once its checks pass, or right away if it has none. Merge stacked pull requests oldest first; before merging one whose base branch has merged, point it at the branch that one merged into (`gh pr edit <number> --base <branch>`), and start a new branch from there rather than from a merged one. Never use `--admin` or `--auto`: a merge GitHub refuses stays open. GitHub does not let you approve your own pull request, so do not try. Say in your report what you merged, and under \"For the user\" why any pull request you opened stays open.",
             );
         }
         input
@@ -1363,10 +1369,6 @@ impl OrgPanel {
             let (program, mut args, env) =
                 agent::invocation(node.provider, &route, &node.model, files, &access);
             args.extend(node.effort.args(node.provider));
-            if node.provider == Provider::Claude {
-                // What it thinks and does on the way, not just its answer.
-                args.extend(["--output-format", "stream-json", "--verbose"].map(String::from));
-            }
             // In a CCGS game Claude can play the role's own agent file.
             let agent_file = directory.join(format!(".claude/agents/{}.md", node.role));
             if node.provider == Provider::Claude && !node.role.is_empty() && agent_file.is_file() {
@@ -1418,6 +1420,32 @@ impl OrgPanel {
         Ok(())
     }
 
+    /// Sends `line` to the running agent.
+    pub fn send(&mut self, line: &str) {
+        if let Some(process) = self.run.as_mut().and_then(|run| run.process.as_mut()) {
+            process.send(line);
+        }
+    }
+
+    /// Lets the Claude agents still to start in this run use what `rule`,
+    /// one of Claude's allow rules, allows. They were set up when the run
+    /// began, before the user allowed it.
+    pub fn allow(&mut self, rule: &str) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        for (program, args, _) in &mut run.invocations {
+            if program != Provider::Claude.command() {
+                continue;
+            }
+            // The list takes every value up to the next flag.
+            match args.iter().position(|arg| arg == "--allowedTools") {
+                Some(at) => args.insert(at + 1, rule.into()),
+                None => args.extend(["--allowedTools".into(), rule.into()]),
+            }
+        }
+    }
+
     /// Stops the agent at work, and keeps the next one from starting.
     pub fn stop(&mut self) {
         if let Some(run) = &mut self.run {
@@ -1431,7 +1459,12 @@ impl OrgPanel {
     /// Starts the next agent once the one before it exits, each answering
     /// in a message of its own at the end of `chat`. Once the last one is
     /// done, or one fails, returns whether the run changed the watched file.
-    pub fn poll(&mut self, ctx: &egui::Context, chat: &mut Vec<Message>) -> Option<bool> {
+    /// What the running agent asks the user goes to `asks`.
+    pub fn poll(
+        &mut self,
+        ctx: &egui::Context,
+        (chat, asks): (&mut Vec<Message>, &mut Vec<Ask>),
+    ) -> Option<bool> {
         let run = self.run.as_mut()?;
         if run.process.is_none() && run.stopped {
             return self.finish(chat);
@@ -1470,7 +1503,7 @@ impl OrgPanel {
                 };
                 match started {
                     Ok(mut process) => {
-                        process.send_all(input);
+                        agent::send_prompt(&mut process, program, input);
                         node.state = NodeState::Running;
                         run.process = Some(process);
                     }
@@ -1501,9 +1534,21 @@ impl OrgPanel {
         let mut failed = false;
         for output in outputs {
             match output {
-                Output::Line(line) => node.take(&line),
+                Output::Line(line) => match Ask::read(&line) {
+                    Some(ask) => asks.push(ask),
+                    None => {
+                        if agent::ended(&line)
+                            && let Some(process) = &mut run.process
+                        {
+                            process.close();
+                        }
+                        node.take(&line);
+                    }
+                },
                 Output::Exit(code) => {
                     run.process = None;
+                    // Nobody is left to take the answers.
+                    asks.clear();
                     let answer = run.answers[run.next].clone();
                     let text = answer
                         .as_ref()
@@ -2395,7 +2440,9 @@ mod tests {
             !org.input(design, "Add a jump.", 1, false)
                 .contains("before you reported")
         );
-        assert!(org.input(code, "Add a jump.", 1, true).contains("gh pr merge"));
+        let merging = org.input(code, "Add a jump.", 1, true);
+        assert!(merging.contains("gh pr merge --merge"));
+        assert!(merging.contains("Never use `--admin`"));
     }
 
     #[test]
@@ -2562,7 +2609,7 @@ mod tests {
         let mut finished = None;
         let mut chat = Vec::new();
         while finished.is_none() && std::time::Instant::now() < deadline {
-            finished = panel.poll(&ctx, &mut chat);
+            finished = panel.poll(&ctx, (&mut chat, &mut Vec::new()));
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(finished, Some(false));
@@ -2621,7 +2668,7 @@ mod tests {
         panel.run.as_mut().unwrap().invocations = vec![echo.clone(), echo.clone(), echo];
         let mut finished = None;
         while finished.is_none() && std::time::Instant::now() < deadline {
-            finished = panel.poll(&ctx, &mut chat);
+            finished = panel.poll(&ctx, (&mut chat, &mut Vec::new()));
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(finished, Some(false));
@@ -2714,7 +2761,7 @@ mod tests {
             let mut finished = None;
             while finished.is_none() && !until(panel, chat) && std::time::Instant::now() < deadline
             {
-                finished = panel.poll(&ctx, chat);
+                finished = panel.poll(&ctx, (chat, &mut Vec::new()));
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             finished
@@ -2829,12 +2876,67 @@ mod tests {
         });
         panel.stop();
         assert_eq!(
-            panel.poll(&egui::Context::default(), &mut Vec::new()),
+            panel.poll(
+                &egui::Context::default(),
+                (&mut Vec::new(), &mut Vec::new())
+            ),
             Some(false)
         );
         assert_eq!(panel.org.node(code).unwrap().state, NodeState::Idle);
         assert!(panel.paused().is_some());
         fs::remove_dir_all(&besfa).unwrap();
+    }
+
+    #[test]
+    fn lets_the_agents_still_to_start_use_what_the_user_allowed() {
+        let (org, [design, code, _]) = studio();
+        let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-allow/organizations"));
+        panel.org = org;
+        let claude = |args: &[&str]| -> Invocation {
+            let args = args.iter().map(|arg| arg.to_string()).collect();
+            ("claude".into(), args, vec![])
+        };
+        panel.run = Some(Run {
+            organization: "Organization".into(),
+            task: "Add a jump.".into(),
+            files: Vec::new(),
+            chat: 1,
+            order: vec![design, code],
+            invocations: vec![
+                claude(&["-p", "--allowedTools", "mcp__besfa", "--model", "opus"]),
+                claude(&["-p", "--agent", "qa"]),
+                ("codex".into(), vec!["exec".into()], vec![]),
+                (String::new(), vec!["Gemini: log in first".into()], vec![]),
+            ],
+            next: 1,
+            round: 1,
+            process: None,
+            answers: vec![None, None],
+            stopped: false,
+            directory: ".".into(),
+            watched: ("none".into(), None),
+            merge: false,
+        });
+        panel.allow("Bash(cargo *)");
+        let run = panel.run.take().unwrap();
+        let args: Vec<Vec<String>> = run.invocations.iter().map(|i| i.1.clone()).collect();
+        assert_eq!(
+            args[0],
+            [
+                "-p",
+                "--allowedTools",
+                "Bash(cargo *)",
+                "mcp__besfa",
+                "--model",
+                "opus"
+            ]
+        );
+        assert_eq!(
+            args[1],
+            ["-p", "--agent", "qa", "--allowedTools", "Bash(cargo *)"]
+        );
+        assert_eq!(args[2], ["exec"]);
+        assert_eq!(args[3], ["Gemini: log in first"]);
     }
 
     #[test]

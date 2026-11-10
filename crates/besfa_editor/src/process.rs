@@ -3,10 +3,11 @@
 //! prebuild.
 
 use std::{
+    fs::File,
     io::{self, Read, Write},
-    os::windows::process::CommandExt,
+    os::windows::{io::OwnedHandle, process::CommandExt},
     path::{Path, PathBuf},
-    process::{ChildStdin, Command, Stdio},
+    process::{Command, Stdio},
     sync::mpsc::{self, Receiver, Sender},
     thread,
 };
@@ -21,7 +22,7 @@ pub enum Output {
 
 pub struct CliProcess {
     pid: u32,
-    stdin: Option<ChildStdin>,
+    stdin: Option<File>,
     output: Receiver<Output>,
 }
 
@@ -92,7 +93,12 @@ impl CliProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
-        let (pid, stdin) = (child.id(), child.stdin.take());
+        // A file, so a writer thread can hold a copy of it.
+        let stdin = child
+            .stdin
+            .take()
+            .map(|stdin| File::from(OwnedHandle::from(stdin)));
+        let pid = child.id();
         let (sender, output) = mpsc::channel();
         let readers = [
             reader(child.stdout.take().unwrap(), sender.clone(), ctx.clone()),
@@ -122,16 +128,27 @@ impl CliProcess {
         }
     }
 
-    /// Writes `input` to the process's stdin and then closes it, for
-    /// programs that read it to the end. A thread does the writing: input
-    /// bigger than the pipe's buffer would otherwise hold the caller until
-    /// the program starts reading.
-    pub fn send_all(&mut self, input: String) {
-        if let Some(mut stdin) = self.stdin.take() {
+    /// Writes `input` to the process's stdin and keeps it open for `send`.
+    /// A thread does the writing: input bigger than the pipe's buffer would
+    /// otherwise hold the caller until the program starts reading.
+    pub fn send_first(&mut self, input: String) {
+        if let Some(mut stdin) = self.stdin.as_ref().and_then(|stdin| stdin.try_clone().ok()) {
             thread::spawn(move || {
                 let _ = stdin.write_all(format!("{input}\n").as_bytes());
             });
         }
+    }
+
+    /// Closes the process's stdin, once `input` is written, for programs
+    /// that read it to the end.
+    pub fn close(&mut self) {
+        self.stdin = None;
+    }
+
+    /// Writes `input` to the process's stdin and then closes it.
+    pub fn send_all(&mut self, input: String) {
+        self.send_first(input);
+        self.close();
     }
 
     /// Stops the process and everything it launched. Killing only cargo
@@ -389,6 +406,36 @@ mod tests {
             "{statuses:?}"
         );
         assert_eq!(statuses.last(), expected.last());
+    }
+
+    #[test]
+    fn keeps_stdin_open_after_the_first_input_until_closed() {
+        let script = r#"$a = [Console]::In.ReadLine(); "got $a"; $b = [Console]::In.ReadLine(); "got $b"; "end $($null -eq [Console]::In.ReadLine())""#;
+        let ctx = egui::Context::default();
+        let args = ["-NoProfile", "-Command", script];
+        let mut process =
+            CliProcess::start(Path::new("."), "powershell", &args, &[], &ctx).unwrap();
+        process.send_first("prompt".into());
+        let mut lines = Vec::new();
+        let mut exit = None;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while exit.is_none() && Instant::now() < deadline {
+            for output in process.poll() {
+                match output {
+                    Output::Line(line) => lines.push(line),
+                    Output::Exit(code) => exit = Some(code),
+                }
+            }
+            // Answered only once it asked, as an agent's permission is.
+            if lines == ["got prompt"] {
+                process.send("answer");
+                process.close();
+                lines.push(String::new());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(lines, ["got prompt", "", "got answer", "end True"]);
+        assert_eq!(exit, Some(0));
     }
 
     #[test]

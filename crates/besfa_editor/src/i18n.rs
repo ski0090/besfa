@@ -433,8 +433,8 @@ fn korean(en: &str) -> Option<&'static str> {
         "Organization runs review and merge their pull requests" => {
             "조직 실행이 연 풀 리퀘스트를 리뷰하고 머지하게 하기"
         }
-        "An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass. GitHub does not let you approve your own pull request, so a branch rule that requires approvals keeps them open. A project rule or agent note that says never to merge can still stop them." => {
-            "풀 리퀘스트를 연 에이전트가 변경 내용을 리뷰하고, 잘못된 곳을 고치고, 검사가 통과하면 머지합니다. GitHub에서는 자기 풀 리퀘스트를 승인할 수 없으므로 승인을 요구하는 브랜치 규칙이 있으면 열린 채로 남습니다. 프로젝트 규칙이나 에이전트 메모에 머지하지 말라고 적혀 있으면 여전히 멈출 수 있습니다."
+        "An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass. It is told never to push a refused merge through with --admin, but only a branch rule that also applies to administrators enforces that. A rule in the project's CLAUDE.md or .claude/agent-memory that says never to merge can still stop them." => {
+            "풀 리퀘스트를 연 에이전트가 변경 내용을 리뷰하고, 잘못된 곳을 고치고, 검사가 통과하면 머지합니다. 거부된 머지를 --admin으로 밀어붙이지 말라고 지시하지만, 실제로 막는 것은 관리자에게도 적용되는 브랜치 규칙뿐입니다. 프로젝트의 CLAUDE.md나 .claude/agent-memory에 머지하지 말라고 적혀 있으면 여전히 멈출 수 있습니다."
         }
         "It then runs git and gh without asking, and gh reaches every repository your GitHub login can. Deny rules in the project's .claude/settings.json still win, but only over commands they match as written, so block force pushes with branch protection on GitHub." => {
             "그러면 Claude가 git과 gh를 묻지 않고 실행하고, gh는 GitHub 로그인으로 접근할 수 있는 모든 저장소를 다룹니다. 프로젝트 .claude/settings.json의 거부 규칙은 여전히 우선하지만 적힌 그대로 맞는 명령에만 적용되므로, 강제 푸시는 GitHub의 브랜치 보호로 막으세요."
@@ -468,8 +468,16 @@ fn korean(en: &str) -> Option<&'static str> {
         "Operations" => "운영",
         "The links make a loop." => "링크가 순환합니다.",
         "Commands" => "명령",
-        "Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. An agent playing a CCGS role runs them only if its role file lists Bash." => {
-            "Claude가 묻지 않고 실행할 명령입니다. 채팅과 조직 실행 모두에 적용되고, 한 줄에 하나씩 적으며 *는 어떤 인자든 뜻합니다. 에이전트가 일을 끝내려면 cargo *처럼 게임을 빌드하고 테스트하는 명령이 필요합니다. CCGS 역할을 맡은 에이전트는 역할 파일에 Bash가 있을 때만 실행합니다."
+        "Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. Claude asks in the chat before running others, and Always allow adds them here. A line like PowerShell(cargo *) is a rule for another of its tools. An agent playing a CCGS role runs them only if its role file lists Bash." => {
+            "Claude가 묻지 않고 실행할 명령입니다. 채팅과 조직 실행 모두에 적용되고, 한 줄에 하나씩 적으며 *는 어떤 인자든 뜻합니다. 에이전트가 일을 끝내려면 cargo *처럼 게임을 빌드하고 테스트하는 명령이 필요합니다. 그 밖의 명령은 Claude가 실행하기 전에 채팅에서 묻고, 항상 허용하면 여기에 더해집니다. PowerShell(cargo *)처럼 적은 줄은 Claude의 다른 도구에 대한 규칙입니다. CCGS 역할을 맡은 에이전트는 역할 파일에 Bash가 있을 때만 실행합니다."
+        }
+        "The agent asks to use {}:" => "에이전트가 {} 사용을 허용해 달라고 합니다:",
+        "Allow" => "허용",
+        "Not in .mcp.json" => ".mcp.json에 없음",
+        "Always allow" => "항상 허용",
+        "Deny" => "거부",
+        "Saved in Settings > Agent Settings for this project." => {
+            "이 프로젝트의 설정 > 에이전트 설정에 저장됩니다."
         }
         "Round {} of {}: {} agents go again." => "라운드 {}/{}: 에이전트 {}개가 다시 돕니다.",
         "Roles" => "역할",

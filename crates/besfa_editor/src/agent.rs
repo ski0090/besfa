@@ -26,7 +26,7 @@ use windows::{
 
 use crate::{
     i18n::t,
-    organization::OrgPanel,
+    organization::{self, OrgPanel},
     panels,
     process::{self, CliProcess, Output},
 };
@@ -55,7 +55,7 @@ impl Provider {
         }
     }
 
-    fn command(self) -> &'static str {
+    pub fn command(self) -> &'static str {
         match self {
             Provider::Claude => "claude",
             Provider::OpenAi => "codex",
@@ -82,16 +82,25 @@ impl Provider {
         }
     }
 
-    /// Headless, with the prompt on stdin. Nobody can answer a permission
-    /// prompt, so each may edit files in the project without asking and
-    /// nothing more, except Claude, which `invocation` allows what the
-    /// project's `ProjectAccess` holds.
+    /// Headless, with the prompt on stdin. Each may edit files in the
+    /// project without asking. Codex and Gemini may do nothing more, since
+    /// nobody can answer their permission prompts. Claude may also do what
+    /// `invocation` allows from the project's `ProjectAccess`, and asks
+    /// about the rest on stdout as JSON events, with the prompt and the
+    /// answers going in on stdin (see `Ask`).
     fn args(self) -> &'static [&'static str] {
         match self {
             Provider::Claude => &[
                 "-p",
                 "--permission-mode",
                 "acceptEdits",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--permission-prompt-tool",
+                "stdio",
                 "--append-system-prompt",
                 AGENT_WINDOW,
             ],
@@ -306,17 +315,176 @@ impl ProjectAccess {
                 .lines()
                 .map(str::trim)
                 .filter(|command| !command.is_empty())
-                // One copied from a Claude settings file is a rule already.
+                // One written as a rule, like `PowerShell(cargo *)` or one
+                // copied from a Claude settings file, stays one.
                 .map(|command| {
-                    let command = command
-                        .strip_prefix("Bash(")
-                        .and_then(|rest| rest.strip_suffix(')'))
-                        .unwrap_or(command);
-                    format!("Bash({command})")
+                    let rule = command.ends_with(')')
+                        && command.split_once('(').is_some_and(|(tool, _)| {
+                            tool.starts_with(|c: char| c.is_ascii_uppercase())
+                                && tool.chars().all(|c| c.is_ascii_alphanumeric())
+                        });
+                    if rule {
+                        command.into()
+                    } else {
+                        format!("Bash({command})")
+                    }
                 }),
         );
         rules
     }
+
+    /// Allows from now on what "Always allow" on `ask` allows.
+    fn allow(&mut self, ask: &Ask) {
+        match ask.rule() {
+            Some(Rule::Server(server)) => {
+                self.servers.insert(server);
+            }
+            Some(Rule::Command(line, _))
+                if !self.commands.lines().any(|old| old.trim() == line) =>
+            {
+                if !self.commands.is_empty() && !self.commands.ends_with('\n') {
+                    self.commands.push('\n');
+                }
+                self.commands.push_str(&line);
+                self.commands.push('\n');
+            }
+            Some(Rule::Command(..)) | None => {}
+        }
+    }
+}
+
+/// What a Claude run asks the user before it uses a tool its rules do not
+/// allow. It waits for the answer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ask {
+    id: String,
+    pub tool: String,
+    input: Value,
+}
+
+/// What "Always allow" saves for an ask.
+#[derive(Debug, PartialEq)]
+enum Rule {
+    /// A line for `ProjectAccess::commands`, and the same for Claude's
+    /// rule: the command's program with any arguments.
+    Command(String, String),
+    /// A .mcp.json server, every tool of it.
+    Server(String),
+}
+
+impl Ask {
+    /// The ask `line` is, if it is one: a `can_use_tool` control request of
+    /// Claude's stream-json output.
+    pub fn read(line: &str) -> Option<Self> {
+        let event: Value = serde_json::from_str(line).ok()?;
+        let request = &event["request"];
+        if event["type"] != "control_request" || request["subtype"] != "can_use_tool" {
+            return None;
+        }
+        Some(Self {
+            id: event["request_id"].as_str()?.into(),
+            tool: request["tool_name"].as_str()?.into(),
+            input: request["input"].clone(),
+        })
+    }
+
+    /// What it would do: the command it runs, the file or address it
+    /// reaches, or else all it was given.
+    pub fn what(&self) -> String {
+        ["command", "file_path", "path", "url", "pattern"]
+            .iter()
+            .find_map(|key| self.input[key].as_str())
+            .map_or_else(|| self.input.to_string(), str::to_string)
+    }
+
+    fn rule(&self) -> Option<Rule> {
+        if let Some(server) = self
+            .tool
+            .strip_prefix("mcp__")
+            .and_then(|rest| rest.split_once("__"))
+        {
+            return Some(Rule::Server(server.0.into()));
+        }
+        // ponytail: the first word only, so `cd x && cargo build` saves
+        // `cd *`; the user can write the rule in Settings instead.
+        let program = self.input["command"].as_str()?.split_whitespace().next()?;
+        let content = format!("{program} *");
+        let line = if self.tool == "Bash" {
+            content.clone()
+        } else {
+            format!("{}({content})", self.tool)
+        };
+        Some(Rule::Command(line, content))
+    }
+
+    /// Claude's allow rule for what "Always allow" saves, if anything.
+    pub fn allowed(&self) -> Option<String> {
+        match self.rule()? {
+            Rule::Command(_, content) => Some(format!("{}({content})", self.tool)),
+            Rule::Server(server) => Some(format!("mcp__{server}")),
+        }
+    }
+
+    /// What "Always allow" saves, as the button shows it, if anything.
+    pub fn saves(&self) -> Option<String> {
+        match self.rule()? {
+            Rule::Command(line, _) => Some(line),
+            Rule::Server(server) => Some(format!("{server} MCP")),
+        }
+    }
+
+    /// The line that answers it. One allowed `always` also stops the run
+    /// from asking again about what that saves.
+    pub fn answer(&self, allow: bool, always: bool) -> String {
+        let response = if allow {
+            let mut response = serde_json::json!({"behavior": "allow", "updatedInput": self.input});
+            let rule = match self.rule().filter(|_| always) {
+                Some(Rule::Command(_, content)) => {
+                    Some(serde_json::json!({"toolName": self.tool, "ruleContent": content}))
+                }
+                Some(Rule::Server(server)) => {
+                    Some(serde_json::json!({"toolName": format!("mcp__{server}")}))
+                }
+                None => None,
+            };
+            if let Some(rule) = rule {
+                response["updatedPermissions"] = serde_json::json!([{
+                    "type": "addRules",
+                    "rules": [rule],
+                    "behavior": "allow",
+                    "destination": "session",
+                }]);
+            }
+            response
+        } else {
+            serde_json::json!({"behavior": "deny", "message": "The user said no."})
+        };
+        serde_json::json!({
+            "type": "control_response",
+            "response": {"subtype": "success", "request_id": self.id, "response": response},
+        })
+        .to_string()
+    }
+}
+
+/// Sends `input`, the prompt, to a run of `program`. Claude takes it as a
+/// stream-json message and keeps reading for the answers to its asks until
+/// `ended` says its result came.
+pub fn send_prompt(process: &mut CliProcess, program: &str, input: String) {
+    if program == Provider::Claude.command() {
+        let message = serde_json::json!({
+            "type": "user",
+            "message": {"role": "user", "content": input},
+        });
+        process.send_first(message.to_string());
+    } else {
+        process.send_all(input);
+    }
+}
+
+/// Whether `line` is Claude's result, after which it reads nothing more.
+pub fn ended(line: &str) -> bool {
+    serde_json::from_str::<Value>(line).is_ok_and(|event| event["type"] == "result")
 }
 
 /// `project` as one key however it is written: Windows ignores case, takes
@@ -379,6 +547,14 @@ impl AgentSettings {
             .get(&project_key(project))
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Allows the agents in `project` from now on what "Always allow" on
+    /// `ask` allows.
+    pub fn allow(&mut self, project: &Path, ask: &Ask) {
+        let mut access = self.project(project);
+        access.allow(ask);
+        self.projects.insert(project_key(project), access);
     }
 }
 
@@ -682,7 +858,7 @@ pub fn settings_tab(
                     t("Organization runs review and merge their pull requests"),
                 );
             });
-            note(ui, t("An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass. GitHub does not let you approve your own pull request, so a branch rule that requires approvals keeps them open. A project rule or agent note that says never to merge can still stop them."));
+            note(ui, t("An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass. It is told never to push a refused merge through with --admin, but only a branch rule that also applies to administrators enforces that. A rule in the project's CLAUDE.md or .claude/agent-memory that says never to merge can still stop them."));
             let gh = match agents.gh {
                 Cli::Checking => t("Checking `{}`.").replace("{}", "gh"),
                 Cli::Missing => t("`{}` is not installed.").replace("{}", "gh"),
@@ -707,7 +883,7 @@ pub fn settings_tab(
                     .desired_rows(3)
                     .desired_width(f32::INFINITY),
             );
-            note(ui, t("Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. An agent playing a CCGS role runs them only if its role file lists Bash."));
+            note(ui, t("Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. Claude asks in the chat before running others, and Always allow adds them here. A line like PowerShell(cargo *) is a rule for another of its tools. An agent playing a CCGS role runs them only if its role file lists Bash."));
         });
         ui.group(|ui| {
             ui.set_width(ui.available_width());
@@ -724,6 +900,7 @@ pub fn settings_tab(
                 });
             });
             note(ui, t("The servers in the project's .mcp.json. Claude may call the tools of those checked."));
+            let mut listed = Vec::new();
             match mcp_servers(&file) {
                 Err(error) => {
                     ui.colored_label(
@@ -734,6 +911,7 @@ pub fn settings_tab(
                 Ok(servers) if servers.is_empty() => note(ui, t("It lists no servers.")),
                 Ok(servers) => {
                     for (name, start) in servers {
+                        listed.push(name.clone());
                         let mut on = access.servers.contains(&name);
                         ui.horizontal(|ui| {
                             if ui.checkbox(&mut on, &name).changed() {
@@ -750,6 +928,25 @@ pub fn settings_tab(
                         });
                     }
                 }
+            }
+            // Ones .mcp.json lacks, as a server of the user's own Claude
+            // settings that Always allow in the chat saved, stay visible
+            // to take back.
+            let others: Vec<String> = access
+                .servers
+                .iter()
+                .filter(|server| !listed.contains(server))
+                .cloned()
+                .collect();
+            for name in others {
+                let mut on = true;
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut on, &name).changed() {
+                        access.servers.remove(&name);
+                    }
+                    let why = t("Not in .mcp.json");
+                    ui.label(RichText::new(why).color(panels::MUTED).small());
+                });
             }
             note(ui, t("Codex and Gemini do not read .mcp.json. An Organization agent playing a CCGS role uses only the tools its role file lists."));
         });
@@ -870,6 +1067,14 @@ pub struct AgentPanel {
     picking: Option<Receiver<Option<Vec<PathBuf>>>>,
     /// A file the run may change, and when it was changed before the run.
     watched: Option<(PathBuf, Option<SystemTime>)>,
+    /// Whether the run prints Claude's stream-json events, not plain text.
+    streamed: bool,
+    /// What the running agent, this chat's or an organization's, waits on
+    /// the user to allow, oldest first.
+    asks: Vec<Ask>,
+    /// Those the user answered, whether allowed, and whether always, for
+    /// the editor to send and save.
+    answered: Vec<(Ask, bool, bool)>,
     /// Laid-out code blocks and the like of the replies' Markdown.
     markdown: egui_commonmark::CommonMarkCache,
 }
@@ -1016,7 +1221,8 @@ impl AgentPanel {
             .collect();
         match CliProcess::start(directory, &program, &args, &env, ctx) {
             Ok(mut run) => {
-                run.send_all(input);
+                send_prompt(&mut run, &program, input);
+                self.streamed = program == Provider::Claude.command();
                 self.watched = Some((watch.clone(), modified(&watch)));
                 self.run = Some(run);
             }
@@ -1099,9 +1305,30 @@ impl AgentPanel {
         });
     }
 
-    /// The chat the organization's agents answer in.
-    pub fn chat_messages(&mut self) -> &mut Vec<Message> {
-        &mut self.chat.messages
+    /// The chat the organization's agents answer in, and what they ask.
+    pub fn chat_and_asks(&mut self) -> (&mut Vec<Message>, &mut Vec<Ask>) {
+        (&mut self.chat.messages, &mut self.asks)
+    }
+
+    /// The asks the user answered since the last call: each ask, whether
+    /// allowed, and whether always.
+    pub fn take_answers(&mut self) -> Vec<(Ask, bool, bool)> {
+        std::mem::take(&mut self.answered)
+    }
+
+    /// Sends `line` to this chat's own run. False when none runs.
+    pub fn send(&mut self, line: &str) -> bool {
+        self.run.as_mut().map(|run| run.send(line)).is_some()
+    }
+
+    /// How many asks wait on the user.
+    pub fn asking(&self) -> usize {
+        self.asks.len()
+    }
+
+    /// Forgets the asks once no agent runs to answer.
+    pub fn drop_asks(&mut self) {
+        self.asks.clear();
     }
 
     /// Adds a line to the agent's latest message.
@@ -1119,7 +1346,24 @@ impl AgentPanel {
     pub fn poll(&mut self) -> Option<bool> {
         for output in self.run.as_ref()?.poll() {
             match output {
-                Output::Line(line) => self.reply(&line),
+                Output::Line(line) => {
+                    if let Some(ask) = Ask::read(&line) {
+                        self.asks.push(ask);
+                    } else if !self.streamed {
+                        self.reply(&line);
+                    } else {
+                        if ended(&line)
+                            && let Some(run) = &mut self.run
+                        {
+                            run.close();
+                        }
+                        let Some(message) = self.chat.messages.last_mut() else {
+                            continue;
+                        };
+                        let (text, thoughts) = (&mut message.text, &mut message.thoughts);
+                        organization::take(organization::streamed(&line), text, thoughts);
+                    }
+                }
                 Output::Exit(code) => {
                     if code != 0 {
                         self.reply(&format!("Exited with code {code}."));
@@ -1288,12 +1532,20 @@ impl AgentPanel {
                                 reply(ui, &mut markdown, &message.text);
                             });
                         });
-                    } else if working {
-                        ui.spinner();
                     } else {
-                        reply(ui, &mut markdown, &message.text);
+                        self.thoughts(ui, index, message);
+                        if working {
+                            ui.spinner();
+                        } else {
+                            reply(ui, &mut markdown, &message.text);
+                        }
                     }
                     ui.add_space(8.0);
+                }
+                if let Some(answer) = asks(ui, &self.asks) {
+                    let (index, allow, always) = answer;
+                    let ask = self.asks.remove(index);
+                    self.answered.push((ask, allow, always));
                 }
             });
         self.markdown = markdown;
@@ -1487,6 +1739,47 @@ fn web_link(link: &str) -> Option<String> {
     (web && plain).then(|| link.replace(',', "%2C"))
 }
 
+/// A card for each ask, with what it would do. Returns the one answered:
+/// its index, whether allowed, and whether always.
+fn asks(ui: &mut Ui, asks: &[Ask]) -> Option<(usize, bool, bool)> {
+    let mut answer = None;
+    for (index, ask) in asks.iter().enumerate() {
+        egui::Frame::new()
+            .stroke((1.0, panels::WARNING))
+            .corner_radius(8.0)
+            .inner_margin(10.0)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let heading = t("The agent asks to use {}:").replace("{}", &ask.tool);
+                ui.label(RichText::new(heading).strong().color(panels::WARNING));
+                let what: String = ask.what().chars().take(2000).collect();
+                ui.add(egui::Label::new(RichText::new(what).monospace()).wrap());
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(t("Allow")).clicked() {
+                        answer = Some((index, true, false));
+                    }
+                    if let Some(saves) = ask.saves() {
+                        let always = format!("{}: {saves}", t("Always allow"));
+                        if ui
+                            .button(always)
+                            .on_hover_text(t(
+                                "Saved in Settings > Agent Settings for this project.",
+                            ))
+                            .clicked()
+                        {
+                            answer = Some((index, true, true));
+                        }
+                    }
+                    if ui.button(t("Deny")).clicked() {
+                        answer = Some((index, false, false));
+                    }
+                });
+            });
+        ui.add_space(8.0);
+    }
+    answer
+}
+
 pub fn model_label(model: &str) -> &str {
     if model.is_empty() {
         t("CLI default")
@@ -1645,6 +1938,13 @@ mod tests {
                 "-p",
                 "--permission-mode",
                 "acceptEdits",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--permission-prompt-tool",
+                "stdio",
                 "--append-system-prompt",
                 AGENT_WINDOW,
                 "--allowedTools",
@@ -1682,7 +1982,9 @@ mod tests {
             servers: ["besfa", "my.server"].map(String::from).into(),
             github: true,
             merge: false,
-            commands: " cargo *\r\n\npwsh -File tools/drive.ps1 *\nBash(just *)\n".into(),
+            commands:
+                " cargo *\r\n\npwsh -File tools/drive.ps1 *\nBash(just *)\nPowerShell(cargo *)\n"
+                    .into(),
         };
         assert_eq!(
             allowed(&access),
@@ -1693,7 +1995,8 @@ mod tests {
                 "Bash(gh *)",
                 "Bash(cargo *)",
                 "Bash(pwsh -File tools/drive.ps1 *)",
-                "Bash(just *)"
+                "Bash(just *)",
+                "PowerShell(cargo *)"
             ]
         );
 
@@ -1708,6 +2011,147 @@ mod tests {
             let (_, args, _) = invocation(provider, &Route::Cli, "", &[], &access);
             assert!(!args.iter().any(|arg| arg.contains("Bash(")), "{args:?}");
         }
+    }
+
+    /// A `can_use_tool` request as Claude writes it, shortened.
+    fn ask_line(tool: &str, input: &str) -> String {
+        format!(
+            r#"{{"type":"control_request","request_id":"r1","request":{{"subtype":"can_use_tool","tool_name":"{tool}","display_name":"{tool}","input":{input},"permission_suggestions":[]}}}}"#
+        )
+    }
+
+    #[test]
+    fn reads_what_claude_asks_and_answers_it() {
+        assert_eq!(Ask::read(r#"{"type":"assistant","message":{}}"#), None);
+        assert_eq!(Ask::read("cargo build"), None);
+        let ask = Ask::read(&ask_line(
+            "Bash",
+            r#"{"command":"cargo build --release","description":"Build"}"#,
+        ))
+        .unwrap();
+        assert_eq!(ask.tool, "Bash");
+        assert_eq!(ask.what(), "cargo build --release");
+        assert_eq!(ask.saves().as_deref(), Some("cargo *"));
+
+        let answer =
+            |allow, always| -> Value { serde_json::from_str(&ask.answer(allow, always)).unwrap() };
+        let once = answer(true, false);
+        assert_eq!(once["type"], "control_response");
+        assert_eq!(once["response"]["request_id"], "r1");
+        assert_eq!(once["response"]["response"]["behavior"], "allow");
+        assert_eq!(once["response"]["response"]["updatedInput"], ask.input);
+        assert!(once["response"]["response"]["updatedPermissions"].is_null());
+        // Always also stops this run from asking again.
+        let always = answer(true, true);
+        let rule = &always["response"]["response"]["updatedPermissions"][0];
+        assert_eq!(rule["destination"], "session");
+        assert_eq!(
+            rule["rules"][0],
+            serde_json::json!({"toolName": "Bash", "ruleContent": "cargo *"})
+        );
+        let no = answer(false, false);
+        assert_eq!(no["response"]["response"]["behavior"], "deny");
+
+        let shell = Ask::read(&ask_line("PowerShell", r#"{"command":"cargo test"}"#)).unwrap();
+        assert_eq!(shell.saves().as_deref(), Some("PowerShell(cargo *)"));
+        assert_eq!(ask.allowed().as_deref(), Some("Bash(cargo *)"));
+        assert_eq!(shell.allowed().as_deref(), Some("PowerShell(cargo *)"));
+        let tool = Ask::read(&ask_line("mcp__my_server__run", r#"{"x":1}"#)).unwrap();
+        assert_eq!(tool.saves().as_deref(), Some("my_server MCP"));
+        assert_eq!(tool.allowed().as_deref(), Some("mcp__my_server"));
+        assert_eq!(tool.what(), r#"{"x":1}"#);
+        let fetch = Ask::read(&ask_line("WebFetch", r#"{"url":"https://a.b"}"#)).unwrap();
+        assert_eq!(fetch.saves(), None, "only once");
+        assert_eq!(fetch.what(), "https://a.b");
+    }
+
+    #[test]
+    fn always_allow_saves_the_rule_for_the_project_once() {
+        let project = Path::new(r"C:\Games\Dusk");
+        let mut settings = AgentSettings::default();
+        settings.projects.insert(
+            project_key(project),
+            ProjectAccess {
+                commands: "pwsh *".into(),
+                ..Default::default()
+            },
+        );
+        let cargo = Ask::read(&ask_line("Bash", r#"{"command":"cargo build"}"#)).unwrap();
+        settings.allow(project, &cargo);
+        settings.allow(project, &cargo);
+        let shell = Ask::read(&ask_line("PowerShell", r#"{"command":"git status"}"#)).unwrap();
+        settings.allow(project, &shell);
+        let tool = Ask::read(&ask_line("mcp__github__create_pr", "{}")).unwrap();
+        settings.allow(project, &tool);
+        let access = settings.project(project);
+        assert_eq!(access.commands, "pwsh *\ncargo *\nPowerShell(git *)\n");
+        assert!(access.servers.contains("github") && access.servers.contains("besfa"));
+        assert!(access.rules().contains(&"PowerShell(git *)".to_string()));
+        assert!(settings.project(Path::new(r"C:\Other")).commands.is_empty());
+    }
+
+    /// Needs a logged-in `claude` and spends a little of its usage:
+    /// `cargo test -p besfa_editor real_claude -- --ignored`.
+    #[test]
+    #[ignore]
+    fn real_claude_asks_once_and_takes_always() {
+        let dir = std::env::temp_dir().join(format!("besfa-real-ask-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let none = ProjectAccess {
+            servers: Default::default(),
+            ..Default::default()
+        };
+        let invocation = invocation(Provider::Claude, &Route::Cli, "haiku", &[], &none);
+        let ctx = egui::Context::default();
+        let mut panel = AgentPanel::default();
+        let prompt = "Use the Bash tool to run exactly: python -c \"open('a.txt','w').write('x')\" and then, as a separate Bash call, exactly: python -c \"open('b.txt','w').write('x')\" Then say ok.";
+        panel.start(invocation, prompt, &dir, dir.join("none"), &ctx);
+        let mut asked = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+        while panel.poll().is_none() && std::time::Instant::now() < deadline {
+            for ask in std::mem::take(&mut panel.asks) {
+                assert!(panel.send(&ask.answer(true, true)));
+                asked.push(ask.what());
+            }
+            thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let last = panel.chat.messages.last().unwrap();
+        eprintln!(
+            "asked {asked:?}
+text {:?}
+thoughts {:?}",
+            last.text, last.thoughts
+        );
+        assert!(dir.join("a.txt").is_file() && dir.join("b.txt").is_file());
+        assert_eq!(asked.len(), 1, "always covers the second");
+        assert!(!panel.running());
+    }
+
+    #[test]
+    fn asks_in_the_chat_and_hands_the_answer_over() {
+        let mut harness = tab(None);
+        let cargo = Ask::read(&ask_line("Bash", r#"{"command":"cargo build"}"#)).unwrap();
+        let fetch = Ask::read(&ask_line("WebFetch", r#"{"url":"https://a.b"}"#)).unwrap();
+        harness.state_mut().panel.asks = vec![cargo.clone(), fetch.clone()];
+        harness.run();
+        assert!(harness.query_by_label("cargo build").is_some());
+        assert!(harness.query_by_label("https://a.b").is_some());
+        assert_eq!(
+            harness.query_all_by_label_contains("Always allow").count(),
+            1,
+            "WebFetch can only be allowed once"
+        );
+        harness.get_by_label("Always allow: cargo *").click();
+        harness.run();
+        let panel = &mut harness.state_mut().panel;
+        assert_eq!(panel.take_answers(), [(cargo, true, true)]);
+        assert_eq!(panel.asks, std::slice::from_ref(&fetch));
+        harness.get_by_label("Deny").click();
+        harness.run();
+        let panel = &mut harness.state_mut().panel;
+        assert_eq!(panel.take_answers(), [(fetch, false, false)]);
+        assert!(panel.asks.is_empty());
     }
 
     #[test]
@@ -1875,6 +2319,16 @@ mod tests {
         assert!(access.github);
         assert!(access.merge);
         assert_eq!(access.servers, ["github".to_string()].into());
+
+        // One allowed in the chat that .mcp.json lacks can be taken back.
+        let other = Ask::read(&ask_line("mcp__plugin_x__send", "{}")).unwrap();
+        harness.state_mut().0.allow(&dir, &other);
+        harness.run();
+        assert!(harness.query_by_label("Not in .mcp.json").is_some());
+        harness.get_by_label("plugin_x").click();
+        harness.run();
+        let access = harness.state().0.project(&dir);
+        assert_eq!(access.servers, ["github".to_string()].into());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1890,7 +2344,7 @@ mod tests {
             ..Default::default()
         };
         let (_, args, _) = invocation(Provider::Claude, &Route::Cli, "", &files, &none);
-        assert_eq!(args[5..], ["--add-dir", r"C:\My Art"]);
+        assert_eq!(args[args.len() - 2..], ["--add-dir", r"C:\My Art"]);
         let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &files, &none);
         assert_eq!(args[4..], ["--include-directories", r"C:\My Art"]);
         let (_, args, _) = invocation(Provider::OpenAi, &Route::Cli, "", &files, &none);
