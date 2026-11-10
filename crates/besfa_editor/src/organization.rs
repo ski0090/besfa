@@ -890,16 +890,25 @@ type Invocation = (String, Vec<String>, Vec<(String, String)>);
 /// it a setting if three rounds are too few or cost too much.
 const MAX_ROUNDS: u32 = 3;
 
-/// Whether an agent's answer ends saying it has more to do. Anything else,
-/// no status line at all included, counts as done, so a CLI that ignores
-/// the ask cannot keep a run going.
+/// Whether an agent's last status line says it has more to do. Markdown,
+/// spaces and what follows the word are let go: `**Status:** MORE (QA)`
+/// is MORE, and so is one with a "For the user" part after it. No status
+/// line counts as done, so a CLI that ignores the ask cannot keep a run
+/// going.
 fn says_more(output: &str) -> bool {
     output
         .lines()
         .rev()
-        .map(|line| line.trim_matches(|c: char| c.is_whitespace() || "*`#_".contains(c)))
-        .find(|line| !line.is_empty())
-        .is_some_and(|line| line.eq_ignore_ascii_case("STATUS: MORE"))
+        .map(|line| {
+            let bare: String = line
+                .chars()
+                .filter(|c| !c.is_whitespace() && !"*`_".contains(*c))
+                .collect();
+            bare.trim_start_matches(['#', '>', '-'])
+                .to_ascii_uppercase()
+        })
+        .find(|line| line.starts_with("STATUS:"))
+        .is_some_and(|line| line.starts_with("STATUS:MORE"))
 }
 
 /// A task going through the organization, one agent at a time. ponytail:
@@ -1321,7 +1330,8 @@ impl OrgPanel {
                 // A done one only runs again in a later round, which then
                 // fails to start it and pauses with the reason.
                 Err(error) if run.done.iter().any(|done| done.0 == id) => {
-                    invocations.push((String::new(), vec![error.into()], Vec::new()));
+                    let why = format!("{} ({}): {error}", node.name, node.provider.label());
+                    invocations.push((String::new(), vec![why], Vec::new()));
                     answers.push(None);
                     continue;
                 }
@@ -2609,10 +2619,23 @@ mod tests {
 
     #[test]
     fn runs_again_who_says_more_and_who_comes_after_up_to_the_last_round() {
-        assert!(says_more("Planned.\n\n**STATUS: MORE**\n"));
-        assert!(!says_more("Planned.\nSTATUS: DONE"));
-        assert!(!says_more("STATUS: MORE\nand then some"));
-        assert!(!says_more(""));
+        for more in [
+            "Planned.\r\n\r\n**STATUS: MORE**\r\n",
+            "**Status:** MORE",
+            "- STATUS:  **more** (waiting on QA).",
+            "> `STATUS:MORE`\n---",
+            "STATUS: MORE\n\n## For the user\nPick a font.",
+        ] {
+            assert!(says_more(more), "{more:?}");
+        }
+        for done in [
+            "Planned.\nSTATUS: DONE",
+            "STATUS: MORE\nfixed it after all\nSTATUS: DONE",
+            "End with STATUS: DONE or STATUS: MORE.",
+            "",
+        ] {
+            assert!(!says_more(done), "{done:?}");
+        }
 
         let (mut org, [design, code, test]) = studio();
         org.link(design, code);

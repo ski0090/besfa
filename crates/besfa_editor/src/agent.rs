@@ -302,7 +302,14 @@ impl ProjectAccess {
                 .lines()
                 .map(str::trim)
                 .filter(|command| !command.is_empty())
-                .map(|command| format!("Bash({command})")),
+                // One copied from a Claude settings file is a rule already.
+                .map(|command| {
+                    let command = command
+                        .strip_prefix("Bash(")
+                        .and_then(|rest| rest.strip_suffix(')'))
+                        .unwrap_or(command);
+                    format!("Bash({command})")
+                }),
         );
         rules
     }
@@ -1526,7 +1533,7 @@ mod tests {
         let mut access = ProjectAccess {
             servers: ["besfa", "my.server"].map(String::from).into(),
             github: true,
-            commands: " cargo *\r\n\npwsh -File tools/drive.ps1 *\n".into(),
+            commands: " cargo *\r\n\npwsh -File tools/drive.ps1 *\nBash(just *)\n".into(),
         };
         assert_eq!(
             allowed(&access),
@@ -1536,7 +1543,8 @@ mod tests {
                 "Bash(git *)",
                 "Bash(gh *)",
                 "Bash(cargo *)",
-                "Bash(pwsh -File tools/drive.ps1 *)"
+                "Bash(pwsh -File tools/drive.ps1 *)",
+                "Bash(just *)"
             ]
         );
 
