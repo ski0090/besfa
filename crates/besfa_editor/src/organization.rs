@@ -463,6 +463,9 @@ pub struct Node {
     /// What it thought and did on the way to that answer.
     #[serde(skip)]
     thoughts: String,
+    /// What it answered the round before, when it runs again.
+    #[serde(skip)]
+    last: String,
     #[serde(skip)]
     state: NodeState,
 }
@@ -680,9 +683,9 @@ impl Organization {
         Ok(order)
     }
 
-    /// What goes to `id`'s CLI: its role, the task, and what the agents
-    /// linked into it did.
-    fn input(&self, id: u32, task: &str) -> String {
+    /// What goes to `id`'s CLI in `round`: its role, the task, what it
+    /// answered the round before, and what the agents linked into it did.
+    fn input(&self, id: u32, task: &str, round: u32) -> String {
         let Some(node) = self.node(id) else {
             return task.into();
         };
@@ -694,6 +697,15 @@ impl Organization {
             input.push_str(&format!("\nYour role:\n{}\n", node.instructions.trim()));
         }
         input.push_str(&format!("\nThe team's task:\n{}\n", task.trim()));
+        if !node.last.trim().is_empty() {
+            input.push_str(&format!(
+                "\nThis is round {round} of at most {MAX_ROUNDS}. You said you had more to do, or an agent before you did. What you reported the round before:\n{}\n",
+                node.last.trim()
+            ));
+            if round >= MAX_ROUNDS {
+                input.push_str("\nNo round follows this one: finish your part now.\n");
+            }
+        }
         let earlier: Vec<&Node> = self
             .links
             .iter()
@@ -709,7 +721,7 @@ impl Organization {
         // Role files that wait for the user's yes before writing would
         // otherwise end on a question nobody reads until the run is over.
         input.push_str(
-            "\nThis run is headless: the agents go one after another and nobody reads your questions until the last one is done. The user's task is their approval for the work it asks of you, files, commits and pull requests included, so do that work now rather than asking whether you may. Where the task leaves a choice open, decide, act on it and say what you chose. Put anything only the user can settle under a heading \"For the user\" at the end of your report, and do not stop for it.\n\nDo your part of the task only. End with a short report of what you did and decided, for the agents after you.",
+            "\nThis run is headless: the agents go one after another and nobody reads your questions until the last one is done. The user's task is their approval for the work it asks of you, files, commits and pull requests included, so do that work now rather than asking whether you may. Where the task leaves a choice open, decide, act on it and say what you chose. Put anything only the user can settle under a heading \"For the user\" at the end of your report, and do not stop for it.\n\nDo your part of the task only. End with a short report of what you did and decided, for the agents after you, and then a last line: STATUS: DONE when your part is finished, or STATUS: MORE when you or the agents after you can do more of it once the others have reported. The agents that say MORE run again with the new reports, together with the agents after them. What only the user can settle is not MORE.",
         );
         input
     }
@@ -874,6 +886,34 @@ const CCGS_CHART: &[(&str, &str, &[&str])] = &[
 /// A program, its arguments and its environment.
 type Invocation = (String, Vec<String>, Vec<(String, String)>);
 
+/// How many times a run may go through its agents. ponytail: fixed; make
+/// it a setting if three rounds are too few or cost too much.
+const MAX_ROUNDS: u32 = 3;
+
+/// Whether an agent's last status line says it has more to do. Markdown,
+/// spaces and what follows the word are let go: `**Status:** MORE (QA)`
+/// is MORE, and so is one with a "For the user" part after it. A quoted
+/// line (`> STATUS: MORE`) is another agent's, and an answer with no
+/// status line counts as done.
+fn says_more(output: &str) -> bool {
+    output
+        .lines()
+        .rev()
+        .filter_map(|line| {
+            let bare: String = line.chars().filter(|c| !"*`_".contains(*c)).collect();
+            let bare = bare.trim_start_matches(|c: char| c.is_whitespace() || "#-".contains(c));
+            let status = bare.get(..7)?;
+            status
+                .eq_ignore_ascii_case("STATUS:")
+                .then(|| bare[7..].trim_start().to_string())
+        })
+        .next()
+        .is_some_and(|word| {
+            let word: String = word.chars().take_while(char::is_ascii_alphabetic).collect();
+            word.eq_ignore_ascii_case("MORE")
+        })
+}
+
 /// A task going through the organization, one agent at a time. ponytail:
 /// agents on separate branches could run at once; run them in parallel if
 /// waiting on them gets slow.
@@ -888,6 +928,8 @@ struct Run {
     /// `order`.
     invocations: Vec<Invocation>,
     next: usize,
+    /// Which time through the agents this is, from 1.
+    round: u32,
     process: Option<CliProcess>,
     /// Where each agent's CLI writes its final answer, when it can, by its
     /// place in `order`. Codex logs the run, prompt included, on stderr.
@@ -908,6 +950,11 @@ pub struct Paused {
     files: Vec<PathBuf>,
     /// Each agent that was done: its id, answer and thoughts.
     done: Vec<(u32, String, String)>,
+    /// The round it was in; 0 in files from before rounds, which is 1.
+    round: u32,
+    /// What each agent of this round past the first answered the round
+    /// before, those done in it too.
+    last: Vec<(u32, String)>,
     /// The chat it answers in, and that chat's messages.
     chat: u64,
     messages: Vec<Message>,
@@ -1058,11 +1105,20 @@ impl OrgPanel {
             .filter(|node| node.state == NodeState::Done)
             .map(|node| (node.id, node.output.clone(), node.thoughts.clone()))
             .collect();
+        let last = run
+            .order
+            .iter()
+            .filter_map(|&id| self.org.node(id))
+            .filter(|node| !node.last.is_empty())
+            .map(|node| (node.id, node.last.clone()))
+            .collect();
         Some(Paused {
             organization: run.organization.clone(),
             task: run.task.clone(),
             files: run.files.clone(),
             done,
+            round: run.round,
+            last,
             chat: run.chat,
             messages: chat.to_vec(),
         })
@@ -1269,16 +1325,27 @@ impl OrgPanel {
         let access = settings.project(directory);
         let mut invocations = Vec::new();
         let mut answers = Vec::new();
+        // Done ones too: a later round can run them again.
         for &id in &order {
-            if run.done.iter().any(|done| done.0 == id) {
-                invocations.push(Invocation::default());
-                answers.push(None);
-                continue;
-            }
             let node = self.org.node(id).expect("ordered nodes exist");
-            let route = agents
-                .route(node.provider, settings.access(node.provider))
-                .map_err(|error| format!("{} ({}): {error}", node.name, node.provider.label()))?;
+            let route = match agents.route(node.provider, settings.access(node.provider)) {
+                Ok(route) => route,
+                // A done one only runs again in a later round, which then
+                // fails to start it and pauses with the reason.
+                Err(error) if run.done.iter().any(|done| done.0 == id) => {
+                    let why = format!("{} ({}): {error}", node.name, node.provider.label());
+                    invocations.push((String::new(), vec![why], Vec::new()));
+                    answers.push(None);
+                    continue;
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "{} ({}): {error}",
+                        node.name,
+                        node.provider.label()
+                    ));
+                }
+            };
             let (program, mut args, env) =
                 agent::invocation(node.provider, &route, &node.model, files, &access);
             args.extend(node.effort.args(node.provider));
@@ -1304,6 +1371,12 @@ impl OrgPanel {
             node.output.clear();
             node.thoughts.clear();
             node.state = NodeState::Waiting;
+            node.last = run
+                .last
+                .iter()
+                .find(|last| last.0 == node.id)
+                .map(|last| last.1.clone())
+                .unwrap_or_default();
             if let Some((_, output, thoughts)) = run.done.iter().find(|done| done.0 == node.id) {
                 node.output.clone_from(output);
                 node.thoughts.clone_from(thoughts);
@@ -1320,6 +1393,7 @@ impl OrgPanel {
             order,
             invocations,
             next: 0,
+            round: run.round.max(1),
             process: None,
             answers,
             stopped: false,
@@ -1359,7 +1433,7 @@ impl OrgPanel {
             }
             let id = run.order.get(run.next).copied();
             if let Some(id) = id {
-                let input = self.org.input(id, &run.task);
+                let input = self.org.input(id, &run.task, run.round);
                 let (program, args, env) = &run.invocations[run.next];
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
                 let env: Vec<(&str, &str)> = env
@@ -1372,14 +1446,21 @@ impl OrgPanel {
                     speaker: Some((node.name.clone(), [color.r(), color.g(), color.b()])),
                     ..Default::default()
                 });
-                match CliProcess::start(&run.directory, program, &args, &env, ctx) {
+                let started = if program.is_empty() {
+                    // Its CLI could not be reached; the reason is the one arg.
+                    Err(args.concat())
+                } else {
+                    CliProcess::start(&run.directory, program, &args, &env, ctx)
+                        .map_err(|error| format!("Could not start {program}: {error}"))
+                };
+                match started {
                     Ok(mut process) => {
                         process.send_all(input);
                         node.state = NodeState::Running;
                         run.process = Some(process);
                     }
                     Err(error) => {
-                        node.output = format!("Could not start {program}: {error}");
+                        node.output = error;
                         node.state = NodeState::Failed;
                         show(node, chat);
                         return self.finish(chat);
@@ -1387,6 +1468,10 @@ impl OrgPanel {
                 }
                 // Closing the editor now kills the agent; it runs again.
                 self.record(chat);
+            } else if self.next_round(chat) {
+                self.record(chat);
+                ctx.request_repaint();
+                return None;
             } else {
                 return self.finish(chat);
             }
@@ -1404,7 +1489,7 @@ impl OrgPanel {
                 Output::Line(line) => node.take(&line),
                 Output::Exit(code) => {
                     run.process = None;
-                    let answer = run.answers[run.next].take();
+                    let answer = run.answers[run.next].clone();
                     let text = answer
                         .as_ref()
                         .and_then(|file| fs::read_to_string(file).ok());
@@ -1442,6 +1527,58 @@ impl OrgPanel {
             self.record(chat);
         }
         None
+    }
+
+    /// Goes through the agents again, unless the last round is over: those
+    /// that said they have more to do, and the agents after them, which
+    /// take their new answers. False when none said so.
+    fn next_round(&mut self, chat: &mut Vec<Message>) -> bool {
+        let Some(run) = &mut self.run else {
+            return false;
+        };
+        let mut again: Vec<u32> = run
+            .order
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.org
+                    .node(id)
+                    .is_some_and(|node| says_more(&node.output))
+            })
+            .collect();
+        if again.is_empty() || run.round >= MAX_ROUNDS {
+            return false;
+        }
+        // In run order, so one pass reaches every agent after them.
+        for &id in &run.order {
+            if !again.contains(&id)
+                && self
+                    .org
+                    .links
+                    .iter()
+                    .any(|&(from, to)| to == id && again.contains(&from))
+            {
+                again.push(id);
+            }
+        }
+        run.round += 1;
+        run.next = 0;
+        for &id in &again {
+            let node = self.org.node_mut(id).expect("ordered nodes exist");
+            node.last = std::mem::take(&mut node.output);
+            node.thoughts.clear();
+            node.state = NodeState::Waiting;
+        }
+        // Said by the organization, not the chat's own agent.
+        chat.push(Message {
+            speaker: Some((run.organization.clone(), [0x8A; 3])),
+            text: t("Round {} of {}: {} agents go again.")
+                .replacen("{}", &run.round.to_string(), 1)
+                .replacen("{}", &MAX_ROUNDS.to_string(), 1)
+                .replacen("{}", &again.len().to_string(), 1),
+            ..Default::default()
+        });
+        true
     }
 
     /// Ends the run. One with agents left stays paused, in the project too.
@@ -2232,14 +2369,14 @@ mod tests {
         let (mut org, [design, code, _]) = studio();
         org.link(design, code);
         org.node_mut(design).unwrap().output = "Jumping costs stamina.".into();
-        let input = org.input(code, "Add a jump.");
+        let input = org.input(code, "Add a jump.", 1);
         assert!(input.starts_with("You are Gameplay Programmer"));
         assert!(input.contains("Implements designed mechanics"));
         assert!(input.contains("Add a jump."));
         assert!(input.contains("## Game Designer\nJumping costs stamina."));
         assert!(input.contains("rather than asking whether you may"));
         assert!(
-            !org.input(design, "Add a jump.")
+            !org.input(design, "Add a jump.", 1)
                 .contains("before you reported")
         );
     }
@@ -2395,6 +2532,7 @@ mod tests {
             order: vec![design, code, test],
             invocations: vec![design_run, echo.clone(), fail],
             next: 0,
+            round: 1,
             process: None,
             answers: vec![Some(answer.clone()), None, None],
             stopped: false,
@@ -2483,6 +2621,143 @@ mod tests {
     }
 
     #[test]
+    fn runs_again_who_says_more_and_who_comes_after_up_to_the_last_round() {
+        for more in [
+            "Planned.\r\n\r\n**STATUS: MORE**\r\n",
+            "**Status:** MORE",
+            "- STATUS:  **more** (waiting on QA).",
+            "`STATUS:MORE`\n---",
+            "STATUS: MORE\n\n## For the user\nPick a font.",
+        ] {
+            assert!(says_more(more), "{more:?}");
+        }
+        for done in [
+            "Planned.\nSTATUS: DONE",
+            "STATUS: MORE\nfixed it after all\nSTATUS: DONE",
+            "End with STATUS: DONE or STATUS: MORE.",
+            "The designer said:\n> STATUS: MORE",
+            "Status: Moreover, all done.",
+            "",
+        ] {
+            assert!(!says_more(done), "{done:?}");
+        }
+
+        let (mut org, [design, code, test]) = studio();
+        org.link(design, code);
+        let besfa = std::env::temp_dir().join(format!("besfa-org-rounds-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&besfa);
+        let dir = besfa.join("organizations");
+        let mut panel = OrgPanel::new(dir.clone());
+        panel.org = org;
+        panel.unsaved = true;
+        panel.save().unwrap();
+        // The designer always has more; the programmer prints what it was
+        // sent less its status lines, so it never says MORE itself and runs
+        // again only for coming after the designer; the tester, linked to
+        // no one, is done.
+        let more = (
+            "cmd".into(),
+            vec!["/c".into(), "echo Planned.& echo STATUS: MORE".into()],
+            vec![],
+        );
+        let echo = (
+            "findstr".into(),
+            vec!["/v".into(), "/c:STATUS:".into()],
+            vec![],
+        );
+        let done = (
+            "cmd".into(),
+            vec!["/c".into(), "echo Tested.".into()],
+            vec![],
+        );
+        let invocations = vec![more, echo, done];
+        panel.run = Some(Run {
+            organization: "Organization".into(),
+            task: "Add a jump.".into(),
+            files: Vec::new(),
+            chat: 3,
+            order: vec![design, code, test],
+            invocations: invocations.clone(),
+            next: 0,
+            round: 1,
+            process: None,
+            answers: vec![None, None, None],
+            stopped: false,
+            directory: ".".into(),
+            watched: ("none".into(), None),
+        });
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut chat: Vec<Message> = Vec::new();
+        let poll = |panel: &mut OrgPanel,
+                    chat: &mut Vec<Message>,
+                    until: &dyn Fn(&OrgPanel, &[Message]) -> bool| {
+            let mut finished = None;
+            while finished.is_none() && !until(panel, chat) && std::time::Instant::now() < deadline
+            {
+                finished = panel.poll(&ctx, chat);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            finished
+        };
+        // Stopped while the designer works in round 2, it pauses in round 2.
+        poll(&mut panel, &mut chat, &|panel, _| {
+            panel
+                .run
+                .as_ref()
+                .is_some_and(|run| run.round == 2 && run.process.is_some())
+        });
+        panel.stop();
+        assert_eq!(poll(&mut panel, &mut chat, &|_, _| false), Some(false));
+        let paused = panel.paused().unwrap().clone();
+        assert_eq!(paused.round, 2);
+        let last: Vec<u32> = paused.last.iter().map(|last| last.0).collect();
+        assert_eq!(last, [design, code], "the tester is not running again");
+        let agents = Agents::fixed([agent::Cli::LoggedIn; 3], &[]);
+        panel
+            .resume(
+                &AgentSettings::default(),
+                &agents,
+                Path::new("."),
+                "none".into(),
+            )
+            .unwrap();
+        panel.run.as_mut().unwrap().invocations = invocations;
+        assert_eq!(panel.run.as_ref().unwrap().round, 2);
+        assert_eq!(poll(&mut panel, &mut chat, &|_, _| false), Some(false));
+
+        let mut said: Vec<&str> = chat
+            .iter()
+            .map(|message| message.speaker.as_ref().unwrap().0.as_str())
+            .collect();
+        // The designer says it twice if Stop came before it was done.
+        said.dedup();
+        assert_eq!(
+            said,
+            [
+                "Game Designer",
+                "Gameplay Programmer",
+                "Qa Tester",
+                "Organization",
+                "Game Designer",
+                "Gameplay Programmer",
+                "Organization",
+                "Game Designer",
+                "Gameplay Programmer",
+            ],
+            "round 3 is the last"
+        );
+        assert!(chat[3].text.contains("2 of 3"));
+        let code = &panel.org.node(code).unwrap().output;
+        assert!(code.contains("This is round 3 of at most 3."));
+        assert!(code.contains("No round follows this one"));
+        assert!(code.contains("## Game Designer\nPlanned."));
+        assert!(!says_more(code), "it ran again only for coming after");
+        assert!(panel.paused().is_none());
+        fs::remove_dir_all(&besfa).unwrap();
+    }
+
+    #[test]
     fn reads_what_claude_says_on_the_way_and_its_answer() {
         assert_eq!(
             streamed(
@@ -2525,6 +2800,7 @@ mod tests {
             order: vec![design, code],
             invocations: vec![echo(), echo()],
             next: 1,
+            round: 1,
             process: None,
             answers: vec![None, None],
             stopped: false,

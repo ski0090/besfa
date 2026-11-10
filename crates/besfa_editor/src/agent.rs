@@ -254,6 +254,9 @@ pub struct ProjectAccess {
     pub servers: BTreeSet<String>,
     /// Whether it may run git and gh, to commit, push and open pull requests.
     pub github: bool,
+    /// Commands it may run, one per line, as Claude's Bash rules take them:
+    /// `cargo *` is cargo with any arguments.
+    pub commands: String,
 }
 
 impl Default for ProjectAccess {
@@ -263,6 +266,7 @@ impl Default for ProjectAccess {
         Self {
             servers: BTreeSet::from(["besfa".to_string()]),
             github: false,
+            commands: String::new(),
         }
     }
 }
@@ -293,6 +297,20 @@ impl ProjectAccess {
         if self.github {
             rules.extend(["Bash(git *)".into(), "Bash(gh *)".into()]);
         }
+        rules.extend(
+            self.commands
+                .lines()
+                .map(str::trim)
+                .filter(|command| !command.is_empty())
+                // One copied from a Claude settings file is a rule already.
+                .map(|command| {
+                    let command = command
+                        .strip_prefix("Bash(")
+                        .and_then(|rest| rest.strip_suffix(')'))
+                        .unwrap_or(command);
+                    format!("Bash({command})")
+                }),
+        );
         rules
     }
 }
@@ -667,6 +685,18 @@ pub fn settings_tab(
                 _ => panels::MUTED,
             };
             ui.label(RichText::new(gh).color(color).small());
+        });
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.strong(t("Commands"));
+            ui.add(
+                egui::TextEdit::multiline(&mut access.commands)
+                    .code_editor()
+                    .hint_text("cargo *")
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY),
+            );
+            note(ui, t("Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. An agent playing a CCGS role runs them only if its role file lists Bash."));
         });
         ui.group(|ui| {
             ui.set_width(ui.available_width());
@@ -1503,14 +1533,24 @@ mod tests {
         let mut access = ProjectAccess {
             servers: ["besfa", "my.server"].map(String::from).into(),
             github: true,
+            commands: " cargo *\r\n\npwsh -File tools/drive.ps1 *\nBash(just *)\n".into(),
         };
         assert_eq!(
             allowed(&access),
-            ["mcp__besfa", "mcp__my_server", "Bash(git *)", "Bash(gh *)"]
+            [
+                "mcp__besfa",
+                "mcp__my_server",
+                "Bash(git *)",
+                "Bash(gh *)",
+                "Bash(cargo *)",
+                "Bash(pwsh -File tools/drive.ps1 *)",
+                "Bash(just *)"
+            ]
         );
 
         access.servers.clear();
         access.github = false;
+        access.commands.clear();
         assert!(allowed(&access).is_empty(), "no flag at all");
 
         // Codex and Gemini get none of it.
@@ -1631,7 +1671,7 @@ mod tests {
         ];
         let none = ProjectAccess {
             servers: Default::default(),
-            github: false,
+            ..Default::default()
         };
         let (_, args, _) = invocation(Provider::Claude, &Route::Cli, "", &files, &none);
         assert_eq!(args[5..], ["--add-dir", r"C:\My Art"]);

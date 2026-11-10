@@ -461,6 +461,11 @@ fn korean(en: &str) -> Option<&'static str> {
         "Quality" => "품질",
         "Operations" => "운영",
         "The links make a loop." => "링크가 순환합니다.",
+        "Commands" => "명령",
+        "Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. An agent playing a CCGS role runs them only if its role file lists Bash." => {
+            "Claude가 묻지 않고 실행할 명령입니다. 채팅과 조직 실행 모두에 적용되고, 한 줄에 하나씩 적으며 *는 어떤 인자든 뜻합니다. 에이전트가 일을 끝내려면 cargo *처럼 게임을 빌드하고 테스트하는 명령이 필요합니다. CCGS 역할을 맡은 에이전트는 역할 파일에 Bash가 있을 때만 실행합니다."
+        }
+        "Round {} of {}: {} agents go again." => "라운드 {}/{}: 에이전트 {}개가 다시 돕니다.",
         "Roles" => "역할",
         "Claude Code Game Studios' agents. Click one to add it." => {
             "Claude Code Game Studios의 에이전트입니다. 클릭하면 추가됩니다."
