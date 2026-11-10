@@ -467,6 +467,7 @@ fn korean(en: &str) -> Option<&'static str> {
         }
         "The agent asks to use {}:" => "에이전트가 {} 사용을 허용해 달라고 합니다:",
         "Allow" => "허용",
+        "Allowed in the chat; not in .mcp.json" => "채팅에서 허용함, .mcp.json에는 없음",
         "Always allow" => "항상 허용",
         "Deny" => "거부",
         "Saved in Settings > Agent Settings for this project." => {

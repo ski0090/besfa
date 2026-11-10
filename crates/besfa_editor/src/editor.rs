@@ -1900,8 +1900,8 @@ impl Editor {
         });
         let busy = self.agent_panel.running() || self.organization.running();
         if self.agent_panel.asking() > asking {
-            // The Agent tab may be behind another one.
-            self.log("An agent waits for your permission in the Agent tab.");
+            // The Agent window may be closed or on another tab.
+            self.log("An agent waits for your permission in the Agent window's Chat tab.");
         }
         self.answer_asks();
         if !busy {
@@ -1937,6 +1937,9 @@ impl Editor {
                 self.organization.send(&line);
             }
             if allow && always {
+                if let Some(rule) = ask.allowed() {
+                    self.organization.allow(&rule);
+                }
                 self.agent.allow(&self.project.file(""), &ask);
                 if let Err(error) = self.agent.write(&AgentSettings::file()) {
                     self.log(format!("Could not save the agent settings: {error}"));

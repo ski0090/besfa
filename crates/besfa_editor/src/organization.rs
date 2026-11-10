@@ -1408,7 +1408,6 @@ impl OrgPanel {
         Ok(())
     }
 
-    /// Stops the agent at work, and keeps the next one from starting.
     /// Sends `line` to the running agent.
     pub fn send(&mut self, line: &str) {
         if let Some(process) = self.run.as_mut().and_then(|run| run.process.as_mut()) {
@@ -1416,6 +1415,26 @@ impl OrgPanel {
         }
     }
 
+    /// Lets the Claude agents still to start in this run use what `rule`,
+    /// one of Claude's allow rules, allows. They were set up when the run
+    /// began, before the user allowed it.
+    pub fn allow(&mut self, rule: &str) {
+        let Some(run) = &mut self.run else {
+            return;
+        };
+        for (program, args, _) in &mut run.invocations {
+            if program != Provider::Claude.command() {
+                continue;
+            }
+            // The list takes every value up to the next flag.
+            match args.iter().position(|arg| arg == "--allowedTools") {
+                Some(at) => args.insert(at + 1, rule.into()),
+                None => args.extend(["--allowedTools".into(), rule.into()]),
+            }
+        }
+    }
+
+    /// Stops the agent at work, and keeps the next one from starting.
     pub fn stop(&mut self) {
         if let Some(run) = &mut self.run {
             run.stopped = true;
@@ -1516,6 +1535,8 @@ impl OrgPanel {
                 },
                 Output::Exit(code) => {
                     run.process = None;
+                    // Nobody is left to take the answers.
+                    asks.clear();
                     let answer = run.answers[run.next].clone();
                     let text = answer
                         .as_ref()
@@ -2845,6 +2866,57 @@ mod tests {
         assert_eq!(panel.org.node(code).unwrap().state, NodeState::Idle);
         assert!(panel.paused().is_some());
         fs::remove_dir_all(&besfa).unwrap();
+    }
+
+    #[test]
+    fn lets_the_agents_still_to_start_use_what_the_user_allowed() {
+        let (org, [design, code, _]) = studio();
+        let mut panel = OrgPanel::new(std::env::temp_dir().join("besfa-org-allow/organizations"));
+        panel.org = org;
+        let claude = |args: &[&str]| -> Invocation {
+            let args = args.iter().map(|arg| arg.to_string()).collect();
+            ("claude".into(), args, vec![])
+        };
+        panel.run = Some(Run {
+            organization: "Organization".into(),
+            task: "Add a jump.".into(),
+            files: Vec::new(),
+            chat: 1,
+            order: vec![design, code],
+            invocations: vec![
+                claude(&["-p", "--allowedTools", "mcp__besfa", "--model", "opus"]),
+                claude(&["-p", "--agent", "qa"]),
+                ("codex".into(), vec!["exec".into()], vec![]),
+                (String::new(), vec!["Gemini: log in first".into()], vec![]),
+            ],
+            next: 1,
+            round: 1,
+            process: None,
+            answers: vec![None, None],
+            stopped: false,
+            directory: ".".into(),
+            watched: ("none".into(), None),
+        });
+        panel.allow("Bash(cargo *)");
+        let run = panel.run.take().unwrap();
+        let args: Vec<Vec<String>> = run.invocations.iter().map(|i| i.1.clone()).collect();
+        assert_eq!(
+            args[0],
+            [
+                "-p",
+                "--allowedTools",
+                "Bash(cargo *)",
+                "mcp__besfa",
+                "--model",
+                "opus"
+            ]
+        );
+        assert_eq!(
+            args[1],
+            ["-p", "--agent", "qa", "--allowedTools", "Bash(cargo *)"]
+        );
+        assert_eq!(args[2], ["exec"]);
+        assert_eq!(args[3], ["Gemini: log in first"]);
     }
 
     #[test]

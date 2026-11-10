@@ -55,7 +55,7 @@ impl Provider {
         }
     }
 
-    fn command(self) -> &'static str {
+    pub fn command(self) -> &'static str {
         match self {
             Provider::Claude => "claude",
             Provider::OpenAi => "codex",
@@ -411,6 +411,14 @@ impl Ask {
             format!("{}({content})", self.tool)
         };
         Some(Rule::Command(line, content))
+    }
+
+    /// Claude's allow rule for what "Always allow" saves, if anything.
+    pub fn allowed(&self) -> Option<String> {
+        match self.rule()? {
+            Rule::Command(_, content) => Some(format!("{}({content})", self.tool)),
+            Rule::Server(server) => Some(format!("mcp__{server}")),
+        }
     }
 
     /// What "Always allow" saves, as the button shows it, if anything.
@@ -881,6 +889,7 @@ pub fn settings_tab(
                 });
             });
             note(ui, t("The servers in the project's .mcp.json. Claude may call the tools of those checked."));
+            let mut listed = Vec::new();
             match mcp_servers(&file) {
                 Err(error) => {
                     ui.colored_label(
@@ -891,6 +900,7 @@ pub fn settings_tab(
                 Ok(servers) if servers.is_empty() => note(ui, t("It lists no servers.")),
                 Ok(servers) => {
                     for (name, start) in servers {
+                        listed.push(name.clone());
                         let mut on = access.servers.contains(&name);
                         ui.horizontal(|ui| {
                             if ui.checkbox(&mut on, &name).changed() {
@@ -907,6 +917,25 @@ pub fn settings_tab(
                         });
                     }
                 }
+            }
+            // Ones Always allow in the chat saved from elsewhere, as a
+            // server of the user's own Claude settings, stay visible to
+            // take back.
+            let others: Vec<String> = access
+                .servers
+                .iter()
+                .filter(|server| !listed.contains(server))
+                .cloned()
+                .collect();
+            for name in others {
+                let mut on = true;
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut on, &name).changed() {
+                        access.servers.remove(&name);
+                    }
+                    let why = t("Allowed in the chat; not in .mcp.json");
+                    ui.label(RichText::new(why).color(panels::MUTED).small());
+                });
             }
             note(ui, t("Codex and Gemini do not read .mcp.json. An Organization agent playing a CCGS role uses only the tools its role file lists."));
         });
@@ -1311,12 +1340,15 @@ impl AgentPanel {
                         self.asks.push(ask);
                     } else if !self.streamed {
                         self.reply(&line);
-                    } else if let Some(message) = self.chat.messages.last_mut() {
+                    } else {
                         if ended(&line)
                             && let Some(run) = &mut self.run
                         {
                             run.close();
                         }
+                        let Some(message) = self.chat.messages.last_mut() else {
+                            continue;
+                        };
                         let (text, thoughts) = (&mut message.text, &mut message.thoughts);
                         organization::take(organization::streamed(&line), text, thoughts);
                     }
@@ -2010,8 +2042,11 @@ mod tests {
 
         let shell = Ask::read(&ask_line("PowerShell", r#"{"command":"cargo test"}"#)).unwrap();
         assert_eq!(shell.saves().as_deref(), Some("PowerShell(cargo *)"));
+        assert_eq!(ask.allowed().as_deref(), Some("Bash(cargo *)"));
+        assert_eq!(shell.allowed().as_deref(), Some("PowerShell(cargo *)"));
         let tool = Ask::read(&ask_line("mcp__my_server__run", r#"{"x":1}"#)).unwrap();
         assert_eq!(tool.saves().as_deref(), Some("my_server MCP"));
+        assert_eq!(tool.allowed().as_deref(), Some("mcp__my_server"));
         assert_eq!(tool.what(), r#"{"x":1}"#);
         let fetch = Ask::read(&ask_line("WebFetch", r#"{"url":"https://a.b"}"#)).unwrap();
         assert_eq!(fetch.saves(), None, "only once");
@@ -2266,6 +2301,20 @@ thoughts {:?}",
         harness.run();
         let access = harness.state().0.project(&dir);
         assert!(access.github);
+        assert_eq!(access.servers, ["github".to_string()].into());
+
+        // One allowed in the chat that .mcp.json lacks can be taken back.
+        let other = Ask::read(&ask_line("mcp__plugin_x__send", "{}")).unwrap();
+        harness.state_mut().0.allow(&dir, &other);
+        harness.run();
+        assert!(
+            harness
+                .query_by_label("Allowed in the chat; not in .mcp.json")
+                .is_some()
+        );
+        harness.get_by_label("plugin_x").click();
+        harness.run();
+        let access = harness.state().0.project(&dir);
         assert_eq!(access.servers, ["github".to_string()].into());
         let _ = fs::remove_dir_all(&dir);
     }
