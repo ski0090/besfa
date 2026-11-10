@@ -430,6 +430,12 @@ fn korean(en: &str) -> Option<&'static str> {
         "Let Claude commit, push and open pull requests" => {
             "Claude가 커밋하고 푸시하고 풀 리퀘스트를 열게 하기"
         }
+        "Organization runs review and merge their pull requests" => {
+            "조직 실행이 연 풀 리퀘스트를 리뷰하고 머지하게 하기"
+        }
+        "An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass. GitHub does not let you approve your own pull request, so a branch rule that requires approvals keeps them open. A project rule or agent note that says never to merge can still stop them." => {
+            "풀 리퀘스트를 연 에이전트가 변경 내용을 리뷰하고, 잘못된 곳을 고치고, 검사가 통과하면 머지합니다. GitHub에서는 자기 풀 리퀘스트를 승인할 수 없으므로 승인을 요구하는 브랜치 규칙이 있으면 열린 채로 남습니다. 프로젝트 규칙이나 에이전트 메모에 머지하지 말라고 적혀 있으면 여전히 멈출 수 있습니다."
+        }
         "It then runs git and gh without asking, and gh reaches every repository your GitHub login can. Deny rules in the project's .claude/settings.json still win, but only over commands they match as written, so block force pushes with branch protection on GitHub." => {
             "그러면 Claude가 git과 gh를 묻지 않고 실행하고, gh는 GitHub 로그인으로 접근할 수 있는 모든 저장소를 다룹니다. 프로젝트 .claude/settings.json의 거부 규칙은 여전히 우선하지만 적힌 그대로 맞는 명령에만 적용되므로, 강제 푸시는 GitHub의 브랜치 보호로 막으세요."
         }

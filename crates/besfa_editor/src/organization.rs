@@ -685,7 +685,8 @@ impl Organization {
 
     /// What goes to `id`'s CLI in `round`: its role, the task, what it
     /// answered the round before, and what the agents linked into it did.
-    fn input(&self, id: u32, task: &str, round: u32) -> String {
+    /// With `merge` it also reviews and merges the pull requests it opens.
+    fn input(&self, id: u32, task: &str, round: u32, merge: bool) -> String {
         let Some(node) = self.node(id) else {
             return task.into();
         };
@@ -723,6 +724,14 @@ impl Organization {
         input.push_str(
             "\nThis run is headless: the agents go one after another and nobody reads your questions until the last one is done. The user's task is their approval for the work it asks of you, files, commits and pull requests included, so do that work now rather than asking whether you may. Where the task leaves a choice open, decide, act on it and say what you chose. Put anything only the user can settle under a heading \"For the user\" at the end of your report, and do not stop for it.\n\nDo your part of the task only. End with a short report of what you did and decided, for the agents after you, and then a last line: STATUS: DONE when your part is finished, or STATUS: MORE when you or the agents after you can do more of it once the others have reported. The agents that say MORE run again with the new reports, together with the agents after them. What only the user can settle is not MORE.",
         );
+        // Agents later in the order see only reports, so whoever opens a
+        // pull request is the one who sees it through. ponytail: a reviewer
+        // agent of its own if self-review proves too thin.
+        if merge {
+            input.push_str(
+                "\n\nThe user also lets this run merge its own pull requests, which is their approval for merging even where the project says to ask first. Before you finish, see each pull request you opened through: review its whole diff (`gh pr diff`) as a reviewer who did not write it would, through a fresh subagent if you can start one, fix and push what must change, and review again until nothing must. Once its checks pass, merge it with `gh pr merge` the way the project merges, oldest first where one is based on another, and say in your report what you merged. GitHub does not let you approve your own pull request, so do not try. One you cannot get right, or that GitHub will not let you merge, stays open: say why under \"For the user\".",
+            );
+        }
         input
     }
 
@@ -938,6 +947,8 @@ struct Run {
     directory: PathBuf,
     /// A file the run may change, and when it was changed before the run.
     watched: (PathBuf, Option<SystemTime>),
+    /// Whether its agents review and merge the pull requests they open.
+    merge: bool,
 }
 
 /// A run that stopped before its last agent was done, kept in the project
@@ -1402,6 +1413,7 @@ impl OrgPanel {
             stopped: false,
             directory: directory.into(),
             watched: (watch.clone(), modified(&watch)),
+            merge: access.github && access.merge,
         });
         Ok(())
     }
@@ -1436,7 +1448,7 @@ impl OrgPanel {
             }
             let id = run.order.get(run.next).copied();
             if let Some(id) = id {
-                let input = self.org.input(id, &run.task, run.round);
+                let input = self.org.input(id, &run.task, run.round, run.merge);
                 let (program, args, env) = &run.invocations[run.next];
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
                 let env: Vec<(&str, &str)> = env
@@ -2372,16 +2384,18 @@ mod tests {
         let (mut org, [design, code, _]) = studio();
         org.link(design, code);
         org.node_mut(design).unwrap().output = "Jumping costs stamina.".into();
-        let input = org.input(code, "Add a jump.", 1);
+        let input = org.input(code, "Add a jump.", 1, false);
         assert!(input.starts_with("You are Gameplay Programmer"));
         assert!(input.contains("Implements designed mechanics"));
         assert!(input.contains("Add a jump."));
         assert!(input.contains("## Game Designer\nJumping costs stamina."));
         assert!(input.contains("rather than asking whether you may"));
+        assert!(!input.contains("gh pr merge"));
         assert!(
-            !org.input(design, "Add a jump.", 1)
+            !org.input(design, "Add a jump.", 1, false)
                 .contains("before you reported")
         );
+        assert!(org.input(code, "Add a jump.", 1, true).contains("gh pr merge"));
     }
 
     #[test]
@@ -2541,6 +2555,7 @@ mod tests {
             stopped: false,
             directory: ".".into(),
             watched: ("none".into(), None),
+            merge: false,
         });
         let ctx = egui::Context::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -2688,6 +2703,7 @@ mod tests {
             stopped: false,
             directory: ".".into(),
             watched: ("none".into(), None),
+            merge: false,
         });
         let ctx = egui::Context::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -2809,6 +2825,7 @@ mod tests {
             stopped: false,
             directory: ".".into(),
             watched: ("none".into(), None),
+            merge: false,
         });
         panel.stop();
         assert_eq!(

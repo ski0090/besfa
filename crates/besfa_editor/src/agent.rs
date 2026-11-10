@@ -254,6 +254,9 @@ pub struct ProjectAccess {
     pub servers: BTreeSet<String>,
     /// Whether it may run git and gh, to commit, push and open pull requests.
     pub github: bool,
+    /// Whether Organization runs review and merge the pull requests they
+    /// open, with `github` on. Only their prompt changes: `gh *` allows it.
+    pub merge: bool,
     /// Commands it may run, one per line, as Claude's Bash rules take them:
     /// `cargo *` is cargo with any arguments.
     pub commands: String,
@@ -266,6 +269,7 @@ impl Default for ProjectAccess {
         Self {
             servers: BTreeSet::from(["besfa".to_string()]),
             github: false,
+            merge: false,
             commands: String::new(),
         }
     }
@@ -672,6 +676,13 @@ pub fn settings_tab(
                 t("Let Claude commit, push and open pull requests"),
             );
             note(ui, t("It then runs git and gh without asking, and gh reaches every repository your GitHub login can. Deny rules in the project's .claude/settings.json still win, but only over commands they match as written, so block force pushes with branch protection on GitHub."));
+            ui.add_enabled_ui(access.github, |ui| {
+                ui.checkbox(
+                    &mut access.merge,
+                    t("Organization runs review and merge their pull requests"),
+                );
+            });
+            note(ui, t("An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass. GitHub does not let you approve your own pull request, so a branch rule that requires approvals keeps them open. A project rule or agent note that says never to merge can still stop them."));
             let gh = match agents.gh {
                 Cli::Checking => t("Checking `{}`.").replace("{}", "gh"),
                 Cli::Missing => t("`{}` is not installed.").replace("{}", "gh"),
@@ -1670,6 +1681,7 @@ mod tests {
         let mut access = ProjectAccess {
             servers: ["besfa", "my.server"].map(String::from).into(),
             github: true,
+            merge: false,
             commands: " cargo *\r\n\npwsh -File tools/drive.ps1 *\nBash(just *)\n".into(),
         };
         assert_eq!(
@@ -1855,8 +1867,13 @@ mod tests {
         harness.get_by_label("github").click();
         harness.get_by_label("besfa").click();
         harness.run();
+        harness
+            .get_by_label("Organization runs review and merge their pull requests")
+            .click();
+        harness.run();
         let access = harness.state().0.project(&dir);
         assert!(access.github);
+        assert!(access.merge);
         assert_eq!(access.servers, ["github".to_string()].into());
         let _ = fs::remove_dir_all(&dir);
     }
