@@ -1009,6 +1009,8 @@ pub struct OrgPanel {
     paused: Option<Paused>,
     /// Why the last link or name was refused.
     refused: Option<&'static str>,
+    /// Laid-out code blocks and the like of the last result's Markdown.
+    markdown: egui_commonmark::CommonMarkCache,
 }
 
 impl OrgPanel {
@@ -1058,6 +1060,7 @@ impl OrgPanel {
             run: None,
             paused,
             refused: None,
+            markdown: Default::default(),
         }
     }
 
@@ -2242,7 +2245,7 @@ impl OrgPanel {
                     if node.output.is_empty() {
                         ui.colored_label(panels::MUTED, t("Nothing yet."));
                     } else {
-                        ui.label(RichText::new(&node.output).color(panels::TEXT));
+                        agent::reply(ui, &mut self.markdown, &node.output);
                     }
                 });
         } else if let Some(id) = self.group

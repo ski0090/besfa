@@ -1436,12 +1436,36 @@ impl AgentPanel {
     }
 }
 
-/// An agent's reply, rendered from its Markdown.
-fn reply(ui: &mut Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &str) {
+/// An agent's reply, rendered from its Markdown. A clicked link opens in the
+/// browser, and only a web link: the reply is the agent's, and `open_url`
+/// hands anything else, like a `file:` link to a program, to `explorer` as is.
+pub fn reply(ui: &mut Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &str) {
+    let start = ui.ctx().output(|output| output.commands.len());
     ui.scope(|ui| {
-        ui.visuals_mut().override_text_color = Some(panels::TEXT);
+        // Body text only: links keep the hyperlink color.
+        ui.visuals_mut().widgets.noninteractive.fg_stroke.color = panels::TEXT;
         egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
     });
+    // eframe is built without its own link opening, so the clicks are ours.
+    let mut links = Vec::new();
+    ui.ctx().output_mut(|output| {
+        let mut added = output.commands.split_off(start);
+        added.retain(|command| match command {
+            egui::OutputCommand::OpenUrl(open) => {
+                links.push(open.url.clone());
+                false
+            }
+            _ => true,
+        });
+        output.commands.extend(added);
+    });
+    for link in links.iter().filter(|link| is_web(link)) {
+        crate::project::open_url(link);
+    }
+}
+
+fn is_web(link: &str) -> bool {
+    link.starts_with("https://") || link.starts_with("http://")
 }
 
 pub fn model_label(model: &str) -> &str {
@@ -2137,5 +2161,21 @@ mod tests {
         assert!(harness.query_by_label("src/player.rs").is_some());
         assert!(harness.query_by_label_contains("**").is_none());
         assert!(harness.query_by_label_contains("##").is_none());
+    }
+
+    #[test]
+    fn opens_only_web_links_from_a_reply() {
+        let mut harness = tab(None);
+        let panel = &mut harness.state_mut().panel;
+        panel.say("Run [this](file:///C:/Windows/notepad.exe).");
+        harness.run();
+        harness.get_by_label("this").click();
+        harness.step();
+        // Taken by the reply, which opens nothing but web links.
+        let open =
+            |command: &egui::OutputCommand| matches!(command, egui::OutputCommand::OpenUrl(_));
+        assert!(!harness.output().platform_output.commands.iter().any(open));
+        assert!(is_web("https://github.com/ski0090/besfa/pull/43"));
+        assert!(!is_web("file:///C:/Windows/notepad.exe"));
     }
 }
