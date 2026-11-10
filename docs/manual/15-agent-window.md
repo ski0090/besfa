@@ -70,7 +70,7 @@
 Claude가 허용되지 않은 명령이나 도구를 쓰려 하면, 채팅 아래에 **The agent asks to use Bash:**(에이전트가 Bash 사용을 허용해 달라고 합니다) 같은 카드가 나오고 실행할 명령이 함께 보입니다. Claude는 답을 받을 때까지 기다립니다. 조직 실행의 에이전트가 물어도 같은 카드가 나옵니다. 물을 때마다 Log에도 **An agent waits for your permission in the Agent window's Chat tab.** 이 남으니, Agent 창을 닫았거나 다른 탭을 보고 있었다면 Chat 탭을 여세요.
 
 - **Allow**(허용): 이번 한 번만 실행하게 합니다.
-- **Always allow: cargo \***(항상 허용): 명령의 첫 단어에 `*`를 붙인 규칙을 이 프로젝트의 [Commands](#settings-탭)에 저장하고 실행하게 합니다. 이번 작업에서도(조직 실행이면 뒤에 나오는 에이전트도), 다음 작업부터도 그 명령은 묻지 않습니다. PowerShell 도구의 명령은 `PowerShell(cargo *)`처럼, MCP 도구는 그 서버 전체를 **MCP servers**에 체크해 저장합니다. `.mcp.json`에 없는 서버(사용자 설정의 서버 등)는 **MCP servers** 아래에 *Allowed in the chat; not in .mcp.json* 표시와 함께 나오고, 체크를 풀면 허용이 빠집니다. 웹 가져오기처럼 명령이 아닌 도구는 한 번씩만 허용할 수 있습니다.
+- **Always allow: cargo \***(항상 허용): 명령의 첫 단어에 `*`를 붙인 규칙을 이 프로젝트의 [Commands](#settings-탭)에 저장하고 실행하게 합니다. 이번 작업에서도(조직 실행이면 뒤에 나오는 에이전트도), 다음 작업부터도 그 명령은 묻지 않습니다. PowerShell 도구의 명령은 `PowerShell(cargo *)`처럼, MCP 도구는 그 서버 전체를 **MCP servers**에 체크해 저장합니다. `.mcp.json`에 없는 서버(사용자 설정의 서버 등)는 **MCP servers** 아래에 *Not in .mcp.json*(.mcp.json에 없음) 표시와 함께 나오고, 체크를 풀면 허용이 빠집니다. 웹 가져오기처럼 명령이 아닌 도구는 한 번씩만 허용할 수 있습니다.
 - **Deny**(거부): 실행하지 않고, Claude에게 사용자가 거부했다고 알립니다.
 
 `cd game && cargo build`처럼 앞에 다른 명령이 붙으면 첫 단어인 `cd *`가 저장되니, 그럴 때는 **Allow**로 한 번만 허용하고 원하는 규칙을 Settings 탭에 직접 적으세요. **Stop**을 누르거나 작업이 끝나면 남은 카드는 사라집니다.

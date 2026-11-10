@@ -918,9 +918,9 @@ pub fn settings_tab(
                     }
                 }
             }
-            // Ones Always allow in the chat saved from elsewhere, as a
-            // server of the user's own Claude settings, stay visible to
-            // take back.
+            // Ones .mcp.json lacks, as a server of the user's own Claude
+            // settings that Always allow in the chat saved, stay visible
+            // to take back.
             let others: Vec<String> = access
                 .servers
                 .iter()
@@ -933,7 +933,7 @@ pub fn settings_tab(
                     if ui.checkbox(&mut on, &name).changed() {
                         access.servers.remove(&name);
                     }
-                    let why = t("Allowed in the chat; not in .mcp.json");
+                    let why = t("Not in .mcp.json");
                     ui.label(RichText::new(why).color(panels::MUTED).small());
                 });
             }
@@ -2307,11 +2307,7 @@ thoughts {:?}",
         let other = Ask::read(&ask_line("mcp__plugin_x__send", "{}")).unwrap();
         harness.state_mut().0.allow(&dir, &other);
         harness.run();
-        assert!(
-            harness
-                .query_by_label("Allowed in the chat; not in .mcp.json")
-                .is_some()
-        );
+        assert!(harness.query_by_label("Not in .mcp.json").is_some());
         harness.get_by_label("plugin_x").click();
         harness.run();
         let access = harness.state().0.project(&dir);
