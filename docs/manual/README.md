@@ -1,6 +1,6 @@
 # Besfa 사용 설명서
 
-Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰는 Windows용 에디터입니다. 에디터 안에서 내 게임을 실제로 실행해 두고, 그 화면을 보면서 물건을 놓고, 값을 고치고, 지형을 빚고, 씬을 저장합니다.
+Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰는 Windows용 에디터입니다. 에디터 안에서 내 게임을 실제로 실행해 두고, 그 화면을 보면서 물건을 놓고, 값을 고치고, 지형을 빚고, 씬을 저장합니다. 코드나 씬 작업을 Claude, ChatGPT, Gemini 같은 AI 에이전트에게 말로 맡길 수도 있습니다.
 
 이 설명서는 에디터를 처음 쓰는 사람을 위해 주제별로 나눠 썼습니다. 처음이라면 아래 "처음 읽는 순서"를 따라가세요. 필요한 기능만 찾는다면 [주제별 목차](#주제별-목차)나 [화면에서 바로 찾기](#화면에서-바로-찾기)를 쓰세요.
 
@@ -33,9 +33,10 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 | [애니메이션 상태 기계](11-animation.md) | 모델의 클립을 상태와 전이로 묶어 틀기 |
 | [하늘](12-sky.md) | 씬의 하늘색, 해와 달, 큐브맵 |
 | [업데이트](13-updating.md) | 에디터·CLI 업데이트, 게임의 플러그인 업데이트 |
-| [Claude Code로 다루기](14-claude-code.md) | 에디터 없이 Claude Code가 씬을 고치게 하기 |
-| [단축키](15-shortcuts.md) | 모든 단축키 한눈에 보기 |
-| [문제 해결](16-troubleshooting.md) | Play가 눌리지 않을 때, 경고 아이콘, 자주 보는 메시지 |
+| [Claude Code로 다루기](14-claude-code.md) | 에디터 없이 Claude Code가 씬을 고치게 하기, Claude Code Game Studios, `besfa build`·`test`·`run` |
+| [Agent 창](15-agent-window.md) | 에디터 안에서 에이전트와 채팅하기, 에이전트 연결, 여러 에이전트로 조직 짜기 |
+| [단축키](16-shortcuts.md) | 모든 단축키 한눈에 보기 |
+| [문제 해결](17-troubleshooting.md) | Play가 눌리지 않을 때, 경고 아이콘, 자주 보는 메시지 |
 
 ## 화면에서 바로 찾기
 
@@ -45,6 +46,8 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 | --- | --- |
 | 허브의 **New project**, **Open folder**, **Recent projects** | [설치와 시작](01-getting-started.md#프로젝트-허브) |
 | 메뉴 **File**, **Edit**, **Window**, **Settings**, **Help** | [화면 둘러보기 - 메뉴](02-screen-layout.md#1-메뉴) |
+| 메뉴 **Settings > Language** | [화면 둘러보기 - 메뉴](02-screen-layout.md#1-메뉴) |
+| 메뉴 **Settings > Agent Settings...** | [Agent 창 - 에이전트 연결](15-agent-window.md#에이전트-연결) |
 | 툴바 **▶ Play**, **⏹ Stop** | [실행과 저장](05-play-and-save.md#play와-stop) |
 | 툴바 **Standalone** 목록 | [서버와 클라이언트로 실행](05-play-and-save.md#서버와-클라이언트로-실행) |
 | 툴바 이동·회전·크기 버튼, **#**, **Grid** | [씬 뷰 조작 - 핸들](04-scene-view.md#이동회전크기-핸들) |
@@ -55,6 +58,7 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 | 오른쪽 **Inspector** 탭 | [엔티티와 Inspector](03-hierarchy-inspector.md#inspector-패널) |
 | 오른쪽 **Scatter** 탭 | [흩뿌리기](10-scatter.md) |
 | **Window > Animation State Machine** 창 | [애니메이션 상태 기계](11-animation.md) |
+| **Window > Agent Window**로 뜨는 **Besfa Agent** 창의 **Chat**, **Organization**, **Settings** 탭 | [Agent 창](15-agent-window.md) |
 | 아래 **Log** 탭 | [화면 둘러보기 - 아래 패널](02-screen-layout.md#6-아래-패널-log와-assets) |
 | 아래 **Assets** 탭 | [에셋과 프리팹](07-assets-prefabs.md) |
 | 뷰포트 위 **Scene** \| **모델 이름** 탭 | [모델 미리보기](08-model-preview.md) |
@@ -81,6 +85,9 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 | 플러그인 | 게임에 들어가 에디터와 대화하는 Rust 크레이트 `besfa_editor_plugin`. 프로젝트마다 버전이 고정됩니다. |
 | Bevy 미리 빌드 | 에디터가 시작할 때 Bevy를 미리 컴파일해 두는 작업. 덕분에 게임은 내 코드만 컴파일합니다. |
 | 데디케이트 서버 | 화면 없이 게임 규칙만 돌리는 멀티플레이 서버. 플레이어(클라이언트)들이 여기에 접속합니다. |
+| 에이전트 | 말로 받은 일을 프로젝트 파일을 고쳐 해내는 AI(Claude, ChatGPT, Gemini). 각 회사의 명령줄 도구로 실행됩니다. |
+| 조직 | 역할을 나눈 에이전트 여러 명을 이어 만든 팀. 한 에이전트의 결과를 다음 에이전트가 받아 이어 갑니다. |
+| MCP | 에이전트가 프로그램의 기능을 도구로 부르는 규약. `besfa mcp`가 게임을 띄우고 씬을 고치는 도구를 줍니다. |
 
 ## 개발자 문서
 

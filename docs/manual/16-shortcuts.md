@@ -38,6 +38,23 @@
 | 핸들을 끌면서 **Ctrl** | 맞춤(Snap) | [맞춤](04-scene-view.md#맞춤snap) |
 | 붓으로 칠하면서 **Shift** | 지형: Raise와 Lower 바꾸기 / 흩뿌리기: 지우기 | [지형](09-terrain.md), [흩뿌리기](10-scatter.md) |
 
+## 실행
+
+| 키·마우스 | 하는 일 | 설명 |
+| --- | --- | --- |
+| **Ctrl** + **⏹ Stop** 클릭 | 게임을 끄고 다시 실행하기 | [실행과 저장](05-play-and-save.md#play와-stop) |
+
+## 다른 창
+
+| 창 | 키·마우스 | 하는 일 |
+| --- | --- | --- |
+| Animation State Machine | **Ctrl+S**, **Ctrl+Z**, **Ctrl+Y**, **Ctrl+Shift+Z** | 에디터 본 창과 같이 저장, 되돌리기, 다시 하기. [애니메이션 상태 기계](11-animation.md) |
+| Agent 창 **Chat** | **Ctrl+Enter** | 입력란의 글 보내기. [Agent 창](15-agent-window.md#chat-탭) |
+| Agent 창 **Organization** | **Shift**+클릭 | 에이전트 여러 개 고르기 |
+| | 핀 오른쪽 클릭 | 연결 끊기 |
+| | 휠 | 확대·축소. [Organization 탭](15-agent-window.md#organization-탭) |
+| Assets 탭 | 모델 두 번 클릭 | 모델 미리보기 열기. [모델 미리보기](08-model-preview.md) |
+
 ## 모델 미리보기
 
 | 키·마우스 | 하는 일 |
@@ -47,8 +64,8 @@
 | 휠 | 다가가기, 멀어지기 |
 | **F** | 모델에 다시 맞추기 |
 
-미리보기 중에는 Delete, Ctrl+D, 되돌리기, W·E·R이 쉽니다. [모델 미리보기](08-model-preview.md)
+미리보기 중에는 Ctrl+S, Ctrl+9, F만 듣고 Delete, Ctrl+D, 되돌리기, W·E·R, End, Esc는 쉽니다. 되돌리기는 Animation State Machine 창에서는 미리보기 중에도 됩니다. [모델 미리보기](08-model-preview.md)
 
 ---
 
-다음: [문제 해결](16-troubleshooting.md)
+다음: [문제 해결](17-troubleshooting.md)
