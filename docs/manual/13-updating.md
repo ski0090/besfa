@@ -32,13 +32,13 @@ cargo run -p besfa_editor
 ```
 
 - CLI 재설치(`cargo install`)는 `crates/besfa_cli`가 바뀌었을 때 필요합니다. 잘 모르겠으면 매번 해도 됩니다.
-- 에디터는 시작할 때 [Bevy 미리 빌드](01-getting-started.md#bevy-미리-빌드)를 GitHub에 있는 최신 플러그인으로 맞춥니다. 툴바에 진행 상황이 나오고, **Bevy is ready**가 뜰 때까지 **Play**는 기다립니다.
+- 에디터는 시작할 때 [Bevy 미리 빌드](01-getting-started.md#bevy-미리-빌드)를 GitHub에 있는 최신 플러그인으로 맞춥니다. 허브 아래에 진행 상황이 나옵니다. 끝나기 전에 프로젝트를 열면 미리 빌드는 멈췄다가 허브로 돌아오면 이어집니다.
 
 ## 게임의 플러그인 업데이트
 
 게임 프로젝트는 플러그인을 GitHub에서 받고, `Cargo.lock`이 그중 한 커밋에 고정합니다. 그래서 직접 업데이트하기 전까지는 같은 플러그인을 계속 씁니다.
 
-에디터 툴바 오른쪽, **Bevy is ready** 왼쪽에 따로 떨어진 아이콘이 이 프로젝트의 플러그인 커밋을 Bevy 미리 빌드의 커밋과 비교해 보여 줍니다(**Bevy is ready** 글자 바로 앞의 ✔는 미리 빌드 상태라 다른 것입니다).
+에디터 툴바 오른쪽, **Bevy is ready** 왼쪽에 따로 떨어진 아이콘이 이 프로젝트의 플러그인 커밋을 Bevy 미리 빌드의 커밋과 비교해 보여 줍니다(**Bevy is ready** 글자 바로 앞의 ✔는 미리 빌드 상태라 다른 것입니다. 미리 빌드가 끝나기 전에 프로젝트를 열었다면 그 자리에 `Bevy prebuild paused for the project` ⏸가 나옵니다).
 
 | 아이콘 | 뜻 |
 | --- | --- |
@@ -64,11 +64,13 @@ cargo update -p besfa_editor_plugin
 
 알아 둘 것:
 
-- 아직 `Cargo.lock`이 없거나 플러그인을 로컬 경로로 쓰는 프로젝트에는 아이콘이 나오지 않습니다.
+- 아직 `Cargo.lock`이 없거나 플러그인을 로컬 경로로 쓰는 프로젝트에는 아이콘이 나오지 않습니다. 단, 게임이 에디터와 다른 프로토콜로 말하면 이런 프로젝트에도 ⚠가 나옵니다.
+- `cargo update`가 실패하면 **Log**에 `cargo update exited with code N.`이 나오고, 게임은 그대로 다시 시작합니다.
 - 아이콘은 "어느 쪽이 더 새것인지"는 구분하지 않고 다른지만 봅니다.
 - 플러그인 변경은 GitHub의 `main`에 올라가야 게임에 반영됩니다. 플러그인을 직접 고쳐 올렸다면, 에디터를 다시 시작해 미리 빌드를 새 커밋으로 올린 뒤 각 프로젝트에서 아이콘을 누르세요.
 - 설명서에서 "플러그인이 오래됐다"고 하는 메뉴나 기능이 안 보일 때도 이 아이콘을 누르면 됩니다.
 - [Claude Code](14-claude-code.md)가 쓰는 `besfa mcp`는 CLI를 설치할 때 알던 명령만 받고, 모르는 명령은 거절합니다. 플러그인을 업데이트해 새 명령이 생겼다면 CLI도 다시 설치하세요(`cargo install --path crates/besfa_cli`).
+- 반대로 게임의 플러그인이 그 명령보다 오래됐으면 `besfa mcp`는 `Command N needs protocol X and this game's besfa_editor_plugin speaks Y; …`라며 거절합니다. 이때는 게임에서 `cargo update -p besfa_editor_plugin`을 실행하세요.
 
 ## 릴리스 빌드에는 에디터가 들어가지 않습니다
 

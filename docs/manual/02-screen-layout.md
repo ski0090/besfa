@@ -25,9 +25,9 @@
 | **Edit** | **Undo** (Ctrl+Z), **Redo** (Ctrl+Y) | 되돌리기와 다시 하기. [되돌리기](06-undo.md) |
 | | **Drop to surface** (End) | 고른 물건을 아래 땅으로 내립니다. [씬 뷰 조작](04-scene-view.md#땅에-내려놓기) |
 | **Window** | **Animation State Machine** (체크 상자) | 고른 모델의 애니메이션 상태 기계를 보여 주는 창을 켜고 끕니다. 끄는 것은 창을 닫는 것과 같습니다. [애니메이션 상태 기계](11-animation.md) |
-| | **Agent Window** (체크 상자) | Claude, ChatGPT, Gemini와 대화하는 Agent 창을 켜고 끕니다. 끄는 것은 창을 닫는 것과 같고, 일하던 에이전트는 계속 일합니다. [Claude Code로 다루기](14-claude-code.md) |
-| **Settings** | **Language** | 에디터를 영어로 볼지 한국어로 볼지 고릅니다. |
-| | **Agent Settings...** | 제공자마다 명령줄 도구(CLI)로 연결할지 API 키로 연결할지 고르고, 키를 넣습니다. |
+| | **Agent Window** (체크 상자) | Claude, ChatGPT, Gemini와 대화하는 Agent 창을 켜고 끕니다. 끄는 것은 창을 닫는 것과 같고, 일하던 에이전트는 계속 일합니다. [Agent 창](15-agent-window.md) |
+| **Settings** | **Language** | 에디터를 영어(English)로 볼지 한국어로 볼지 고릅니다. 고른 언어는 다음에 열 때도 유지됩니다. 설명서는 영어 화면의 이름을 씁니다. |
+| | **Agent Settings...** | 제공자마다 명령줄 도구(CLI)로 연결할지 API 키로 연결할지 고르고, 키를 넣습니다. [Agent 창 - 에이전트 연결](15-agent-window.md#에이전트-연결) |
 | **Help** | **Bevy Assets** (Ctrl+9) | 브라우저로 Bevy 커뮤니티 에셋 목록을 엽니다. |
 
 ![Edit 메뉴](../images/menu-edit.png)
@@ -46,9 +46,9 @@
 | **#** (Snap), **Grid** | 핸들을 끌 때 일정한 간격으로 맞출지와 그 간격. [맞춤](04-scene-view.md#맞춤snap) |
 | 나무 모양 아이콘 🌲 (Scatter) | 흩뿌리기 붓을 켭니다. [흩뿌리기](10-scatter.md) |
 | 오른쪽, **Bevy is ready** 왼쪽에 따로 떨어진 ✔ 또는 ⚠ | 게임의 플러그인 버전 상태. 누르면 업데이트합니다. [업데이트](13-updating.md#게임의-플러그인-업데이트) |
-| 맨 오른쪽 끝 **✔ Bevy is ready** | Bevy 미리 빌드 상태. 글자 바로 앞의 ✔는 미리 빌드가 끝났다는 표시이고, 누르는 단추가 아닙니다. [설치와 시작](01-getting-started.md#bevy-미리-빌드) |
+| 맨 오른쪽 끝 **✔ Bevy is ready** | Bevy 미리 빌드 상태. 글자 바로 앞의 ✔는 미리 빌드가 끝났다는 표시이고, 누르는 단추가 아닙니다. 미리 빌드가 끝나기 전에 프로젝트를 열었다면 `Bevy prebuild paused for the project` ⏸가, 실패했다면 빨간 ⚠가 나옵니다. [설치와 시작](01-getting-started.md#bevy-미리-빌드) |
 
-Play 중에는 핸들 버튼과 맞춤 버튼이 꺼집니다.
+Play 중과 [모델 미리보기](08-model-preview.md) 중에는 핸들 버튼과 맞춤 버튼이 꺼집니다. 게임을 띄우는 중에는 Play도 잠시 꺼집니다.
 
 ## 3. Hierarchy 패널
 

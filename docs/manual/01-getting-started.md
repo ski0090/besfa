@@ -18,7 +18,7 @@ Besfa를 설치하고, 에디터를 켜고, 첫 프로젝트를 만들어 여는
 
 - **Windows**. 에디터는 Windows에서만 돌아갑니다(DirectX 12로 그립니다).
 - **Rust**. [rustup.rs](https://rustup.rs/)에서 설치합니다. 설치한 뒤 터미널에서 `cargo --version`이 버전을 출력하면 됩니다.
-- **Visual Studio C++ 빌드 도구와 Windows SDK**. Windows의 Rust는 이것이 있어야 컴파일됩니다. rustup 설치 프로그램이 없으면 설치하라고 안내합니다. Windows SDK가 있으면 게임의 셰이더도 빠르게 컴파일됩니다([게임 화면이 느려요](16-troubleshooting.md#게임-화면이-느려요)).
+- **Visual Studio C++ 빌드 도구와 Windows SDK**. Windows의 Rust는 이것이 있어야 컴파일됩니다. rustup 설치 프로그램이 없으면 설치하라고 안내합니다. Windows SDK가 있으면 게임의 셰이더도 빠르게 컴파일됩니다([게임 화면이 느려요](17-troubleshooting.md#게임-화면이-느려요)).
 - **Git**. 에디터 소스를 받을 때 씁니다.
 
 ## 설치
@@ -69,14 +69,14 @@ cargo run -p besfa_editor
 
 ## Bevy 미리 빌드
 
-에디터는 켜질 때마다 뒤에서 Bevy를 미리 컴파일합니다(**Bevy 미리 빌드**). 미리 빌드해 둔 Bevy를 모든 프로젝트가 같이 쓰므로, 게임을 실행할 때는 내 게임 코드만 컴파일하면 됩니다.
+에디터는 켜질 때마다, 허브에 있는 동안 뒤에서 Bevy를 미리 컴파일합니다(**Bevy 미리 빌드**). 미리 빌드해 둔 Bevy를 모든 프로젝트가 같이 쓰므로, 게임을 실행할 때는 내 게임 코드만 컴파일하면 됩니다.
 
-- 진행 상황은 허브 아래쪽(오른쪽)과 에디터 툴바 오른쪽 끝에 한 줄로 나옵니다. `25% · Compiling bevy …`처럼 진행률(%)과 cargo가 마지막으로 출력한 줄이 보입니다.
-- 끝나면 **Bevy is ready**가 나옵니다. 실패하면 `Bevy prebuild failed (exit N)`(N은 종료 코드)이 나옵니다.
-- 미리 빌드가 끝날 때까지 **Play** 버튼은 눌리지 않고, 열어 둔 프로젝트의 게임도 시작하지 않습니다. 끝나면 저절로 시작합니다.
+- 진행 상황은 허브 아래쪽(오른쪽)에 한 줄로 나옵니다(에디터 툴바 오른쪽 끝에도 같은 줄이 있습니다). `25% · Compiling bevy …`처럼 진행률(%)과 cargo가 마지막으로 출력한 줄이 보입니다.
+- 끝나면 **Bevy is ready**가 나옵니다. 실패하면 `Bevy prebuild failed (exit N): …`(N은 종료 코드, 뒤에는 cargo가 낸 첫 에러 줄)과 빨간 ⚠가 나옵니다.
+- 미리 빌드가 끝나기 전에 프로젝트를 열면 미리 빌드는 멈추고(`Bevy prebuild paused for the project` ⏸), 게임이 바로 빌드를 시작합니다. 이때 게임은 아직 없는 Bevy 부분을 스스로 컴파일하므로 오래 걸릴 수 있습니다. 허브로 돌아가면 미리 빌드가 이어서 돕니다. 처음에는 **Bevy is ready**가 뜰 때까지 허브에서 기다렸다가 프로젝트를 여는 것이 빠릅니다.
 - **처음 한 번은 Bevy 전체를 컴파일하므로 오래 걸립니다**(컴퓨터에 따라 십여 분 이상). 그다음부터는 바뀐 것이 없으면 금방 끝납니다.
 
-미리 빌드한 결과는 `%LOCALAPPDATA%\Besfa` 폴더에 있습니다.
+미리 빌드한 결과는 `%LOCALAPPDATA%\Besfa` 폴더에 있습니다. 미리 빌드가 끝나면 최근 프로젝트들이 더는 쓰지 않는 오래된 빌드 결과를 지워 디스크를 비웁니다(`Removed N stale build units (X MB).`). 최근 목록에 없는 프로젝트는 열 때 지워진 부분을 다시 컴파일할 수 있습니다.
 
 ## 프로젝트 허브
 
@@ -88,6 +88,7 @@ cargo run -p besfa_editor
 - **Open project** 카드의 **🗁 Open folder**: 이미 있는 프로젝트 폴더를 엽니다.
 - **Recent projects**: 최근에 연 프로젝트 목록입니다.
 - 아래쪽 **Bevy Assets** 링크: 기본 브라우저로 Bevy 커뮤니티의 플러그인·에셋 목록(<https://bevy.org/assets/>)을 엽니다. Unity의 Asset Store 같은 곳입니다.
+- 아래쪽 **Settings > Language**: 에디터를 영어(English)로 볼지 한국어로 볼지 고릅니다. 바로 바뀌고, 고른 언어는 `%APPDATA%\Besfa\settings.ron`에 남아 다음에도 그대로입니다. 설명서는 영어 화면의 이름을 씁니다.
 - 오른쪽 아래: [Bevy 미리 빌드](#bevy-미리-빌드) 상태와 에디터 버전.
 
 ## 새 프로젝트 만들기
