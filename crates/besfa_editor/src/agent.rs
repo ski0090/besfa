@@ -859,6 +859,8 @@ pub struct AgentPanel {
     picking: Option<Receiver<Option<Vec<PathBuf>>>>,
     /// A file the run may change, and when it was changed before the run.
     watched: Option<(PathBuf, Option<SystemTime>)>,
+    /// Laid-out code blocks and the like of the replies' Markdown.
+    markdown: egui_commonmark::CommonMarkCache,
 }
 
 impl AgentPanel {
@@ -1227,7 +1229,8 @@ impl AgentPanel {
         }
     }
 
-    fn messages(&self, ui: &mut Ui, busy: bool) {
+    fn messages(&mut self, ui: &mut Ui, busy: bool) {
+        let mut markdown = std::mem::take(&mut self.markdown);
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .stick_to_bottom(true)
@@ -1271,17 +1274,18 @@ impl AgentPanel {
                                     }
                                 });
                                 self.thoughts(ui, index, message);
-                                ui.label(RichText::new(&message.text).color(panels::TEXT));
+                                reply(ui, &mut markdown, &message.text);
                             });
                         });
                     } else if working {
                         ui.spinner();
                     } else {
-                        ui.label(RichText::new(&message.text).color(panels::TEXT));
+                        reply(ui, &mut markdown, &message.text);
                     }
                     ui.add_space(8.0);
                 }
             });
+        self.markdown = markdown;
     }
 
     /// `message`'s thoughts, folded until clicked.
@@ -1430,6 +1434,14 @@ impl AgentPanel {
             });
         send
     }
+}
+
+/// An agent's reply, rendered from its Markdown.
+fn reply(ui: &mut Ui, cache: &mut egui_commonmark::CommonMarkCache, text: &str) {
+    ui.scope(|ui| {
+        ui.visuals_mut().override_text_color = Some(panels::TEXT);
+        egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
+    });
 }
 
 pub fn model_label(model: &str) -> &str {
@@ -2113,5 +2125,17 @@ mod tests {
         // An agent's turn goes into the next prompt under its name.
         let input = harness.state().panel.chat.input("Now a triple jump.");
         assert!(input.contains("Game Designer: A second jump"));
+    }
+
+    #[test]
+    fn shows_a_reply_as_markdown() {
+        let mut harness = tab(None);
+        let panel = &mut harness.state_mut().panel;
+        panel.say("## Done\n\n- Edited **src/player.rs**");
+        harness.run();
+        assert!(harness.query_by_label("Done").is_some());
+        assert!(harness.query_by_label("src/player.rs").is_some());
+        assert!(harness.query_by_label_contains("**").is_none());
+        assert!(harness.query_by_label_contains("##").is_none());
     }
 }
