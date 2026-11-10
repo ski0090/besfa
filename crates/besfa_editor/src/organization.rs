@@ -892,23 +892,26 @@ const MAX_ROUNDS: u32 = 3;
 
 /// Whether an agent's last status line says it has more to do. Markdown,
 /// spaces and what follows the word are let go: `**Status:** MORE (QA)`
-/// is MORE, and so is one with a "For the user" part after it. No status
-/// line counts as done, so a CLI that ignores the ask cannot keep a run
-/// going.
+/// is MORE, and so is one with a "For the user" part after it. A quoted
+/// line (`> STATUS: MORE`) is another agent's, and an answer with no
+/// status line counts as done.
 fn says_more(output: &str) -> bool {
     output
         .lines()
         .rev()
-        .map(|line| {
-            let bare: String = line
-                .chars()
-                .filter(|c| !c.is_whitespace() && !"*`_".contains(*c))
-                .collect();
-            bare.trim_start_matches(['#', '>', '-'])
-                .to_ascii_uppercase()
+        .filter_map(|line| {
+            let bare: String = line.chars().filter(|c| !"*`_".contains(*c)).collect();
+            let bare = bare.trim_start_matches(|c: char| c.is_whitespace() || "#-".contains(c));
+            let status = bare.get(..7)?;
+            status
+                .eq_ignore_ascii_case("STATUS:")
+                .then(|| bare[7..].trim_start().to_string())
         })
-        .find(|line| line.starts_with("STATUS:"))
-        .is_some_and(|line| line.starts_with("STATUS:MORE"))
+        .next()
+        .is_some_and(|word| {
+            let word: String = word.chars().take_while(char::is_ascii_alphabetic).collect();
+            word.eq_ignore_ascii_case("MORE")
+        })
 }
 
 /// A task going through the organization, one agent at a time. ponytail:
@@ -2623,7 +2626,7 @@ mod tests {
             "Planned.\r\n\r\n**STATUS: MORE**\r\n",
             "**Status:** MORE",
             "- STATUS:  **more** (waiting on QA).",
-            "> `STATUS:MORE`\n---",
+            "`STATUS:MORE`\n---",
             "STATUS: MORE\n\n## For the user\nPick a font.",
         ] {
             assert!(says_more(more), "{more:?}");
@@ -2632,6 +2635,8 @@ mod tests {
             "Planned.\nSTATUS: DONE",
             "STATUS: MORE\nfixed it after all\nSTATUS: DONE",
             "End with STATUS: DONE or STATUS: MORE.",
+            "The designer said:\n> STATUS: MORE",
+            "Status: Moreover, all done.",
             "",
         ] {
             assert!(!says_more(done), "{done:?}");
@@ -2647,13 +2652,19 @@ mod tests {
         panel.unsaved = true;
         panel.save().unwrap();
         // The designer always has more; the programmer prints what it was
-        // sent; the tester, linked to no one, is done.
+        // sent less its status lines, so it never says MORE itself and runs
+        // again only for coming after the designer; the tester, linked to
+        // no one, is done.
         let more = (
             "cmd".into(),
             vec!["/c".into(), "echo Planned.& echo STATUS: MORE".into()],
             vec![],
         );
-        let echo = ("findstr".into(), vec!["/r".into(), ".".into()], vec![]);
+        let echo = (
+            "findstr".into(),
+            vec!["/v".into(), "/c:STATUS:".into()],
+            vec![],
+        );
         let done = (
             "cmd".into(),
             vec!["/c".into(), "echo Tested.".into()],
@@ -2741,6 +2752,7 @@ mod tests {
         assert!(code.contains("This is round 3 of at most 3."));
         assert!(code.contains("No round follows this one"));
         assert!(code.contains("## Game Designer\nPlanned."));
+        assert!(!says_more(code), "it ran again only for coming after");
         assert!(panel.paused().is_none());
         fs::remove_dir_all(&besfa).unwrap();
     }
