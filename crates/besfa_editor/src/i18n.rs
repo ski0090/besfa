@@ -461,6 +461,7 @@ fn korean(en: &str) -> Option<&'static str> {
         "Quality" => "품질",
         "Operations" => "운영",
         "The links make a loop." => "링크가 순환합니다.",
+        "Round {} of {}: {} agents go again." => "라운드 {}/{}: 에이전트 {}개가 다시 돕니다.",
         "Roles" => "역할",
         "Claude Code Game Studios' agents. Click one to add it." => {
             "Claude Code Game Studios의 에이전트입니다. 클릭하면 추가됩니다."
