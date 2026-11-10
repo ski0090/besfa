@@ -4,7 +4,7 @@
 
 > 📖 **[User manual](docs/manual/README.md)** (in Korean): installing, creating a project, and every part of the editor, the Agent window included, step by step with screenshots.
 
-Besfa is a desktop editor for the [Bevy](https://bevy.org/) game engine on Windows. Your game runs inside the editor: you look at it in the viewport, place and change things while it is paused, play it, and save the scene back to a file. The editor UI is built with egui and shows in English or Korean, project management is the `besfa` CLI, and both are written in Rust.
+Besfa is a desktop editor for the [Bevy](https://bevy.org/) game engine on Windows. Your game runs inside the editor: you look at it in the viewport, place and change things while it is paused, play it, and save the scene back to a file. The editor UI is built with egui and shows in English or Korean (Settings > Language), project management is the `besfa` CLI, and both are written in Rust.
 
 ![The Besfa editor](docs/images/editor-overview.png)
 
@@ -18,7 +18,7 @@ Besfa is a desktop editor for the [Bevy](https://bevy.org/) game engine on Windo
 - **Animation**: animation state machines over a model's clips.
 - **Multiplayer**: play a dedicated server with clients joined to it.
 - **Agent chat**: Window > Agent Window in the editor's menu bar opens a chat in its own window with Claude, ChatGPT or Gemini, each reached through its own CLI or an API key kept in the Windows Credential Manager. Start new chats, reopen earlier ones from a collapsible history, and attach files to a prompt. The window's Settings tab picks the project's MCP servers Claude may call and whether it may commit, push and open pull requests.
-- **Agent organization**: the Agent window's Organization tab wires agents into a team like a Blueprint graph. Each agent has a role (Claude Code Game Studios' roles come ready to add), its own model and effort, and hands its result to the agents it links to; nodes can be boxed into groups. A project can keep several organizations, each in its own file. Pick one below the models in the Agent chat to send it a task: each agent answers in the chat in link order, with its thoughts and tool calls folded under its name until clicked, and the agents with work left go again with the new reports, up to three rounds. A run that stopped can be continued, even after the editor restarts.
+- **Agent organization**: the Agent window's Organization tab wires agents into a team like a Blueprint graph. Each agent has a role (Claude Code Game Studios' roles come ready to add), its own model and effort, and hands its result to the agents it links to; nodes can be boxed into groups. A project can keep several organizations, each in its own file. Pick one below the models in the Agent chat to send it a task: each agent answers in the chat in link order, with its thoughts and tool calls folded under its name until clicked, and the agents with work left go again with the new reports, for at most three rounds in all. A run that stopped can be continued, even after the editor restarts.
 - **Agents**: `besfa mcp` lets Claude Code run the game without the editor and edit its scene, and `besfa screenshot` saves what the player sees.
 
 ## How it fits together
