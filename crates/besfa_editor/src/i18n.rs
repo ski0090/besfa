@@ -462,8 +462,16 @@ fn korean(en: &str) -> Option<&'static str> {
         "Operations" => "운영",
         "The links make a loop." => "링크가 순환합니다.",
         "Commands" => "명령",
-        "Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. An agent playing a CCGS role runs them only if its role file lists Bash." => {
-            "Claude가 묻지 않고 실행할 명령입니다. 채팅과 조직 실행 모두에 적용되고, 한 줄에 하나씩 적으며 *는 어떤 인자든 뜻합니다. 에이전트가 일을 끝내려면 cargo *처럼 게임을 빌드하고 테스트하는 명령이 필요합니다. CCGS 역할을 맡은 에이전트는 역할 파일에 Bash가 있을 때만 실행합니다."
+        "Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. Claude asks in the chat before running others, and Always allow adds them here. A line like PowerShell(cargo *) is a rule for another of its tools. An agent playing a CCGS role runs them only if its role file lists Bash." => {
+            "Claude가 묻지 않고 실행할 명령입니다. 채팅과 조직 실행 모두에 적용되고, 한 줄에 하나씩 적으며 *는 어떤 인자든 뜻합니다. 에이전트가 일을 끝내려면 cargo *처럼 게임을 빌드하고 테스트하는 명령이 필요합니다. 그 밖의 명령은 Claude가 실행하기 전에 채팅에서 묻고, 항상 허용하면 여기에 더해집니다. PowerShell(cargo *)처럼 적은 줄은 Claude의 다른 도구에 대한 규칙입니다. CCGS 역할을 맡은 에이전트는 역할 파일에 Bash가 있을 때만 실행합니다."
+        }
+        "The agent asks to use {}:" => "에이전트가 {} 사용을 허용해 달라고 합니다:",
+        "Allow" => "허용",
+        "Not in .mcp.json" => ".mcp.json에 없음",
+        "Always allow" => "항상 허용",
+        "Deny" => "거부",
+        "Saved in Settings > Agent Settings for this project." => {
+            "이 프로젝트의 설정 > 에이전트 설정에 저장됩니다."
         }
         "Round {} of {}: {} agents go again." => "라운드 {}/{}: 에이전트 {}개가 다시 돕니다.",
         "Roles" => "역할",
