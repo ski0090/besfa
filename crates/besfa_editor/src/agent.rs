@@ -791,7 +791,8 @@ pub struct Message {
     pub speaker: Option<(String, [u8; 3])>,
 }
 
-#[derive(Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
 struct Chat {
     /// Set once something is sent, so a paused organization run can find
     /// the chat it answers in.
@@ -846,9 +847,11 @@ pub struct AgentPanel {
     continuing: bool,
     run: Option<CliProcess>,
     chat: Chat,
-    /// Earlier chats, newest last. ponytail: kept until the editor closes;
-    /// save them under the project if they should survive a restart.
+    /// Earlier chats, newest last.
     history: Vec<Chat>,
+    /// What the chats looked like when last written, to write again only
+    /// once they change.
+    kept: (usize, u64, usize, usize),
     sidebar_closed: bool,
     /// Files to send with the next prompt, by path.
     attached: Vec<PathBuf>,
@@ -861,6 +864,65 @@ pub struct AgentPanel {
 impl AgentPanel {
     pub fn running(&self) -> bool {
         self.run.is_some()
+    }
+
+    /// Where the chats of `project` are kept: under the user, like the
+    /// agent settings, so they stay out of the project's commits.
+    pub fn chats_file(project: &Path) -> PathBuf {
+        let name: String = project_key(project)
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        AgentSettings::file()
+            .with_file_name("chats")
+            .join(format!("{name}.ron"))
+    }
+
+    /// A panel with the chats `file` keeps, the last one shown.
+    pub fn read(file: &Path) -> Self {
+        let mut panel = Self::default();
+        if let Some((history, chat)) = fs::read_to_string(file)
+            .ok()
+            .and_then(|text| ron::from_str::<(Vec<Chat>, Chat)>(&text).ok())
+        {
+            panel.history = history;
+            panel.chat = chat;
+        }
+        panel.kept = panel.shape();
+        panel
+    }
+
+    /// Enough of the chats to tell they changed: how many there are, which
+    /// one is shown, and how far it has got.
+    fn shape(&self) -> (usize, u64, usize, usize) {
+        let last = self
+            .chat
+            .messages
+            .last()
+            .map_or(0, |message| message.text.len() + message.thoughts.len());
+        (
+            self.history.len(),
+            self.chat.id,
+            self.chat.messages.len(),
+            last,
+        )
+    }
+
+    /// Writes the chats to `file` once they changed, unless an agent is
+    /// still answering: its turn is written when it is done. A paused
+    /// organization run keeps its own chat meanwhile.
+    pub fn keep(&mut self, file: &Path, busy: bool) -> Result<(), String> {
+        let shape = self.shape();
+        if busy || shape == self.kept {
+            return Ok(());
+        }
+        self.kept = shape;
+        if let Some(folder) = file.parent() {
+            fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+        }
+        let text =
+            ron::to_string(&(&self.history, &self.chat)).map_err(|error| error.to_string())?;
+        fs::write(file, text).map_err(|error| error.to_string())
     }
 
     /// A panel with a chat and an earlier one, for the manual's screenshot.
@@ -1044,12 +1106,18 @@ impl AgentPanel {
 
     /// Shows `chat` in place of the current one, which goes to the history.
     /// What was attached or typed for the current one stays behind with it.
+    /// An older copy of `chat`, as a paused run's chat has among the saved
+    /// ones, gives way to it.
     fn show_chat(&mut self, chat: Chat) {
         self.attached.clear();
         self.prompt.clear();
         self.picking = None;
+        let id = chat.id;
+        if id != 0 {
+            self.history.retain(|other| other.id != id);
+        }
         let current = std::mem::replace(&mut self.chat, chat);
-        if !current.messages.is_empty() {
+        if !current.messages.is_empty() && (id == 0 || current.id != id) {
             self.history.push(current);
         }
     }
@@ -1559,6 +1627,48 @@ mod tests {
             let (_, args, _) = invocation(provider, &Route::Cli, "", &[], &access);
             assert!(!args.iter().any(|arg| arg.contains("Bash(")), "{args:?}");
         }
+    }
+
+    #[test]
+    fn keeps_the_chats_for_the_next_time_the_project_opens() {
+        let file = std::env::temp_dir().join(format!("besfa-chats-{}/c.ron", std::process::id()));
+        let _ = fs::remove_dir_all(file.parent().unwrap());
+        let mut panel = AgentPanel::read(&file);
+        assert!(panel.keep(&file, false).is_ok());
+        assert!(!file.exists(), "nothing to keep yet");
+
+        panel.ask("Add a jump.");
+        panel.chat.messages.push(Message::default());
+        panel.keep(&file, true).unwrap();
+        assert!(!file.exists(), "not while the agent answers");
+        panel.reply("Jump added.");
+        panel.keep(&file, false).unwrap();
+        let id = panel.chat_id();
+        panel.new_chat();
+        panel.ask("Make it higher.");
+        panel.keep(&file, false).unwrap();
+
+        let mut back = AgentPanel::read(&file);
+        assert_eq!(back.history.len(), 1);
+        assert_eq!(back.history[0].messages[1].text, "Jump added.");
+        assert_eq!(back.chat.messages[0].text, "Make it higher.");
+
+        // A paused run's copy of a saved chat takes its place, not a twin.
+        let paused = [Message {
+            user: true,
+            text: "Add a jump.".into(),
+            ..Default::default()
+        }];
+        back.restore((id, &paused), &[], "Studio");
+        assert_eq!(back.chat.id, id);
+        assert_eq!(back.history.len(), 1, "{:?}", back.history);
+        assert_eq!(back.history[0].messages[0].text, "Make it higher.");
+        fs::remove_dir_all(file.parent().unwrap()).unwrap();
+
+        assert!(
+            AgentPanel::chats_file(Path::new(r"C:\Games\Dusk\"))
+                .ends_with(r"Besfa\chats\c__games_dusk.ron")
+        );
     }
 
     #[test]
