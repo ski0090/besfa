@@ -867,15 +867,26 @@ impl AgentPanel {
     }
 
     /// Where the chats of `project` are kept: under the user, like the
-    /// agent settings, so they stay out of the project's commits.
+    /// agent settings, so they stay out of the project's commits. The
+    /// folder's name for reading, then a hash of the project's key, FNV-1a
+    /// so it stays the same across Rust versions, which tells `a_b` and
+    /// `a\b` apart.
     pub fn chats_file(project: &Path) -> PathBuf {
-        let name: String = project_key(project)
+        let key = project_key(project);
+        let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+        let folder: String = key
+            .rsplit('\\')
+            .next()
+            .unwrap_or_default()
             .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .filter(|c| c.is_alphanumeric() || "-_".contains(*c))
+            .take(40)
             .collect();
         AgentSettings::file()
             .with_file_name("chats")
-            .join(format!("{name}.ron"))
+            .join(format!("{folder}-{hash:016x}.ron"))
     }
 
     /// A panel with the chats `file` keeps, the last one shown.
@@ -922,7 +933,11 @@ impl AgentPanel {
         }
         let text =
             ron::to_string(&(&self.history, &self.chat)).map_err(|error| error.to_string())?;
-        fs::write(file, text).map_err(|error| error.to_string())
+        // Whole or not at all: a file cut short would read as no chats and
+        // be written over.
+        let part = file.with_extension("ron.part");
+        fs::write(&part, text).map_err(|error| error.to_string())?;
+        fs::rename(&part, file).map_err(|error| error.to_string())
     }
 
     /// A panel with a chat and an earlier one, for the manual's screenshot.
@@ -1039,11 +1054,21 @@ impl AgentPanel {
                 message.text = "Stopped.".into();
             }
         }
-        self.show_chat(Chat {
+        let mut chat = Chat {
             id,
             messages,
             files: files.to_vec(),
-        });
+        };
+        // The saved copy is the newer one if the user went on in that chat
+        // after the run paused; the paused one if the editor closed on it.
+        if let Some(saved) = std::iter::once(&self.chat)
+            .chain(&self.history)
+            .find(|saved| saved.id == id)
+            && saved.messages.len() > chat.messages.len()
+        {
+            chat = saved.clone();
+        }
+        self.show_chat(chat);
         self.organization = Some(organization.into());
     }
 
@@ -1653,21 +1678,41 @@ mod tests {
         assert_eq!(back.history[0].messages[1].text, "Jump added.");
         assert_eq!(back.chat.messages[0].text, "Make it higher.");
 
-        // A paused run's copy of a saved chat takes its place, not a twin.
-        let paused = [Message {
+        // A paused run's chat shows once, the longer copy of it: the saved
+        // one when the user went on after the pause...
+        let user = |text: &str| Message {
             user: true,
-            text: "Add a jump.".into(),
+            text: text.into(),
             ..Default::default()
-        }];
+        };
+        let mut paused = vec![user("Add a jump.")];
+        let mut again = AgentPanel::read(&file);
+        again.restore((id, &paused), &[], "Studio");
+        assert_eq!(again.chat.id, id);
+        assert_eq!(again.chat.messages[1].text, "Jump added.");
+        assert_eq!(again.history.len(), 1, "{:?}", again.history);
+        assert_eq!(again.history[0].messages[0].text, "Make it higher.");
+        assert_eq!(again.organization(), Some("Studio"));
+        // ...the paused one when the editor closed on the run.
+        let agent = Message {
+            speaker: Some(("Game Designer".into(), [0; 3])),
+            ..Default::default()
+        };
+        paused.extend([agent.clone(), agent]);
         back.restore((id, &paused), &[], "Studio");
-        assert_eq!(back.chat.id, id);
+        assert_eq!(back.chat.messages.len(), 3);
+        assert_eq!(back.chat.messages[2].text, "Stopped.");
         assert_eq!(back.history.len(), 1, "{:?}", back.history);
-        assert_eq!(back.history[0].messages[0].text, "Make it higher.");
         fs::remove_dir_all(file.parent().unwrap()).unwrap();
 
+        let name = |path: &str| AgentPanel::chats_file(Path::new(path));
+        assert_eq!(name(r"C:\Games\Dusk\"), name("c:/games/dusk"));
+        assert_ne!(name(r"C:\Games\a_b"), name(r"C:\Games\a\b"));
+        assert_ne!(name(r"C:\Games\a_b"), name(r"C:\Games\a-b"));
+        let dusk = name(r"C:\Games\Dusk").display().to_string();
         assert!(
-            AgentPanel::chats_file(Path::new(r"C:\Games\Dusk\"))
-                .ends_with(r"Besfa\chats\c__games_dusk.ron")
+            dusk.contains(r"Besfa\chats\dusk-") && dusk.ends_with(".ron"),
+            "{dusk}"
         );
     }
 
