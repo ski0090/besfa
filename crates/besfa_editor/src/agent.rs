@@ -858,7 +858,7 @@ pub fn settings_tab(
                     t("Organization runs review and merge their pull requests"),
                 );
             });
-            note(ui, t("An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass. It is told never to push a refused merge through with --admin, but only a branch rule that also applies to administrators enforces that. A rule in the project's CLAUDE.md or .claude/agent-memory that says never to merge can still stop them."));
+            note(ui, t("An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass, or right away without any. It is told never to push a refused merge through with --admin, but only a branch rule that also applies to administrators enforces that. A rule in the project's CLAUDE.md or .claude/agent-memory that says never to merge can still stop them."));
             let gh = match agents.gh {
                 Cli::Checking => t("Checking `{}`.").replace("{}", "gh"),
                 Cli::Missing => t("`{}` is not installed.").replace("{}", "gh"),
