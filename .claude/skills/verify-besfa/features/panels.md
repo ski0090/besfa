@@ -52,8 +52,8 @@ drag starting in the scene just past the panel's edge leaving the edge alone, a
 press in the scene closing an open menu, fly keys sent during a right press
 on the panel leaving the scene view where it was, the panel still answering
 after Stop, the Inspector's name field (focus, typing, the `edited` report,
-copy, letting the keyboard go, a typed value set before a save and before a
-fast click on the scene), and Play, a `screenshot` with `game`, Stop and
+copy, letting the keyboard go, a typed value set before a save, before a
+fast click on the scene and before a handle is dragged), and Play, a `screenshot` with `game`, Stop and
 Save leaving the scene file as the save before Play wrote it.
 
 ## Gotchas

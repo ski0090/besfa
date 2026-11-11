@@ -401,10 +401,9 @@ pub(crate) fn pointer(world: &mut World, event: &PointerEvent) -> bool {
             over
         }
     };
-    // A press on the scene takes the keyboard from a field and closes a
-    // menu the panels left open.
+    // A press on the scene closes a menu the panels left open. It took the
+    // keyboard from a field a frame ago ([`press_waits`]).
     if matches!(event, PointerEvent::Down { .. }) && !taken {
-        unfocus(world);
         let mut contexts = world.query_filtered::<&mut EguiContext, With<PanelsCamera>>();
         if let Ok(mut context) = contexts.single_mut(world) {
             egui::Popup::close_all(context.get_mut());
@@ -483,6 +482,24 @@ pub(crate) fn unfocus(world: &mut World) {
     if had && let Some(mut panels) = world.get_resource_mut::<Panels>() {
         panels.settle = true;
     }
+}
+
+/// Whether `event` is a press on the scene while a field of the panels has
+/// the keyboard. The field lets it go and sets what was typed in it when it
+/// is next drawn; the press is to be handed in again after that.
+pub(crate) fn press_waits(world: &mut World, event: &PointerEvent) -> bool {
+    let PointerEvent::Down { x, y, .. } = *event else {
+        return false;
+    };
+    // With a button already down, the press is whose that one is.
+    let held = world
+        .get_resource::<Panels>()
+        .and_then(|panels| panels.held);
+    if held.unwrap_or_else(|| covers(world, Vec2::new(x, y))) {
+        return false;
+    }
+    unfocus(world);
+    settling(world)
 }
 
 /// Whether a field lost the keyboard since this was last asked, and has

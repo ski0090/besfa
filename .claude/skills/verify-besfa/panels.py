@@ -76,13 +76,16 @@ def key(name, **modifiers):
         panel_input(input="key", key=name, pressed=pressed, modifiers=modifiers)
 
 
-def focus_a_field():
-    """Clicks down the Inspector until a field takes the keyboard."""
-    for y in range(30, 140, 6):
+def focus_a_field(top=30, bottom=140):
+    """Clicks down the Inspector from `top` until a field there takes the keyboard."""
+    for y in range(top, bottom, 6):
         click(1100, y)
         focus = kinds(reports(0.7, lambda r: r.get("type") == "panel_focus"), "panel_focus")[-1:]
-        if focus and focus[0].get("keyboard"):
+        if focus and focus[0].get("keyboard") and (focus[0].get("ime") or [0, top])[1] >= top:
             return focus[0]
+        if focus and focus[0].get("keyboard"):
+            send({"command": "focus_lost"})
+            reports(0.4)
     return None
 
 
@@ -90,6 +93,17 @@ def check(name, ok, detail=""):
     print(("ok   " if ok else "FAIL ") + name + (f"  {detail}" if detail else ""), flush=True)
     if not ok:
         failures.append(name)
+
+
+def near(a, b):
+    """Whether two component values are the same but for a float's rounding."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(near(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(near(x, y) for x, y in zip(a, b))
+    if isinstance(a, float) and isinstance(b, float):
+        return abs(a - b) < 1e-5
+    return a == b
 
 
 def kinds(seen, kind):
@@ -208,6 +222,24 @@ try:
           and kinds(seen, "selected")[-1:] == [{"type": "selected", "id": None}], str(edited) + str(kinds(seen, "selected")))
     click(590, 360)
     reports(1.0)
+
+    # And before a handle is dragged: the drag starts from the value typed
+    # in a field of the Transform, below the name, and not entered.
+    focus_a_field(top=60, bottom=300)
+    key("A", ctrl=True)
+    panel_input(input="text", text="7")
+    press("move", 590, 300)
+    press("down", 590, 300)
+    for y in range(292, 259, -8):
+        press("move", 590, y)
+    press("up", 590, 260)
+    edited = [r for r in kinds(reports(2.5), "edited") if r["id"] == cube]
+    check("a handle dragged right after typing starts from the typed value",
+          len(edited) == 2 and not near(edited[0]["before"], edited[0]["after"]) and near(edited[1]["before"], edited[0]["after"])
+          and not near(edited[1]["after"], edited[1]["before"]), json.dumps([e["after"] for e in edited]))
+    if edited:
+        n = send({"command": "set", "id": cube, "component": edited[0]["component"], "value": edited[0]["before"]}, wait=True)
+        reports(5, lambda r: r.get("type") == "done" and r.get("seq") == n)
 
     # Back to the template's name, so the next run finds the Cube.
     n = send({"command": "set", "id": cube, "component": NAME, "value": "Cube"}, wait=True)

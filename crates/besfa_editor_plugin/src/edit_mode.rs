@@ -162,6 +162,18 @@ fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
                     waiting.push_front(line);
                     return;
                 }
+                // A press on the scene takes the keyboard from a field of
+                // the panels the game draws, which sets what was typed in
+                // it when it is next drawn. The press waits a frame for
+                // that, with all that follows it: a handle it drags starts
+                // from the typed value, and what it picks is picked after
+                // the value is set.
+                if let Command::Pointer(event) = &command
+                    && panels::press_waits(world, event)
+                {
+                    waiting.push_front(line);
+                    return;
+                }
                 pointed |= matches!(command, Command::Pointer(_));
                 let result = run(world, command);
                 if let Some(seq) = seq {
@@ -170,11 +182,10 @@ fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
                         error: result.err(),
                     });
                 }
-                // A field of the panels the game draws just lost the
-                // keyboard, and sets what was typed in it when it is next
-                // drawn. What follows waits a frame for that: a save, so
-                // the file has the value, and the release of a click on the
-                // scene, so the value is set before the selection changes.
+                // The editor's viewport lost the keyboard, and with it a
+                // field of the panels, which sets what was typed in it when
+                // it is next drawn. What follows waits a frame for that: a
+                // save, so the file has the value.
                 if panels::settling(world) {
                     return;
                 }
