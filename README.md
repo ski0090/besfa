@@ -11,7 +11,7 @@ Besfa is a desktop editor for the [Bevy](https://bevy.org/) game engine on Windo
 ## What it does
 
 - **Projects**: a project hub and the `besfa` CLI create Bevy game projects and open existing ones, optionally with [Claude Code Game Studios](https://github.com/ski0090/Claude-Code-Game-Studios) added. Bevy is prebuilt once and shared, so a game compiles only its own code; `besfa build`, `besfa test` and `besfa run` build with the editor's features to reuse that build.
-- **Run in the editor**: the game runs paused in edit mode in the viewport; Play runs it, Stop goes back. Code changes rebuild it.
+- **Run in the editor**: the game runs paused in edit mode in the viewport; Play runs it, Stop goes back. Code changes rebuild it, and the Hierarchy, the Inspector and the scene view come back as they were.
 - **Scene editing**: a hierarchy of the scene's entities, an inspector for their reflected components, a scene view with a camera, move/rotate/scale handles and snapping, undo and redo, saved to the game's scene file.
 - **Assets**: place glTF models and prefabs, see thumbnails, reimport changed models, save and apply prefabs, preview a model on its own with its clips.
 - **World building**: sculpt and paint terrain, grow foliage, scatter props with a brush, set the sky.
@@ -23,7 +23,7 @@ Besfa is a desktop editor for the [Bevy](https://bevy.org/) game engine on Windo
 
 ## How it fits together
 
-The editor and the game are separate processes. The editor starts the game with `besfa_editor_plugin`, which renders into a texture the editor shows and talks to the editor over the game's stdin and stdout. Games depend only on Besfa crates from this repository, and a release build ships `besfa_components` without the editor.
+The editor and the game are separate processes. The editor starts the game with `besfa_editor_plugin`, which renders into a texture the editor shows and talks to the editor over the game's stdin and stdout. The game draws the Hierarchy and the Inspector into that texture itself, straight from its own world, and the editor passes the mouse and the keyboard on to them; the menus, the toolbar, the log, the assets and the agents are the editor's own. When the game restarts, the editor hands it back how those panels and the scene view looked. Games depend only on Besfa crates from this repository, and a release build ships `besfa_components` without the editor.
 
 | Crate | Role |
 | --- | --- |
