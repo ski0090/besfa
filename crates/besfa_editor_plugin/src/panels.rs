@@ -410,9 +410,10 @@ fn put_back(world: &mut World) {
     if let Ok(mut context) = contexts.single_mut(world) {
         kept.put(context.get_mut());
     }
-    let mut cameras = world.query::<&mut EditorCamera>();
-    if let (Some(pose), Ok(mut camera)) = (kept.camera, cameras.single_mut(world)) {
-        set_pose(&mut camera, pose);
+    // As the pose of a camera that is gone: `follow_camera` puts the one
+    // there is at it, or the one Stop makes when this game started playing.
+    if let Some(pose) = kept.camera {
+        world.resource_mut::<Panels>().camera = Some((Entity::PLACEHOLDER, pose));
     }
     world.resource_mut::<Inspecting>().panel.set_look(Look {
         details: kept.details,
@@ -1332,6 +1333,25 @@ mod tests {
             world.resource::<Panels>().camera,
             Some((second, pose(&camera)))
         );
+
+        // A game that started playing never had a camera. Handed the last
+        // game's, it tells that pose on, and Stop's camera goes there.
+        let mut world = panels(200.0, 300.0);
+        world.init_resource::<Inspecting>();
+        let kept = Kept {
+            camera: Some(pose(&camera)),
+            ..default()
+        };
+        restore(&mut world, &serde_json::to_string(&kept).unwrap()).unwrap();
+        put_back(&mut world);
+        world.run_system_cached(follow_camera).unwrap();
+        assert_eq!(
+            world.resource::<Panels>().camera.map(|(_, pose)| pose),
+            kept.camera
+        );
+        let stopped = world.spawn(fresh).id();
+        world.run_system_cached(follow_camera).unwrap();
+        assert_eq!(world.get::<EditorCamera>(stopped), Some(&camera));
     }
 
     #[test]

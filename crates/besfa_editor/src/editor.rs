@@ -2587,10 +2587,15 @@ mod tests {
         assert_eq!(editor.panel_focus, (false, None));
         assert_eq!(editor.panel_layout, (0.0, 0.0));
 
-        // What the panels look like is kept for the next game.
+        // What the panels look like is kept for the next game process,
+        // which is handed it at its first hello only: after Stop the same
+        // game says hello again and has kept it itself.
         let state = Report::PanelState { state: "{}".into() };
         editor.on_report(state, &ctx);
         assert_eq!(editor.panel_state.as_deref(), Some("{}"));
+        editor.new_game = true;
+        editor.on_report(Report::Hello { version: VERSION }, &ctx);
+        assert!(!editor.new_game);
         drop(editor);
         let _ = fs::remove_dir_all(dir);
     }
