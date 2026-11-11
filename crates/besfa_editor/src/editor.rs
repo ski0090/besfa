@@ -213,6 +213,9 @@ pub struct Editor {
     /// Whether a field of a panel the game draws has the keyboard, and where
     /// its text cursor is in the viewport's pixels.
     panel_focus: (bool, Option<[f32; 4]>),
+    /// The viewport's pixels the panels the game draws cover from its left
+    /// and its right edge; the scene view is between them.
+    panel_layout: (f32, f32),
     assets: AssetBrowser,
     bottom_tab: BottomTab,
     /// The model preview's tab, while it is open.
@@ -294,6 +297,7 @@ impl Editor {
             terrain: TerrainTools::default(),
             can_sculpt: false,
             panel_focus: (false, None),
+            panel_layout: (0.0, 0.0),
             bottom_tab: BottomTab::Log,
             preview: None,
             previewing: false,
@@ -446,6 +450,10 @@ impl Editor {
                     self.log(format!("Process exited with code {code}."));
                     self.game = None;
                     self.playing = false;
+                    // A field of its panels had the keyboard: nobody takes
+                    // the keys now, and the editor's shortcuts are back.
+                    self.panel_focus = (false, None);
+                    self.panel_layout = (0.0, 0.0);
                     // A net Play ends with the game in the viewport.
                     self.stop_net();
                 }
@@ -808,6 +816,7 @@ impl Editor {
                     self.send(Command::Language { korean });
                 }
                 self.panel_focus = (false, None);
+                self.panel_layout = (0.0, 0.0);
                 if let Some(warning) = protocol_warning(version) {
                     self.log(warning);
                 }
@@ -820,6 +829,7 @@ impl Editor {
             Report::Panel(action) => self.on_panel(action),
             Report::PanelFocus { keyboard, ime } => self.panel_focus = (keyboard, ime),
             Report::Copied { text } => ctx.copy_text(text),
+            Report::PanelLayout { left, right } => self.panel_layout = (left, right),
             // What one drop moved, undone in one step.
             Report::Moved { moves } if !moves.is_empty() => {
                 let set = |id, value| Self::set_command(id, TRANSFORM, value);
@@ -864,6 +874,9 @@ impl Editor {
                 redo: vec![Command::Restore { id }],
                 seq: None,
             }),
+            // One still on its way when Stop started the scene over names an
+            // entity that is gone: nothing to undo, nothing unsaved.
+            Report::Edited { id, .. } if !self.scene.entities.iter().any(|e| e.id == id) => {}
             Report::Edited {
                 id,
                 component,
@@ -1244,10 +1257,13 @@ impl Editor {
         );
     }
 
-    /// The middle of the viewport, in its pixels, where new things go.
+    /// The middle of the scene view, in the viewport's pixels, where new
+    /// things go: between the panels the game draws over its sides.
     fn viewport_middle(&self) -> Option<[f32; 2]> {
         let viewport = self.viewport.as_ref()?;
-        Some([viewport.width as f32 / 2.0, viewport.height as f32 / 2.0])
+        let (left, right) = self.panel_layout;
+        let (from, to) = (left, viewport.width as f32 - right);
+        (to > from).then(|| [(from + to) / 2.0, viewport.height as f32 / 2.0])
     }
 
     /// Has the game show `ghost`, the asset dragged over the viewport at its
@@ -1741,14 +1757,22 @@ impl Editor {
                     "Click select  ·  Right-drag orbit  ·  Right-hold + WASD/QE fly  ·  Middle-drag pan  ·  Scroll zoom  ·  F focus",
                 )
             };
-            // In the middle: the game draws its panels over both sides.
-            ui.painter().text(
-                rect.center_bottom() + egui::vec2(0.0, -8.0),
-                egui::Align2::CENTER_BOTTOM,
-                hint,
-                egui::FontId::proportional(11.0),
-                Color32::from_white_alpha(0x99),
-            );
+            // In the middle of the scene view, between the panels the game
+            // draws over the viewport's sides, when it fits there.
+            let scale = rect.width() / size.x;
+            let (left, right) = (self.panel_layout.0 * scale, self.panel_layout.1 * scale);
+            let color = Color32::from_white_alpha(0x99);
+            let font = egui::FontId::proportional(11.0);
+            let hint = ui.painter().layout_no_wrap(hint.to_owned(), font, color);
+            let scene = rect.width() - left - right;
+            if hint.size().x + 16.0 <= scene {
+                let middle = rect.left() + left + scene / 2.0;
+                let at = egui::pos2(
+                    middle - hint.size().x / 2.0,
+                    rect.bottom() - 8.0 - hint.size().y,
+                );
+                ui.painter().galley(at, hint, color);
+            }
         }
         // Assets dragged from the Assets tab show where they would land, and
         // land there, when the scene shows.
@@ -2505,6 +2529,31 @@ mod tests {
         assert!(editor.scene.dirty);
 
         // A field of the game's panels has the keyboard, until a new game.
+        // Where the panels are is told too, for the hint and new things.
+        editor.on_report(
+            Report::PanelLayout {
+                left: 220.0,
+                right: 320.0,
+            },
+            &ctx,
+        );
+        assert_eq!(editor.panel_layout, (220.0, 320.0));
+
+        // An edit of an entity the scene no longer has, as after Stop, is
+        // nobody's to undo.
+        editor.scene.dirty = false;
+        let steps = editor.history.can_undo();
+        editor.on_report(
+            Report::Edited {
+                id: 99,
+                component: "my_game::Speed".into(),
+                before: serde_json::json!(1.0),
+                after: serde_json::json!(2.0),
+            },
+            &ctx,
+        );
+        assert!(!editor.scene.dirty && editor.history.can_undo() == steps);
+
         let ime = Some([972.0, 41.0, 3.0, 18.0]);
         editor.on_report(
             Report::PanelFocus {
@@ -2516,6 +2565,7 @@ mod tests {
         assert_eq!(editor.panel_focus, (true, ime));
         editor.on_report(Report::Hello { version: VERSION }, &ctx);
         assert_eq!(editor.panel_focus, (false, None));
+        assert_eq!(editor.panel_layout, (0.0, 0.0));
         drop(editor);
         let _ = fs::remove_dir_all(dir);
     }

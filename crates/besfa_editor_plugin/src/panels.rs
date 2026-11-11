@@ -197,7 +197,9 @@ impl Listed {
 /// it can add, which do not change once the game runs.
 #[derive(Resource, Default)]
 pub(crate) struct Inspecting {
-    /// The selected entity's, as of the last frame's report.
+    /// An entity's components as of the last frame's report, and whose. A
+    /// frame after the selection changes they are still the last one's.
+    pub(crate) entity: Option<Entity>,
     pub(crate) components: Vec<ComponentData>,
     systems: Vec<SystemInfo>,
     addable: Vec<ComponentType>,
@@ -231,6 +233,10 @@ pub(crate) struct Panels {
     kept_clear: EntityHashMap<(UVec2, UVec2)>,
     /// What the editor was last told about the keyboard.
     focus: (bool, Option<[f32; 4]>),
+    /// What the editor was last told the panels cover, left and right.
+    told: (f32, f32),
+    /// A field just lost the keyboard and has yet to set what was typed.
+    settle: bool,
 }
 
 impl Panels {
@@ -459,15 +465,43 @@ pub(crate) fn input(world: &mut World, input: PanelInput) -> Result<(), String> 
 }
 
 /// Takes the keyboard from whatever field of the panels has it: the
-/// editor's viewport lost it, or the scene was pressed.
+/// editor's viewport lost it, or the scene was pressed. The field sets what
+/// was typed in it when it is next drawn, so the editor's commands that
+/// follow wait for that ([`settling`]).
 pub(crate) fn unfocus(world: &mut World) {
     let mut contexts = world.query_filtered::<&mut EguiContext, With<PanelsCamera>>();
-    if let Ok(mut context) = contexts.single_mut(world) {
-        context.get_mut().memory_mut(|memory| {
-            if let Some(focused) = memory.focused() {
-                memory.surrender_focus(focused);
-            }
-        });
+    let Ok(mut context) = contexts.single_mut(world) else {
+        return;
+    };
+    let had = context.get_mut().memory_mut(|memory| {
+        let focused = memory.focused();
+        if let Some(focused) = focused {
+            memory.surrender_focus(focused);
+        }
+        focused.is_some()
+    });
+    if had && let Some(mut panels) = world.get_resource_mut::<Panels>() {
+        panels.settle = true;
+    }
+}
+
+/// Whether a field lost the keyboard since this was last asked, and has
+/// yet to be drawn without it.
+pub(crate) fn settling(world: &mut World) -> bool {
+    world
+        .get_resource_mut::<Panels>()
+        .is_some_and(|mut panels| std::mem::take(&mut panels.settle))
+}
+
+/// Stop started the game over in this process: no field has the keyboard,
+/// and the editor, which forgets what it was told at the game's `hello`,
+/// is told again where the panels are and who has the keyboard.
+pub(crate) fn reset(world: &mut World) {
+    unfocus(world);
+    if let Some(mut panels) = world.get_resource_mut::<Panels>() {
+        panels.settle = false;
+        panels.focus = (false, None);
+        panels.told = (0.0, 0.0);
     }
 }
 
@@ -543,11 +577,18 @@ fn draw(world: &mut World) {
                     .iter()
                     .find(|listed| listed.id == entity.to_bits())
             });
+            // Not the last selection's, which they are for a frame after
+            // the selection changes: a field would set its value from them.
+            let components: &[ComponentData] = if inspecting.entity == selected {
+                &inspecting.components
+            } else {
+                &[]
+            };
             let inspected = Inspected {
                 selected: selected.map(Entity::to_bits),
                 entity,
                 placement: entity.and_then(|entity| placement(&listed.entities, entity)),
-                components: &inspecting.components,
+                components,
                 systems: &inspecting.systems,
                 addable: &inspecting.addable,
                 crate_name: inspecting.crate_name.as_deref(),
@@ -557,7 +598,9 @@ fn draw(world: &mut World) {
                 .show(&mut root, |ui| inspecting.panel.ui(ui, &inspected, editing))
         });
         right = ctx.viewport_rect().right() * scale - panel.response.rect.left() * scale;
-        if let (Some(action), Some(entity)) = (panel.inner, selected) {
+        if let (Some(action), Some(entity)) = (panel.inner, selected)
+            && world.resource::<Inspecting>().entity == selected
+        {
             inspect_action(world, entity, action);
         }
     }
@@ -590,6 +633,10 @@ fn draw(world: &mut World) {
             keyboard: focus.0,
             ime: focus.1,
         });
+    }
+    if panels.told != (left, right) {
+        panels.told = (left, right);
+        send_report(&Report::PanelLayout { left, right });
     }
 }
 

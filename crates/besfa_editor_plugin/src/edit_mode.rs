@@ -109,6 +109,7 @@ fn reset(world: &mut World) {
     world.insert_resource(shot::Shots::default());
     world.insert_resource(thumbnail::Thumbnails::default());
     world.remove_resource::<input::LastPointer>();
+    panels::reset(world);
     world.insert_resource(Time::<Virtual>::default());
 
     reload_files(world);
@@ -168,6 +169,14 @@ fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
                         seq,
                         error: result.err(),
                     });
+                }
+                // A field of the panels the game draws just lost the
+                // keyboard, and sets what was typed in it when it is next
+                // drawn. What follows waits a frame for that: a save, so
+                // the file has the value, and the release of a click on the
+                // scene, so the value is set before the selection changes.
+                if panels::settling(world) {
+                    return;
                 }
             }
             Err(error) => warn!("Unknown editor command {line}: {error}"),

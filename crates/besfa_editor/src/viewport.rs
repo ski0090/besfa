@@ -209,6 +209,23 @@ impl ViewportInput {
                 && focused
                 && let Some(input) = panel_input(event)
             {
+                // A key the game held when the field took the keyboard is
+                // let go in the game too, or it would stay down there.
+                if playing
+                    && let Event::Key {
+                        key,
+                        physical_key,
+                        pressed: false,
+                        ..
+                    } = event
+                    && let Some(code) = key_code(physical_key.unwrap_or(*key))
+                {
+                    send(Command::Key {
+                        code,
+                        pressed: false,
+                        text: None,
+                    });
+                }
                 send(Command::PanelInput(input));
                 continue;
             }

@@ -51,8 +51,8 @@ use serde_json::Value;
 ///     [`Command::Viewport`]'s `scale` and [`Command::Language`].
 /// 16. The Inspector drawn by the game, named `inspector` in [`PANELS_ENV`]:
 ///     [`PanelAction`]'s component edits, the keyboard for its fields in
-///     [`Command::PanelInput`] and [`Report::PanelFocus`], and
-///     [`Report::Copied`].
+///     [`Command::PanelInput`] and [`Report::PanelFocus`],
+///     [`Report::Copied`] and [`Report::PanelLayout`].
 pub const VERSION: u32 = 16;
 
 /// The first protocol whose plugins draw the Hierarchy panel themselves.
@@ -766,6 +766,10 @@ pub enum Report {
     },
     /// Text copied or cut in a panel the game draws, for the clipboard.
     Copied { text: String },
+    /// How many of the viewport's pixels the panels the game draws cover
+    /// from its left and from its right edge, when that changes, so the
+    /// editor knows where the scene view between them is.
+    PanelLayout { left: f32, right: f32 },
     /// The outcome of `save`.
     Saved { error: Option<String> },
     /// The outcome of `save_prefab` and `apply_prefab`.

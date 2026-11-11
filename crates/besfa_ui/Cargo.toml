@@ -16,3 +16,9 @@ serde_json = "1"
 [dev-dependencies]
 # Clicks through the Inspector.
 egui_kittest = "0.36"
+# With fonts, as in the editor and the game: without them what is typed in a
+# field lands before its text.
+egui = { version = "0.36", default-features = false, features = ["default_fonts"] }
+# The Inspector's tests name fields by their place, in the order they write
+# them. Only tests get this: a game still builds serde_json plain.
+serde_json = { version = "1", features = ["preserve_order"] }

@@ -218,7 +218,7 @@ fn report(
     let Some(entity) = world.resource::<Selected>().0 else {
         if !last_entity.is_empty() {
             last_entity.clear();
-            inspecting(world, Vec::new());
+            inspecting(world, None, Vec::new());
         }
         return;
     };
@@ -233,7 +233,7 @@ fn report(
             if write_if_changed(&mut last_entity, &report)
                 && let Report::Entity { components, .. } = report
             {
-                inspecting(world, components);
+                inspecting(world, Some(entity), components);
             }
         }
         // Despawned; the entities report drops it as well.
@@ -241,9 +241,11 @@ fn report(
     }
 }
 
-/// The Inspector the game draws shows the components the editor is told of.
-fn inspecting(world: &mut World, components: Vec<ComponentData>) {
+/// The Inspector the game draws shows the components the editor is told
+/// of, and whose they are.
+fn inspecting(world: &mut World, entity: Option<Entity>, components: Vec<ComponentData>) {
     if let Some(mut inspecting) = world.get_resource_mut::<Inspecting>() {
+        inspecting.entity = entity;
         inspecting.components = components;
     }
 }

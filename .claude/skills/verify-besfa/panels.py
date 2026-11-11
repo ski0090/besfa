@@ -27,6 +27,12 @@ def send(command, wait=False):
     return seq
 
 
+def send_together(commands):
+    """Several commands in one write, so the game reads them in one frame."""
+    game.stdin.write("".join(json.dumps(command) + "\n" for command in commands))
+    game.stdin.flush()
+
+
 def reports(seconds, until=None):
     """Reports seen within `seconds`, stopping early at one `until` accepts."""
     seen, end = [], time.time() + seconds
@@ -174,6 +180,32 @@ try:
     seen = reports(2, lambda r: r.get("type") == "panel_focus")
     released = kinds(seen, "panel_focus")[-1:]
     check("and when the scene is pressed", bool(released) and not released[0]["keyboard"], str(released))
+    click(590, 360)
+    reports(1.0)
+
+    # What is typed and not yet entered is set before a save that follows the
+    # field losing the keyboard, as Ctrl+S does: the file has it.
+    scene = os.path.join(project, "assets", "scenes", "main.scn.ron")
+    focus_a_field()
+    key("A", ctrl=True)
+    panel_input(input="text", text="Zed")
+    seq += 1
+    send_together([{"command": "focus_lost"}, {"command": "save", "seq": seq}])
+    seen = reports(10, lambda r: r.get("type") == "saved")
+    order = [r["type"] for r in seen if r["type"] in ("edited", "saved")]
+    check("a save right after typing waits for the typed value", order == ["edited", "saved"] and '"Zed"' in open(scene, encoding="utf-8").read(), str(order))
+
+    # And before a click on the scene changes the selection, even when the
+    # press and the release reach the game in one frame.
+    focus_a_field()
+    key("A", ctrl=True)
+    panel_input(input="text", text="Qux")
+    send_together([{"command": "pointer", "event": event, "x": 800, "y": 600, **({} if event == "move" else {"button": "left"})} for event in ("move", "down", "up")])
+    seen = reports(3, lambda r: r.get("type") == "selected")
+    edited = kinds(seen, "edited")[-1:]
+    check("a fast click on the scene while typing sets the typed value first",
+          bool(edited) and edited[0]["id"] == cube and edited[0]["before"] == "Zed" and edited[0]["after"] == "Qux"
+          and kinds(seen, "selected")[-1:] == [{"type": "selected", "id": None}], str(edited) + str(kinds(seen, "selected")))
     click(590, 360)
     reports(1.0)
 
