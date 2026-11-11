@@ -221,6 +221,8 @@ pub struct Editor {
     /// to the next game so a restart leaves them as they were. Gone with the
     /// project when it is closed.
     panel_state: Option<String>,
+    /// The game process is new and has yet to say hello.
+    new_game: bool,
     assets: AssetBrowser,
     bottom_tab: BottomTab,
     /// The model preview's tab, while it is open.
@@ -304,6 +306,7 @@ impl Editor {
             panel_focus: (false, None),
             panel_layout: (0.0, 0.0),
             panel_state: None,
+            new_game: false,
             bottom_tab: BottomTab::Log,
             preview: None,
             previewing: false,
@@ -549,6 +552,7 @@ impl Editor {
         self.viewport_request = None;
         self.seq = 0;
         self.protocol = None;
+        self.new_game = true;
         self.brush = None;
         self.scatter_brush = None;
         self.sent_snap = None;
@@ -823,9 +827,11 @@ impl Editor {
                 }
                 self.panel_focus = (false, None);
                 self.panel_layout = (0.0, 0.0);
-                // A new game, or the same one after Stop: its panels and
-                // scene view go back to how the last one left them.
-                if version >= PANEL_STATE_PROTOCOL
+                // A new game's panels and scene view go back to how the
+                // last one left them. The same game after Stop has kept
+                // them itself, and newer than what it last told.
+                if std::mem::take(&mut self.new_game)
+                    && version >= PANEL_STATE_PROTOCOL
                     && let Some(state) = self.panel_state.clone()
                 {
                     self.send(Command::PanelState { state });

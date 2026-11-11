@@ -60,7 +60,9 @@ fast click on the scene and before a handle is dragged), Play, a
 `screenshot` with `game`, Stop and Save leaving the scene file as the save
 before Play wrote it, and a second game, built again after the first is
 killed, taking back the first one's widened Hierarchy and zoomed scene view
-from its `panel_state`, which is reported only when it changes.
+from its `panel_state`, which is reported only when it changes, and the
+scene view's camera where it was after Play and Stop in that game, with
+nothing handed back.
 
 ## Gotchas
 

@@ -349,15 +349,23 @@ try:
     camera = json.loads(again[-1]["state"]).get("camera") if again else None
     check("and the scene view's camera is where it was", camera is not None and camera == kept.get("camera"), f"{camera} vs {kept.get('camera')}")
 
-    # Stop starts the scene over in the same game, which puts the scene
-    # view's camera back at the scene's own: handed its state, it stays.
-    n = send({"command": "reset"}, wait=True)
+    # Play takes the scene view's camera away and Stop makes a new one, at
+    # the scene's own camera, in the same game. The game puts it back where
+    # it was itself: the editor hands nothing back after Stop.
+    send({"command": "play"})
+    playing = [json.loads(r["state"]).get("camera") for r in kinds(reports(1.5), "panel_state")]
+    check("what the game tells while it plays still has the camera", all(c == kept.get("camera") for c in playing), str(playing))
+    send({"command": "reset"})
     reports(30, lambda r: r.get("type") == "hello")
-    n = send({"command": "panel_state", "state": again[-1]["state"] if again else state}, wait=True)
-    reports(5, lambda r: r.get("type") == "done" and r.get("seq") == n)
+    reports(1.0)
+    # A nudge of the Hierarchy's edge has the game tell its state again.
+    press("move", 381, 300)
+    press("down", 381, 300)
+    press("move", 360, 300)
+    press("up", 360, 300)
     after = kinds(reports(2.5), "panel_state")
-    camera = json.loads(after[-1]["state"]).get("camera") if after else kept.get("camera")
-    check("and after Stop too", camera == kept.get("camera") and game.poll() is None, f"{camera} vs {kept.get('camera')}")
+    camera = json.loads(after[-1]["state"]).get("camera") if after else None
+    check("and after Stop the camera is where it was, with nothing handed back", camera is not None and camera == kept.get("camera"), f"{camera} vs {kept.get('camera')}")
 finally:
     stop()
     shot = os.path.join(project, "panel-shot.png")

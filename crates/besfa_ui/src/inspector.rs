@@ -3,7 +3,7 @@
 //! first, the game's own components, and the game's own systems. In detail,
 //! every component and system grouped by crate, with what Bevy computes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use besfa_protocol::{ComponentData, ComponentType, EntityInfo, Shapes, SystemInfo, crate_of};
 use egui::{Id, Label, RichText, ScrollArea, TextEdit, Ui};
@@ -49,22 +49,25 @@ pub struct Inspector {
     details: bool,
     /// The Add component search, while it is open.
     adding: Option<String>,
-    /// The crate groups folded the other way than they start, each as its
-    /// section and crate: `components/bevy_transform`.
-    flipped: BTreeSet<String>,
+    /// The crate groups a click opened (true) or folded, each by its section
+    /// and crate: `components/bevy_transform`. The others are as they start.
+    groups: BTreeMap<String, bool>,
     /// The entity shown and how far down its panel is scrolled.
     scroll: Option<(u64, f32)>,
     /// Where to scroll that entity's panel once it shows again.
     scroll_to: Option<(u64, f32)>,
 }
 
+/// The furthest a panel is scrolled back to, in points.
+pub const MAX_SCROLL: f32 = 1e6;
+
 /// How the panel looks, for whoever keeps that while the panel is away.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Look {
     /// Every detail shows.
     pub details: bool,
-    /// The crate groups folded the other way than they start.
-    pub flipped: Vec<String>,
+    /// The crate groups a click opened (true) or folded.
+    pub groups: Vec<(String, bool)>,
     /// The entity shown and how far down its panel is scrolled.
     pub scroll: Option<(u64, f32)>,
 }
@@ -93,7 +96,7 @@ impl Inspector {
     pub fn look(&self) -> Look {
         Look {
             details: self.details,
-            flipped: self.flipped.iter().cloned().collect(),
+            groups: self.groups.clone().into_iter().collect(),
             scroll: self.scroll,
         }
     }
@@ -101,8 +104,15 @@ impl Inspector {
     /// Looks as `look` says from the next frame on.
     pub fn set_look(&mut self, look: Look) {
         self.details = look.details;
-        self.flipped = look.flipped.into_iter().collect();
-        self.scroll_to = look.scroll;
+        self.groups = look.groups.into_iter().collect();
+        // egui adds to the offset: a number out of all proportion would
+        // overflow there.
+        let sane = |(entity, offset): (u64, f32)| {
+            offset
+                .is_finite()
+                .then(|| (entity, offset.clamp(0.0, MAX_SCROLL)))
+        };
+        self.scroll_to = look.scroll.and_then(sane);
     }
 
     /// Switches between what there is to edit and every detail.
@@ -173,7 +183,7 @@ impl Inspector {
                 let expand = |components: &[&ComponentData]| components.iter().any(|c| c.saved);
                 crate_groups(
                     ui,
-                    &mut self.flipped,
+                    &mut self.groups,
                     "components",
                     scene.components,
                     |c| c.crate_name(),
@@ -208,7 +218,7 @@ impl Inspector {
             section(ui, "Systems");
             crate_groups(
                 ui,
-                &mut self.flipped,
+                &mut self.groups,
                 "systems",
                 scene.systems,
                 |s| crate_of(&s.name),
@@ -336,12 +346,13 @@ fn placement(
 }
 
 /// One collapsible group per crate, the game's crate first. The game's crate
-/// and groups `expand` picks start open; `flipped` has the groups a click
-/// folded the other way, so they can be kept apart from egui's memory.
+/// and groups `expand` picks start open; `clicked` has the ones a click
+/// opened or folded, which stay so whatever entity shows, and can be kept
+/// apart from egui's memory.
 #[allow(clippy::too_many_arguments)]
 fn crate_groups<T>(
     ui: &mut Ui,
-    flipped: &mut BTreeSet<String>,
+    clicked: &mut BTreeMap<String, bool>,
     section: &str,
     items: &[T],
     crate_of: impl Fn(&T) -> &str,
@@ -358,7 +369,8 @@ fn crate_groups<T>(
     for (name, items) in crates {
         // The same crate can show under components and systems.
         let key = format!("{section}/{name}");
-        let open = (Some(name) == game || expand(&items)) != flipped.contains(&key);
+        let starts_open = Some(name) == game || expand(&items);
+        let open = clicked.get(&key).copied().unwrap_or(starts_open);
         let header = egui::CollapsingHeader::new(
             RichText::new(format!("{name} ({})", items.len()))
                 .small()
@@ -373,8 +385,8 @@ fn crate_groups<T>(
             }
         })
         .header_response;
-        if header.clicked() && !flipped.remove(&key) {
-            flipped.insert(key);
+        if header.clicked() {
+            clicked.insert(key, !open);
         }
     }
 }
@@ -1351,7 +1363,10 @@ mod tests {
         shown.run();
         let look = shown.state().look();
         assert!(look.details);
-        assert_eq!(look.flipped, ["components/bevy_transform"]);
+        assert_eq!(
+            look.groups,
+            [("components/bevy_transform".to_owned(), false)]
+        );
         assert_eq!(look.scroll, Some((ZOMBIE, 0.0)));
 
         // Every detail, the group a click folded and the scroll are the
@@ -1360,13 +1375,30 @@ mod tests {
         let mut next = Inspector::default();
         next.set_look(Look {
             scroll: Some((ZOMBIE, 60.0)),
-            ..look
+            ..look.clone()
         });
         let mut shown = harness(next, 300.0);
         shown.run();
         assert!(shown.query_by_label("GlobalTransform").is_none());
         assert!(shown.query_by_label("ViewVisibility").is_some());
         assert_eq!(shown.state().look().scroll, Some((ZOMBIE, 60.0)));
+
+        // A scroll out of all proportion, as only a hand-written state has,
+        // is cut down, and one that is no number is left out.
+        let mut wild = Inspector::default();
+        wild.set_look(Look {
+            scroll: Some((ZOMBIE, 1e30)),
+            ..look.clone()
+        });
+        let mut shown = harness(wild, 300.0);
+        shown.run();
+        assert!(shown.state().look().scroll.unwrap().1 < MAX_SCROLL);
+        let mut none = Inspector::default();
+        none.set_look(Look {
+            scroll: Some((ZOMBIE, f32::NAN)),
+            ..look
+        });
+        assert_eq!(none.scroll_to, None);
     }
 
     #[test]
