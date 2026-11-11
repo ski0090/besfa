@@ -6,14 +6,10 @@
 use std::collections::BTreeMap;
 
 use besfa_protocol::{ComponentData, ComponentType, EntityInfo, Shapes, SystemInfo, crate_of};
-use eframe::egui::{self, Id, Label, RichText, ScrollArea, TextEdit, Ui};
+use egui::{Id, Label, RichText, ScrollArea, TextEdit, Ui};
 use serde_json::{Value, json};
 
-use crate::{
-    i18n::t,
-    panels::{MUTED, TEXT, panel_header, section, tag},
-    terrain::{TERRAIN, TerrainTools},
-};
+use crate::{MUTED, TEXT, i18n::t, panel_header, section, tag};
 
 pub const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
 const NAME: &str = "bevy_ecs::name::Name";
@@ -53,10 +49,6 @@ pub struct Inspector {
     details: bool,
     /// The Add component search, while it is open.
     adding: Option<String>,
-    /// The brush for a selected terrain.
-    pub terrain: TerrainTools,
-    /// The game's plugin takes the terrain brush, in edit mode.
-    pub can_sculpt: bool,
 }
 
 impl Inspector {
@@ -67,15 +59,7 @@ impl Inspector {
             .show(ui, |ui| {
                 ui.add_space(8.0);
                 let name = self.name(ui, scene);
-                let terrain = scene
-                    .components
-                    .iter()
-                    .find(|component| component.path == TERRAIN && scene.selected.is_some())
-                    .and_then(|terrain| self.terrain.ui(ui, terrain, self.can_sculpt))
-                    .map(|value| Action::Set(TERRAIN.into(), value));
-                self.components(ui, scene, can_apply_prefab)
-                    .or(terrain)
-                    .or(name)
+                self.components(ui, scene, can_apply_prefab).or(name)
             })
             .inner
     }
@@ -759,7 +743,7 @@ fn vector(ui: &mut Ui, id: Id, items: &[Value], labels: &[&str]) -> Option<Vec<f
 
 /// A number field: an integer stays an integer, a float takes whatever is
 /// typed. Text that is no such number puts the old value back.
-pub(crate) fn number_field(
+pub fn number_field(
     ui: &mut Ui,
     id: Id,
     number: &serde_json::Number,
@@ -1277,7 +1261,7 @@ mod tests {
     fn keeps_to_the_panels_width() {
         // The placed zombie of the manual's screenshots: its AnimationParams'
         // `floats` map widened the panel by a 🗙 every frame.
-        let report = include_str!("../screenshot_data/reports.txt")
+        let report = include_str!("../../besfa_editor/screenshot_data/reports.txt")
             .lines()
             .find(|line| line.contains(r#""type":"entity","id":4294966789,"#))
             .unwrap();

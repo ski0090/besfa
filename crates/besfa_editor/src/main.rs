@@ -9,7 +9,9 @@ mod animation;
 mod editor;
 mod hub;
 mod i18n;
-mod inspector;
+// The Inspector is drawn by the game; the model preview and the animation
+// window use its parts.
+use besfa_ui::inspector;
 mod organization;
 mod panels;
 mod preview;

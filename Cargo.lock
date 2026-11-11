@@ -740,7 +740,10 @@ dependencies = [
 name = "besfa_ui"
 version = "0.1.0"
 dependencies = [
+ "besfa_protocol",
  "egui",
+ "egui_kittest",
+ "serde_json",
 ]
 
 [[package]]

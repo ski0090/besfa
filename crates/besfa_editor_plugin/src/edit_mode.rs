@@ -392,8 +392,10 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
         } => input::key(world, &code, pressed, text),
         Command::FocusLost => {
             input::focus_lost(world);
+            panels::unfocus(world);
             Ok(())
         }
+        Command::PanelInput(input) => panels::input(world, input),
         Command::Tool { tool } => {
             if let Some(mut view) = world.get_resource_mut::<SceneView>() {
                 view.tool = tool;

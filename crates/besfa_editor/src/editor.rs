@@ -16,8 +16,8 @@ use std::{
 };
 
 use besfa_protocol::{
-    Command, HIERARCHY_PROTOCOL, LANGUAGE_ENV, PANELS_ENV, PanelAction, Placement, Report, Request,
-    SCALE_ENV, ScatterBrush, SpawnKind, TerrainBrush, Tool, VERSION,
+    Command, HIERARCHY_PROTOCOL, INSPECTOR_PROTOCOL, LANGUAGE_ENV, PANELS_ENV, PanelAction,
+    Placement, Report, Request, SCALE_ENV, ScatterBrush, SpawnKind, TerrainBrush, Tool, VERSION,
 };
 use eframe::{
     egui::{
@@ -32,7 +32,7 @@ use crate::{
     agent::{self, AgentPanel, AgentSettings, Agents, Route},
     animation,
     i18n::{self, Language, t},
-    inspector::{Action, Inspector, TRANSFORM},
+    inspector::{Action, TRANSFORM},
     organization::{ORGANIZATIONS_DIR, OrgPanel},
     panels::{
         self, ACCENT, AssetAction, AssetBrowser, GOOD, MUTED, Reimport, WARNING, prebuild_status,
@@ -42,7 +42,7 @@ use crate::{
     project::{self, Project},
     scatter::ScatterTools,
     scene::{Edit, EditHistory, Scene},
-    terrain::TERRAIN,
+    terrain::{TERRAIN, TerrainTools},
     viewport::{ViewportInput, ViewportTexture, adapter_name, path_with_dxc},
 };
 
@@ -103,10 +103,11 @@ enum AfterSave {
     Close,
 }
 
-/// What the right panel shows while the scene is in the viewport.
+/// What the right panel shows while the scene is in the viewport, when
+/// both have something to show. The game draws the Inspector.
 #[derive(Clone, Copy, PartialEq)]
 enum RightTab {
-    Inspector,
+    Terrain,
     Scatter,
 }
 
@@ -205,7 +206,13 @@ pub struct Editor {
     /// Save once this frame's fields have committed.
     save_after_ui: bool,
     source: SourceWatch,
-    inspector: Inspector,
+    /// The brush for a selected terrain.
+    terrain: TerrainTools,
+    /// The game's plugin takes the terrain brush, in edit mode.
+    can_sculpt: bool,
+    /// Whether a field of a panel the game draws has the keyboard, and where
+    /// its text cursor is in the viewport's pixels.
+    panel_focus: (bool, Option<[f32; 4]>),
     assets: AssetBrowser,
     bottom_tab: BottomTab,
     /// The model preview's tab, while it is open.
@@ -263,7 +270,7 @@ impl Editor {
             brush: None,
             scatter_brush: None,
             scatter: ScatterTools::default(),
-            right_tab: RightTab::Inspector,
+            right_tab: RightTab::Terrain,
             wanted_viewport: None,
             scale: 1.0,
             resize_at: None,
@@ -284,7 +291,9 @@ impl Editor {
             rebuild_after_save: false,
             code_changed: false,
             save_after_ui: false,
-            inspector: Inspector::default(),
+            terrain: TerrainTools::default(),
+            can_sculpt: false,
+            panel_focus: (false, None),
             bottom_tab: BottomTab::Log,
             preview: None,
             previewing: false,
@@ -390,42 +399,7 @@ impl Editor {
                     );
                 });
         }
-        egui::Panel::right("inspector")
-            .default_size(320.0)
-            .show(ui, |ui| {
-                match self.preview.as_mut().filter(|_| self.previewing) {
-                    Some(preview) => {
-                        let reimport = self.assets.reimports.get(&preview.path);
-                        let commands = preview.ui(ui, &self.scene, reimport);
-                        preview.save();
-                        for command in commands {
-                            self.send(command);
-                        }
-                    }
-                    None => {
-                        ui.horizontal(|ui| {
-                            for (tab, label) in [
-                                (RightTab::Inspector, t("Inspector")),
-                                (RightTab::Scatter, t("Scatter")),
-                            ] {
-                                ui.selectable_value(&mut self.right_tab, tab, label);
-                            }
-                        });
-                        if self.right_tab == RightTab::Scatter {
-                            egui::ScrollArea::vertical()
-                                .auto_shrink(false)
-                                .show(ui, |ui| self.scatter.ui(ui));
-                        } else {
-                            self.inspector.can_sculpt =
-                                self.protocol >= Some(TERRAIN_PROTOCOL) && !self.playing;
-                            let scene = self.scene.inspected();
-                            if let Some(action) = self.inspector.ui(ui, &scene, !self.playing) {
-                                self.on_inspector(action);
-                            }
-                        }
-                    }
-                }
-            });
+        self.right_panel(ui);
         egui::CentralPanel::default().show(ui, |ui| self.viewport_ui(ui, &ctx));
         self.dialogs(&ctx);
         self.agent_window(&ctx);
@@ -597,7 +571,7 @@ impl Editor {
                 ("WGPU_ADAPTER_NAME", adapter),
                 // The panels left to the game, which draws them in the
                 // viewport at the editor's size and in its language.
-                (PANELS_ENV, "hierarchy"),
+                (PANELS_ENV, "hierarchy,inspector"),
                 (SCALE_ENV, scale.as_str()),
             ]);
             if Language::current() == Language::Korean {
@@ -833,6 +807,7 @@ impl Editor {
                     let korean = Language::current() == Language::Korean;
                     self.send(Command::Language { korean });
                 }
+                self.panel_focus = (false, None);
                 if let Some(warning) = protocol_warning(version) {
                     self.log(warning);
                 }
@@ -843,6 +818,8 @@ impl Editor {
                 self.log(protocol_warning(0).unwrap_or_default());
             }
             Report::Panel(action) => self.on_panel(action),
+            Report::PanelFocus { keyboard, ime } => self.panel_focus = (keyboard, ime),
+            Report::Copied { text } => ctx.copy_text(text),
             // What one drop moved, undone in one step.
             Report::Moved { moves } if !moves.is_empty() => {
                 let set = |id, value| Self::set_command(id, TRANSFORM, value);
@@ -899,6 +876,10 @@ impl Editor {
                     redo: vec![set(after)],
                     seq: None,
                 });
+                // What changes while the game plays is not the scene's.
+                if !self.playing {
+                    self.scene.dirty = true;
+                }
             }
             Report::Preview { path, model } => {
                 if let Some(error) = &model.error {
@@ -1112,13 +1093,84 @@ impl Editor {
         }
     }
 
+    /// What is left of the right panel now that the game draws the Inspector
+    /// in the viewport: the previewed model's panel, a selected terrain's
+    /// tools and the scatter brush's settings, each only while it is of use.
+    fn right_panel(&mut self, ui: &mut Ui) {
+        let previewing = self.previewing && self.preview.is_some();
+        self.can_sculpt = self.protocol >= Some(TERRAIN_PROTOCOL) && !self.playing;
+        let terrain = self
+            .scene
+            .components
+            .iter()
+            .find(|component| component.path == TERRAIN && self.scene.selected.is_some())
+            .cloned();
+        // A plugin from before the game drew the Inspector has none.
+        let outdated = self.protocol.is_some() && !self.draws_inspector();
+        if !(previewing || terrain.is_some() || self.scatter.on || outdated) {
+            return;
+        }
+        egui::Panel::right("inspector")
+            .default_size(320.0)
+            .show(ui, |ui| {
+                if let Some(preview) = self.preview.as_mut().filter(|_| previewing) {
+                    let reimport = self.assets.reimports.get(&preview.path);
+                    let commands = preview.ui(ui, &self.scene, reimport);
+                    preview.save();
+                    for command in commands {
+                        self.send(command);
+                    }
+                    return;
+                }
+                if outdated {
+                    panels::panel_header(ui, "Inspector", |_| {});
+                    ui.label(
+                        RichText::new(t(
+                            "Update besfa_editor_plugin in the game to show the Inspector.",
+                        ))
+                        .color(MUTED),
+                    );
+                }
+                if terrain.is_some() && self.scatter.on {
+                    ui.horizontal(|ui| {
+                        for (tab, label) in [
+                            (RightTab::Terrain, t("Terrain")),
+                            (RightTab::Scatter, t("Scatter")),
+                        ] {
+                            ui.selectable_value(&mut self.right_tab, tab, label);
+                        }
+                    });
+                }
+                let scatter =
+                    self.scatter.on && (terrain.is_none() || self.right_tab == RightTab::Scatter);
+                egui::ScrollArea::vertical()
+                    .auto_shrink(false)
+                    .show(ui, |ui| match &terrain {
+                        _ if scatter => self.scatter.ui(ui),
+                        Some(terrain) => {
+                            panels::panel_header(ui, "Terrain", |_| {});
+                            if let Some(value) = self.terrain.ui(ui, terrain, self.can_sculpt) {
+                                self.on_inspector(Action::Set(TERRAIN.into(), value));
+                            }
+                        }
+                        None => {}
+                    });
+            });
+    }
+
     /// Whether the game's plugin draws the Hierarchy itself.
     fn draws_hierarchy(&self) -> bool {
         self.protocol
             .is_some_and(|protocol| protocol >= HIERARCHY_PROTOCOL)
     }
 
-    /// A click in the Hierarchy the game draws.
+    /// Whether the game's plugin draws the Inspector itself.
+    fn draws_inspector(&self) -> bool {
+        self.protocol
+            .is_some_and(|protocol| protocol >= INSPECTOR_PROTOCOL)
+    }
+
+    /// A click in a panel the game draws.
     fn on_panel(&mut self, action: PanelAction) {
         match action {
             // The game reports what it spawns, which records the undo.
@@ -1152,6 +1204,13 @@ impl Editor {
                     ));
                 }
             }
+            // The Inspector's, which the editor's own asked the same way.
+            PanelAction::Insert { component } => self.on_inspector(Action::Insert(component)),
+            PanelAction::Remove { component } => self.on_inspector(Action::Remove(component)),
+            PanelAction::ApplyPrefab { id } if !self.playing => {
+                self.on_inspector(Action::ApplyPrefab(id))
+            }
+            PanelAction::ApplyPrefab { .. } => {}
         }
     }
 
@@ -1298,16 +1357,15 @@ impl Editor {
     fn send_brushes(&mut self, ctx: &egui::Context) {
         // Scatter is turned on with the terrain tool put away, so both at
         // once means a terrain tool was picked since.
-        if self.scatter.on && self.inspector.terrain.tool.is_some() {
+        if self.scatter.on && self.terrain.tool.is_some() {
             self.scatter.on = false;
         }
         let terrain = self.scene.components.iter().any(|c| c.path == TERRAIN);
         let shift = ctx.input(|i| i.modifiers.shift);
         let brush = self
-            .inspector
             .terrain
             .brush(shift)
-            .filter(|_| terrain && self.inspector.can_sculpt && !self.previewing);
+            .filter(|_| terrain && self.can_sculpt && !self.previewing);
         if brush != self.brush && self.game.is_some() {
             self.brush = brush;
             self.send(Command::TerrainBrush { brush });
@@ -1367,15 +1425,16 @@ impl Editor {
         let pressed = |modifiers, key| {
             ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(modifiers, key)))
         };
-        // Undo would change the scene out of sight of the model preview.
-        if let Some(key) = EditKey::pressed(ctx, !self.previewing) {
+        // Undo would change the scene out of sight of the model preview, and
+        // is the field's own while a field of the game's panels is typed in.
+        if let Some(key) = EditKey::pressed(ctx, !self.previewing && !self.panel_focus.0) {
             return self.on_edit_key(key, ctx);
         }
         // Unity's key for its Asset Store.
         if pressed(Modifiers::COMMAND, Key::Num9) {
             return project::open_url(project::BEVY_ASSETS);
         }
-        if ctx.text_edit_focused() {
+        if ctx.text_edit_focused() || self.panel_focus.0 {
             return;
         }
         // The scene is out of sight: only framing the model is left.
@@ -1386,7 +1445,7 @@ impl Editor {
             return;
         }
         if pressed(Modifiers::NONE, Key::Escape) {
-            self.inspector.terrain.tool = None;
+            self.terrain.tool = None;
             self.scatter.on = false;
         } else if pressed(Modifiers::NONE, Key::End) {
             self.drop_to_surface();
@@ -1536,7 +1595,7 @@ impl Editor {
                     self.scatter.on = !self.scatter.on;
                     if self.scatter.on {
                         self.right_tab = RightTab::Scatter;
-                        self.inspector.terrain.tool = None;
+                        self.terrain.tool = None;
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1657,9 +1716,12 @@ impl Editor {
         let rect = egui::Rect::from_center_size(panel.center(), size * scale);
         egui::Image::new((texture, size)).paint_at(ui, rect);
         let mut commands = Vec::new();
-        let response = self.input.ui(ui, rect, size, self.playing, &mut |command| {
-            commands.push(command)
-        });
+        let panel_focus = self.panel_focus;
+        let response = self
+            .input
+            .ui(ui, rect, size, self.playing, panel_focus, &mut |command| {
+                commands.push(command)
+            });
         for command in commands {
             self.send(command);
         }
@@ -1679,10 +1741,10 @@ impl Editor {
                     "Click select  ·  Right-drag orbit  ·  Right-hold + WASD/QE fly  ·  Middle-drag pan  ·  Scroll zoom  ·  F focus",
                 )
             };
-            // On the right: the game draws the Hierarchy over the left.
+            // In the middle: the game draws its panels over both sides.
             ui.painter().text(
-                rect.right_bottom() + egui::vec2(-8.0, -8.0),
-                egui::Align2::RIGHT_BOTTOM,
+                rect.center_bottom() + egui::vec2(0.0, -8.0),
+                egui::Align2::CENTER_BOTTOM,
                 hint,
                 egui::FontId::proportional(11.0),
                 Color32::from_white_alpha(0x99),
@@ -2143,7 +2205,10 @@ fn protocol_warning(version: u32) -> Option<String> {
         );
     }
     if version < HIERARCHY_PROTOCOL {
-        return Some("The plugin is too old to show the Hierarchy.".into());
+        return Some("The plugin is too old to show the Hierarchy and the Inspector.".into());
+    }
+    if version < INSPECTOR_PROTOCOL {
+        return Some("The plugin is too old to show the Inspector.".into());
     }
     let (age, fix) = if version < VERSION {
         ("older", "plugin")
@@ -2306,11 +2371,15 @@ mod tests {
                 .unwrap()
                 .contains("Update the editor")
         );
-        // Before the game drew the Hierarchy, there is none to show.
+        // Before the game drew a panel, there is none to show.
         assert!(
             protocol_warning(HIERARCHY_PROTOCOL - 1)
                 .unwrap()
-                .contains("too old to show the Hierarchy")
+                .contains("too old to show the Hierarchy and the Inspector")
+        );
+        assert_eq!(
+            protocol_warning(INSPECTOR_PROTOCOL - 1).unwrap(),
+            "The plugin is too old to show the Inspector."
         );
     }
 
@@ -2394,6 +2463,59 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(editor.history.can_redo() && !editor.history.can_undo());
+        drop(editor);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_games_inspector_edits_are_recorded_and_its_field_takes_the_keys() {
+        let dir = std::env::temp_dir().join(format!("besfa_inspect_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
+        let mut editor = Editor::new(Project::new(dir.to_string_lossy()), None, &waiting, &ctx);
+        editor
+            .scene
+            .handle(r#"@besfa {"type":"entities","entities":[{"id":7,"name":"Ship"}]}"#);
+        editor.scene.handle(r#"@besfa {"type":"selected","id":7}"#);
+        let edited = || Report::Edited {
+            id: 7,
+            component: "my_game::Speed".into(),
+            before: serde_json::json!(1.0),
+            after: serde_json::json!(2.0),
+        };
+
+        // The game set the value itself: the editor only remembers how to
+        // undo it, and that the scene has changed.
+        editor.on_report(edited(), &ctx);
+        assert!(editor.history.can_undo() && editor.scene.dirty);
+
+        // What changes while the game plays is not the scene's to save.
+        editor.scene.dirty = false;
+        editor.playing = true;
+        editor.on_report(edited(), &ctx);
+        assert!(!editor.scene.dirty);
+        editor.playing = false;
+
+        // Adding a component is the editor's to do, as from its own panel.
+        let insert = PanelAction::Insert {
+            component: "my_game::Spin".into(),
+        };
+        editor.on_report(Report::Panel(insert), &ctx);
+        assert!(editor.scene.dirty);
+
+        // A field of the game's panels has the keyboard, until a new game.
+        let ime = Some([972.0, 41.0, 3.0, 18.0]);
+        editor.on_report(
+            Report::PanelFocus {
+                keyboard: true,
+                ime,
+            },
+            &ctx,
+        );
+        assert_eq!(editor.panel_focus, (true, ime));
+        editor.on_report(Report::Hello { version: VERSION }, &ctx);
+        assert_eq!(editor.panel_focus, (false, None));
         drop(editor);
         let _ = fs::remove_dir_all(dir);
     }
@@ -2588,7 +2710,6 @@ mod tests {
     /// Entities in `screenshot_data/reports.txt`.
     const CUBE: u64 = 4294966819;
     const TERRAIN: u64 = 4294966805;
-    const SKY: u64 = 4294966804;
     const ZOMBIE: u64 = 4294966789;
 
     /// The window the screenshots show, in points.
@@ -2765,20 +2886,15 @@ mod tests {
         harness.run_steps(4);
         save(&mut harness, "editor-overview", None);
         harness.state_mut().callouts.clear();
-        harness.run_steps(4);
-        save(&mut harness, "inspector", Some(RIGHT_PANEL));
 
         // Terrain painting, and the sky.
         let editor = &mut harness.state_mut().editor;
         select(editor, TERRAIN);
-        editor.inspector.terrain.tool = Some(besfa_protocol::TerrainTool::Paint);
+        editor.terrain.tool = Some(besfa_protocol::TerrainTool::Paint);
         harness.run_steps(4);
         save(&mut harness, "terrain-tools", Some(RIGHT_PANEL));
         let editor = &mut harness.state_mut().editor;
-        editor.inspector.terrain.tool = None;
-        select(editor, SKY);
-        harness.run_steps(4);
-        save(&mut harness, "sky-inspector", Some(RIGHT_PANEL));
+        editor.terrain.tool = None;
 
         // Scattering two of the models.
         let editor = &mut harness.state_mut().editor;
@@ -2797,7 +2913,7 @@ mod tests {
 
         // The placed zombie's state machine, in its own window.
         select(editor, ZOMBIE);
-        editor.right_tab = RightTab::Inspector;
+        editor.right_tab = RightTab::Terrain;
         animation_window_screenshot(&harness.state().editor.scene);
 
         // The Assets tab, with the models' thumbnails.

@@ -1,4 +1,5 @@
-//! The editor's panels the game draws itself, into the editor's viewport.
+//! The editor's panels the game draws itself, into the editor's viewport:
+//! the Hierarchy on the left and the Inspector on the right.
 //!
 //! The editor names the panels it leaves to the game in `BESFA_PANELS`. The
 //! game reads its own world for them, so nothing is sent to the editor to be
@@ -6,14 +7,19 @@
 //! cameras, draws them with egui; those cameras keep to the rest of the
 //! viewport. A game with neither window nor viewport (`BESFA_HEADLESS`)
 //! draws them into the scene view's picture, so tests can click them.
-//! The game has no window, so the editor's `pointer` commands are
-//! the panels' mouse: a press that starts on a panel stays the panel's until
-//! the button goes up, and one that starts on the scene stays the scene's.
 //!
-//! A click that changes the scene goes back to the editor as a
-//! [`Report::Panel`], and the editor sends the command its own panel sent:
-//! undo, the unsaved mark and saving stay where they were.
-// ponytail: only the Hierarchy; the Inspector comes with keys and text.
+//! The game has no window, so the editor's `pointer` commands are the
+//! panels' mouse: a press that starts on a panel stays the panel's until
+//! the button goes up, and one that starts on the scene stays the scene's.
+//! While a field has the keyboard the game says so (`panel_focus`) and the
+//! editor passes on keys, typed and composed text and the clipboard as
+//! `panel_input`.
+//!
+//! A value changed in the Inspector is set at once, and the editor is told
+//! what it was and is (`edited`) for its undo history. Every other click
+//! that changes the scene goes back to the editor as a [`Report::Panel`],
+//! and the editor sends the command its own panel sent: undo, the unsaved
+//! mark and saving stay where they were.
 
 use bevy::{
     camera::{CameraUpdateSystems, Hdr, RenderTarget, Viewport, visibility::RenderLayers},
@@ -21,20 +27,28 @@ use bevy::{
     prelude::*,
 };
 use bevy_egui::{
-    EguiContext, EguiGlobalSettings, EguiPlugin, EguiSchedule,
+    EguiContext, EguiGlobalSettings, EguiInput, EguiInputSet, EguiPlugin, EguiPreUpdateSet,
+    EguiSchedule,
     egui::{self, Id, RichText, ScrollArea, collapsing_header::CollapsingState},
     input::EguiInputEvent,
 };
+use serde_json::Value;
 
 use besfa_protocol::{
-    Button, EntityInfo, LANGUAGE_ENV, PANELS_ENV, PanelAction, PointerEvent, Report, SCALE_ENV,
-    SpawnKind, tree_rows,
+    Button, ComponentData, ComponentType, EntityInfo, LANGUAGE_ENV, PANELS_ENV, PanelAction,
+    PanelInput, PointerEvent, Report, SCALE_ENV, SpawnKind, SystemInfo, placement, tree_rows,
 };
-use besfa_ui::{MUTED, TEXT, i18n::t, panel_header, tree_row, unfolded};
+use besfa_ui::{
+    MUTED, TEXT,
+    i18n::t,
+    inspector::{Action, Inspected, Inspector},
+    panel_header, tree_row, unfolded,
+};
 
 use crate::{
-    EditorOnly,
-    inspect::{Selected, report_selection, send_report},
+    EditorOnly, edit,
+    inspect::{self, Selected, report_selection, send_report},
+    part_changes,
     preview::ModelPreview,
     scene_view::{EDITOR_CAMERA_ORDER, HeadlessView, SceneView},
     viewport::{VIEWPORT_HANDLE, ViewportTexture},
@@ -56,10 +70,27 @@ const SPAWN_KINDS: [(SpawnKind, &str); 8] = [
 /// viewport and left it a panel.
 pub(crate) struct PanelsPlugin;
 
+/// The panels the editor named in `BESFA_PANELS`.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+struct Asked {
+    hierarchy: bool,
+    inspector: bool,
+}
+
+impl Asked {
+    fn of(panels: &str) -> Self {
+        let named = |panel| panels.split(',').any(|name| name.trim() == panel);
+        Self {
+            hierarchy: named("hierarchy"),
+            inspector: named("inspector"),
+        }
+    }
+}
+
 impl PanelsPlugin {
     /// Whether the editor named a panel this plugin draws.
     pub(crate) fn asked() -> bool {
-        std::env::var(PANELS_ENV).is_ok_and(|panels| panels.split(',').any(|p| p == "hierarchy"))
+        std::env::var(PANELS_ENV).is_ok_and(|panels| Asked::of(&panels) != Asked::default())
     }
 }
 
@@ -83,14 +114,22 @@ impl Plugin for PanelsPlugin {
             .ok()
             .and_then(|scale| scale.parse().ok());
         app.insert_resource(Panels {
+            asked: Asked::of(&std::env::var(PANELS_ENV).unwrap_or_default()),
             scale: valid_scale(scale).unwrap_or(1.0),
             ..default()
         })
         .init_resource::<Listed>()
-        .add_systems(PanelsPass, draw)
+        .init_resource::<Inspecting>()
         // Startup made what the camera draws into, and Bevy looks for it
         // as soon as startup is over.
         .add_systems(PostStartup, aim.before(CameraUpdateSystems))
+        .add_systems(
+            PreUpdate,
+            keep_focused
+                .after(EguiInputSet::WriteEguiEvents)
+                .before(EguiPreUpdateSet::BeginPass),
+        )
+        .add_systems(PanelsPass, draw)
         .add_systems(
             PostUpdate,
             (aim, keep_cameras_clear).before(CameraUpdateSystems),
@@ -153,17 +192,35 @@ impl Listed {
     }
 }
 
-/// Where the panels are and whose the pointer is.
+/// What the Inspector shows, as the game reports it to the editor: the
+/// selected entity's components, and the game's systems and the components
+/// it can add, which do not change once the game runs.
+#[derive(Resource, Default)]
+pub(crate) struct Inspecting {
+    /// The selected entity's, as of the last frame's report.
+    pub(crate) components: Vec<ComponentData>,
+    systems: Vec<SystemInfo>,
+    addable: Vec<ComponentType>,
+    crate_name: Option<String>,
+    /// The systems and components are read, once.
+    listed: bool,
+    panel: Inspector,
+}
+
+/// Where the panels are and whose the pointer and the keyboard are.
 #[derive(Resource, Default)]
 pub(crate) struct Panels {
+    asked: Asked,
     /// The pixels a point of the editor's interface takes.
     scale: f32,
-    /// The viewport pixels the Hierarchy covers from the left edge, and the
-    /// viewport's size in pixels, as drawn last frame.
+    /// The viewport pixels the Hierarchy covers from the left edge and the
+    /// Inspector from the right, and the viewport's size in pixels, as drawn
+    /// last frame.
     left: f32,
+    right: f32,
     size: Vec2,
-    /// How far past its edge, in pixels, the panel's edge is still grabbed
-    /// to make it wider or narrower.
+    /// How far past its edge, in pixels, a panel's edge is still grabbed to
+    /// make it wider or narrower.
     grab: f32,
     /// Where the pointer was last, in viewport pixels.
     pointer: Option<Vec2>,
@@ -172,18 +229,22 @@ pub(crate) struct Panels {
     /// The cameras this module moved off the panels, with the part of the
     /// viewport it gave each: where it starts and its size.
     kept_clear: EntityHashMap<(UVec2, UVec2)>,
+    /// What the editor was last told about the keyboard.
+    focus: (bool, Option<[f32; 4]>),
 }
 
 impl Panels {
-    /// Whether the Hierarchy's strip, with the edge it is resized by, lies
-    /// over the viewport at `x` pixels.
+    /// Whether a panel's strip, with the edge it is resized by, lies over
+    /// the viewport at `x` pixels.
     fn over(&self, x: f32) -> bool {
-        self.left > 0.0 && x < self.left + self.grab
+        (self.left > 0.0 && x < self.left + self.grab)
+            || (self.right > 0.0 && x >= self.size.x - self.right - self.grab)
     }
 
     /// The middle of the scene view the panels leave, in viewport pixels.
     fn scene_middle(&self) -> Option<[f32; 2]> {
-        (self.size.x > self.left).then(|| [(self.left + self.size.x) / 2.0, self.size.y / 2.0])
+        let (from, to) = (self.left, self.size.x - self.right);
+        (to > from).then(|| [(from + to) / 2.0, self.size.y / 2.0])
     }
 }
 
@@ -203,8 +264,8 @@ pub(crate) fn holds(world: &World) -> bool {
         .is_some_and(|panels| panels.held == Some(true))
 }
 
-/// Whether a menu or a popup of the panels, which may reach past their
-/// strip, is at `point` in egui's points.
+/// Whether a menu, a popup or a dialog of the panels, which may reach past
+/// their strips, is at `point` in egui's points.
 fn popup_at(world: &mut World, point: Vec2) -> bool {
     let mut contexts = world.query_filtered::<&mut EguiContext, With<PanelsCamera>>();
     contexts.single_mut(world).is_ok_and(|mut context| {
@@ -259,6 +320,24 @@ fn shares_target(target: &RenderTarget, headless: Option<&HeadlessView>) -> bool
     }
 }
 
+/// egui asks whether its window has the keyboard before a field says it has
+/// focus, and bevy_egui answers for a window. The panels have none: theirs
+/// is the editor's viewport, which says when it loses the keyboard
+/// ([`unfocus`]).
+fn keep_focused(mut input: Single<&mut EguiInput, With<PanelsCamera>>) {
+    input.focused = true;
+}
+
+/// Hands `events` to the panels' egui for its next pass.
+fn feed(world: &mut World, events: impl IntoIterator<Item = egui::Event>) {
+    let mut cameras = world.query_filtered::<Entity, With<PanelsCamera>>();
+    if let Ok(context) = cameras.single(world) {
+        for event in events {
+            world.write_message(EguiInputEvent { context, event });
+        }
+    }
+}
+
 /// One `pointer` command from the editor, in viewport pixels. True when the
 /// panels took it, so the scene view and the game are not told.
 pub(crate) fn pointer(world: &mut World, event: &PointerEvent) -> bool {
@@ -272,7 +351,7 @@ pub(crate) fn pointer(world: &mut World, event: &PointerEvent) -> bool {
         | PointerEvent::Up { x, y, .. } => Some(Vec2::new(x, y)),
         PointerEvent::Scroll { .. } => panels.pointer,
     };
-    // The panel's strip, or a menu of the panels reaching past it.
+    // A panel's strip, or a menu or dialog of the panels reaching past it.
     let over = at.is_some_and(|at| covers(world, at));
     let mut panels = world.resource_mut::<Panels>();
     panels.pointer = at;
@@ -285,7 +364,7 @@ pub(crate) fn pointer(world: &mut World, event: &PointerEvent) -> bool {
             panels.held.unwrap_or(over)
         }
         // Only the panels' own presses: egui would act on the scene's too,
-        // and drag the panel's edge along with a drag that starts near it.
+        // and drag a panel's edge along with a drag that starts near it.
         PointerEvent::Down { x, y, button } => {
             let on_panel = *panels.held.get_or_insert(over);
             if on_panel {
@@ -316,19 +395,16 @@ pub(crate) fn pointer(world: &mut World, event: &PointerEvent) -> bool {
             over
         }
     };
-    // A press on the scene closes a menu the panels left open.
+    // A press on the scene takes the keyboard from a field and closes a
+    // menu the panels left open.
     if matches!(event, PointerEvent::Down { .. }) && !taken {
+        unfocus(world);
         let mut contexts = world.query_filtered::<&mut EguiContext, With<PanelsCamera>>();
         if let Ok(mut context) = contexts.single_mut(world) {
             egui::Popup::close_all(context.get_mut());
         }
     }
-    let mut cameras = world.query_filtered::<Entity, With<PanelsCamera>>();
-    if let Ok(context) = cameras.single(world) {
-        for event in events {
-            world.write_message(EguiInputEvent { context, event });
-        }
-    }
+    feed(world, events);
     taken
 }
 
@@ -345,25 +421,78 @@ fn pressed(pos: egui::Pos2, button: Button, pressed: bool) -> egui::Event {
     }
 }
 
+/// The editor's keyboard for the field that has it. An error for a key
+/// egui has no name for.
+pub(crate) fn input(world: &mut World, input: PanelInput) -> Result<(), String> {
+    let event = match input {
+        PanelInput::Key {
+            key,
+            pressed,
+            repeat,
+            modifiers,
+        } => egui::Event::Key {
+            key: egui::Key::from_name(&key).ok_or_else(|| format!("{key} is not a key"))?,
+            physical_key: None,
+            pressed,
+            repeat,
+            modifiers: egui::Modifiers {
+                alt: modifiers.alt,
+                ctrl: modifiers.ctrl,
+                shift: modifiers.shift,
+                mac_cmd: false,
+                // What egui's shortcuts ask for: Ctrl, off macOS.
+                command: modifiers.ctrl,
+            },
+        },
+        PanelInput::Text { text } => egui::Event::Text(text),
+        PanelInput::Preedit { text } => egui::Event::Ime(egui::ImeEvent::Preedit {
+            text,
+            active_range_chars: None,
+        }),
+        PanelInput::Commit { text } => egui::Event::Ime(egui::ImeEvent::Commit(text)),
+        PanelInput::Copy => egui::Event::Copy,
+        PanelInput::Cut => egui::Event::Cut,
+        PanelInput::Paste { text } => egui::Event::Paste(text),
+    };
+    feed(world, [event]);
+    Ok(())
+}
+
+/// Takes the keyboard from whatever field of the panels has it: the
+/// editor's viewport lost it, or the scene was pressed.
+pub(crate) fn unfocus(world: &mut World) {
+    let mut contexts = world.query_filtered::<&mut EguiContext, With<PanelsCamera>>();
+    if let Ok(mut context) = contexts.single_mut(world) {
+        context.get_mut().memory_mut(|memory| {
+            if let Some(focused) = memory.focused() {
+                memory.surrender_focus(focused);
+            }
+        });
+    }
+}
+
 /// Draws the panels and remembers where, for [`pointer`] and the cameras.
-fn draw(
-    mut context: Single<&mut EguiContext, With<PanelsCamera>>,
-    mut panels: ResMut<Panels>,
-    listed: Res<Listed>,
-    mut selected: ResMut<Selected>,
-    view: Option<Res<SceneView>>,
-    preview: Option<Res<ModelPreview>>,
-) {
-    let ctx = context.get_mut();
-    // Once for this egui, which keeps it.
-    let styled = egui::Id::new("panels styled");
-    if ctx.data(|data| data.get_temp::<bool>(styled)).is_none() {
-        ctx.data_mut(|data| data.insert_temp(styled, true));
-        besfa_ui::style(ctx);
+fn draw(world: &mut World) {
+    let mut contexts = world.query_filtered::<&mut EguiContext, With<PanelsCamera>>();
+    let Ok(mut context) = contexts.single_mut(world) else {
+        return;
+    };
+    // The same egui, shared: the world is free for what the panels change.
+    let ctx = context.get_mut().clone();
+    let asked = world.resource::<Panels>().asked;
+    let scale = world.resource::<Panels>().scale;
+    if !ctx.data(|data| data.get_temp::<bool>(Id::new("panels styled")).is_some()) {
+        ctx.data_mut(|data| data.insert_temp(Id::new("panels styled"), true));
+        besfa_ui::style(&ctx);
     }
-    if ctx.pixels_per_point() != panels.scale {
-        ctx.set_pixels_per_point(panels.scale);
+    if ctx.pixels_per_point() != scale {
+        ctx.set_pixels_per_point(scale);
     }
+    // The model preview shows one model, not the scene the panels are about;
+    // its panel is the editor's.
+    let previewing = world
+        .get_resource::<ModelPreview>()
+        .is_some_and(|preview| preview.showing);
     let mut root = egui::Ui::new(
         ctx.clone(),
         "panels".into(),
@@ -371,36 +500,161 @@ fn draw(
             .layer_id(egui::LayerId::background())
             .max_rect(ctx.viewport_rect()),
     );
-    panels.size = egui_to_vec2(ctx.viewport_rect().size()) * panels.scale;
-    panels.grab = ctx.global_style().interaction.resize_grab_radius_side * panels.scale;
-    // The model preview shows one model, not the scene the Hierarchy lists.
-    if preview.is_some_and(|preview| preview.showing) {
-        panels.left = 0.0;
-        return;
+    // Saving and applying prefabs is for edit mode, as the scene is.
+    let editing = world
+        .get_resource::<SceneView>()
+        .is_some_and(|view| !view.stopped);
+    let selected = world.resource::<Selected>().0;
+
+    let mut left = 0.0;
+    if asked.hierarchy && !previewing {
+        let panel = egui::Panel::left("hierarchy")
+            .default_size(220.0)
+            .show(&mut root, |ui| {
+                hierarchy(ui, world.resource::<Listed>(), selected, editing)
+            });
+        left = panel.response.rect.right() * scale;
+        match panel.inner {
+            // The game reports the selected entity's components to the editor.
+            Some(Click::Select(entity)) => {
+                world.resource_mut::<Selected>().0 = entity;
+                report_selection(entity);
+            }
+            // What the add menu makes is placed in the middle of the scene
+            // view, which only the game knows the place of.
+            Some(Click::Ask(PanelAction::Spawn { kind, .. })) => {
+                let pointer = world.resource::<Panels>().scene_middle();
+                send_report(&Report::Panel(PanelAction::Spawn { kind, pointer }));
+            }
+            Some(Click::Ask(action)) => send_report(&Report::Panel(action)),
+            None => {}
+        }
     }
-    // Saving a prefab is for edit mode, as the scene is.
-    let editing = view.is_some_and(|view| !view.stopped);
-    let panel = egui::Panel::left("hierarchy")
-        .default_size(220.0)
-        .show(&mut root, |ui| hierarchy(ui, &listed, selected.0, editing));
-    panels.left = panel.response.rect.right() * panels.scale;
-    match panel.inner {
-        // The game reports the selected entity's components to the editor.
-        Some(Click::Select(entity)) => {
-            selected.0 = entity;
-            report_selection(entity);
+
+    let mut right = 0.0;
+    if asked.inspector && !previewing {
+        list_once(world);
+        let panel = world.resource_scope(|world, mut inspecting: Mut<Inspecting>| {
+            let inspecting = &mut *inspecting;
+            let listed = world.resource::<Listed>();
+            let entity = selected.and_then(|entity| {
+                listed
+                    .entities
+                    .iter()
+                    .find(|listed| listed.id == entity.to_bits())
+            });
+            let inspected = Inspected {
+                selected: selected.map(Entity::to_bits),
+                entity,
+                placement: entity.and_then(|entity| placement(&listed.entities, entity)),
+                components: &inspecting.components,
+                systems: &inspecting.systems,
+                addable: &inspecting.addable,
+                crate_name: inspecting.crate_name.as_deref(),
+            };
+            egui::Panel::right("inspector")
+                .default_size(320.0)
+                .show(&mut root, |ui| inspecting.panel.ui(ui, &inspected, editing))
+        });
+        right = ctx.viewport_rect().right() * scale - panel.response.rect.left() * scale;
+        if let (Some(action), Some(entity)) = (panel.inner, selected) {
+            inspect_action(world, entity, action);
         }
-        // What the add menu makes is placed in the middle of the scene view,
-        // which only the game knows the place of.
-        Some(Click::Ask(PanelAction::Spawn { kind, .. })) => {
-            let pointer = panels.scene_middle();
-            send_report(&Report::Panel(PanelAction::Spawn { kind, pointer }));
-        }
-        Some(Click::Ask(action)) => send_report(&Report::Panel(action)),
-        None => {}
+    }
+
+    let focus = (ctx.egui_wants_keyboard_input(), ime_rect(&ctx, scale));
+    // Text copied or cut in a field, which only the editor can put on the
+    // clipboard: the game is built without one.
+    let copied: Vec<String> = ctx.output(|output| {
+        output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    });
+    for text in copied {
+        send_report(&Report::Copied { text });
+    }
+    let mut panels = world.resource_mut::<Panels>();
+    panels.left = left;
+    panels.right = right;
+    let size = ctx.viewport_rect().size() * scale;
+    panels.size = Vec2::new(size.x, size.y);
+    panels.grab = ctx.global_style().interaction.resize_grab_radius_side * scale;
+    if panels.focus != focus {
+        panels.focus = focus;
+        send_report(&Report::PanelFocus {
+            keyboard: focus.0,
+            ime: focus.1,
+        });
     }
 }
 
+/// Where the focused field's text cursor is, in viewport pixels.
+fn ime_rect(ctx: &egui::Context, scale: f32) -> Option<[f32; 4]> {
+    let rect = ctx.output(|output| output.ime.as_ref().map(|ime| ime.cursor_rect))?;
+    Some([rect.left(), rect.top(), rect.width(), rect.height()].map(|side| (side * scale).round()))
+}
+
+/// Reads the game's systems and the components it can add, which the
+/// Inspector lists, the first time it is drawn.
+fn list_once(world: &mut World) {
+    if world.resource::<Inspecting>().listed {
+        return;
+    }
+    let systems = inspect::systems(world);
+    let addable = inspect::addable_components(world);
+    let mut inspecting = world.resource_mut::<Inspecting>();
+    inspecting.listed = true;
+    if let Report::Systems {
+        game_crate,
+        systems,
+    } = systems
+    {
+        inspecting.systems = systems;
+        inspecting.crate_name = game_crate;
+    }
+    if let Report::Components { components } = addable {
+        inspecting.addable = components;
+    }
+}
+
+/// What the Inspector asked for `entity`. A new value is set here and now,
+/// and the editor told for its undo history, as with a handle dragged in
+/// the scene view. The rest is the editor's to do.
+fn inspect_action(world: &mut World, entity: Entity, action: Action) {
+    let report = match action {
+        Action::Set(component, after) => {
+            let before = world
+                .resource::<Inspecting>()
+                .components
+                .iter()
+                .find(|listed| listed.path == component)
+                .and_then(|listed| listed.value.clone())
+                .unwrap_or(Value::Null);
+            if let Err(error) = edit::set(world, entity, &component, &after) {
+                error!("Could not apply the Inspector's change: {error}");
+                return;
+            }
+            part_changes::edited(world, entity, &component);
+            Report::Edited {
+                id: entity.to_bits(),
+                component,
+                before,
+                after,
+            }
+        }
+        Action::Insert(component) => Report::Panel(PanelAction::Insert { component }),
+        Action::Remove(component) => Report::Panel(PanelAction::Remove { component }),
+        Action::ApplyPrefab(id) => Report::Panel(PanelAction::ApplyPrefab { id }),
+    };
+    send_report(&report);
+}
+
+#[derive(Debug, PartialEq)]
 enum Click {
     Select(Option<Entity>),
     /// For the editor to do, so it is recorded for undo.
@@ -506,15 +760,12 @@ fn hierarchy(
     click
 }
 
-fn egui_to_vec2(size: egui::Vec2) -> Vec2 {
-    Vec2::new(size.x, size.y)
-}
-
-/// The part of a target `size` pixels wide and high that the Hierarchy,
-/// `left` pixels wide, leaves: where it starts and its size. None when the
-/// panel leaves nothing or takes nothing.
-fn rest(size: UVec2, left: u32) -> Option<(UVec2, UVec2)> {
-    (left > 0 && size.x > left).then(|| (UVec2::new(left, 0), UVec2::new(size.x - left, size.y)))
+/// The part of a target `size` pixels wide and high that the panels, `left`
+/// and `right` pixels wide, leave: where it starts and its size. None when
+/// they leave nothing or take nothing.
+fn rest(size: UVec2, left: u32, right: u32) -> Option<(UVec2, UVec2)> {
+    let taken = left + right;
+    (taken > 0 && size.x > taken).then(|| (UVec2::new(left, 0), UVec2::new(size.x - taken, size.y)))
 }
 
 /// What Bevy makes of the part `given` to a camera when its target is now
@@ -536,13 +787,13 @@ fn cut(given: (UVec2, UVec2), size: UVec2) -> (UVec2, UVec2) {
 /// camera is switched off again before the scene can be saved, so the file
 /// never holds the editor's layout.
 // ponytail: a game with split-screen viewports of its own draws under the
-// panel; scale its viewports into the rest if a game needs that.
+// panels; scale its viewports into the rest if a game needs that.
 fn keep_cameras_clear(
     mut panels: ResMut<Panels>,
     headless: Option<Res<HeadlessView>>,
     mut cameras: Query<(Entity, &mut Camera, &RenderTarget), Without<PanelsCamera>>,
 ) {
-    let left = panels.left.ceil() as u32;
+    let (left, right) = (panels.left.ceil() as u32, panels.right.ceil() as u32);
     for (entity, mut camera, target) in &mut cameras {
         let now = camera
             .viewport
@@ -564,7 +815,7 @@ fn keep_cameras_clear(
         let rest = camera
             .physical_target_size()
             .filter(|_| in_viewport)
-            .and_then(|size| rest(size, left));
+            .and_then(|size| rest(size, left, right));
         match rest {
             Some(rest) if ours || now.is_none() => {
                 if now != Some(rest) {
@@ -589,11 +840,13 @@ fn keep_cameras_clear(
 mod tests {
     use super::*;
 
-    fn panels(left: f32) -> World {
+    fn panels(left: f32, right: f32) -> World {
         let mut world = World::new();
         world.insert_resource(Panels {
             scale: 2.0,
             left,
+            right,
+            size: Vec2::new(1000.0, 600.0),
             ..default()
         });
         world
@@ -601,7 +854,7 @@ mod tests {
 
     #[test]
     fn a_press_belongs_to_where_it_started() {
-        let mut world = panels(200.0);
+        let mut world = panels(200.0, 300.0);
         let down = |x| PointerEvent::Down {
             x,
             y: 10.0,
@@ -614,19 +867,22 @@ mod tests {
         };
         let moved = |x| PointerEvent::Move { x, y: 10.0 };
 
-        // Started on the panel: the scene never hears of it, even outside.
+        // Started on a panel: the scene never hears of it, even outside.
         assert!(pointer(&mut world, &down(50.0)));
-        assert!(pointer(&mut world, &moved(600.0)));
-        assert!(pointer(&mut world, &up(600.0)));
-        // Started on the scene: a drag across the panel stays the scene's.
-        assert!(!pointer(&mut world, &down(600.0)));
+        assert!(pointer(&mut world, &moved(500.0)));
+        assert!(pointer(&mut world, &up(500.0)));
+        // Started on the scene: a drag across a panel stays the scene's.
+        assert!(!pointer(&mut world, &down(500.0)));
         assert!(!pointer(&mut world, &moved(50.0)));
-        assert!(!pointer(&mut world, &up(50.0)));
+        assert!(!pointer(&mut world, &up(900.0)));
         // No button down: whatever is under the pointer.
         assert!(pointer(&mut world, &moved(50.0)));
         assert!(pointer(&mut world, &PointerEvent::Scroll { delta: 30.0 }));
-        assert!(!pointer(&mut world, &moved(600.0)));
+        assert!(!pointer(&mut world, &moved(500.0)));
         assert!(!pointer(&mut world, &PointerEvent::Scroll { delta: 30.0 }));
+        // The Inspector's strip, on the right.
+        assert!(pointer(&mut world, &moved(701.0)));
+        assert!(!pointer(&mut world, &moved(699.0)));
     }
 
     #[test]
@@ -638,37 +894,32 @@ mod tests {
     }
 
     #[test]
-    fn a_press_on_the_panel_is_held_until_it_is_released() {
-        let mut world = panels(200.0);
-        // The edge is grabbed from the scene's side too.
+    fn a_press_on_a_panel_is_held_until_it_is_released() {
+        let mut world = panels(200.0, 300.0);
+        // The edges are grabbed from the scene's side too.
         world.resource_mut::<Panels>().grab = 6.0;
         assert!(covers(&mut world, Vec2::new(204.0, 10.0)));
         assert!(!covers(&mut world, Vec2::new(207.0, 10.0)));
-        let button = Button::Right;
-        pointer(
-            &mut world,
-            &PointerEvent::Down {
-                x: 50.0,
-                y: 10.0,
-                button,
-            },
-        );
+        assert!(covers(&mut world, Vec2::new(695.0, 10.0)));
+        assert!(!covers(&mut world, Vec2::new(693.0, 10.0)));
+        let (y, button) = (10.0, Button::Right);
+        pointer(&mut world, &PointerEvent::Down { x: 50.0, y, button });
         assert!(holds(&world), "the scene view's fly keys wait");
         pointer(
             &mut world,
             &PointerEvent::Up {
-                x: 600.0,
-                y: 10.0,
+                x: 500.0,
+                y,
                 button,
             },
         );
         assert!(!holds(&world));
-        // A press on the scene is not the panel's.
+        // A press on the scene is not a panel's.
         pointer(
             &mut world,
             &PointerEvent::Down {
-                x: 600.0,
-                y: 10.0,
+                x: 500.0,
+                y,
                 button,
             },
         );
@@ -676,17 +927,21 @@ mod tests {
     }
 
     #[test]
-    fn leaves_the_cameras_what_the_panel_does_not_cover() {
+    fn leaves_the_cameras_what_the_panels_do_not_cover() {
         let size = UVec2::new(1280, 720);
         assert_eq!(
-            rest(size, 220),
+            rest(size, 220, 320),
+            Some((UVec2::new(220, 0), UVec2::new(740, 720)))
+        );
+        assert_eq!(
+            rest(size, 220, 0),
             Some((UVec2::new(220, 0), UVec2::new(1060, 720)))
         );
-        assert_eq!(rest(size, 0), None, "no panel, the whole target");
-        assert_eq!(rest(size, 1280), None, "nothing left to draw into");
+        assert_eq!(rest(size, 0, 0), None, "no panel, the whole target");
+        assert_eq!(rest(size, 640, 640), None, "nothing left to draw into");
         // The editor made the viewport smaller: Bevy cuts the part off at
         // the new edge, which is still the part this module gave.
-        let given = rest(size, 220).unwrap();
+        let given = rest(size, 220, 320).unwrap();
         assert_eq!(
             cut(given, UVec2::new(900, 500)),
             (UVec2::new(220, 0), UVec2::new(680, 500))
@@ -694,11 +949,46 @@ mod tests {
         assert_eq!(cut(given, size), given);
         let panels = Panels {
             left: 220.0,
+            right: 320.0,
             size: size.as_vec2(),
             ..default()
         };
-        assert_eq!(panels.scene_middle(), Some([750.0, 360.0]));
+        assert_eq!(panels.scene_middle(), Some([590.0, 360.0]));
         assert_eq!(Panels::default().scene_middle(), None);
+    }
+
+    #[test]
+    fn reads_the_panels_the_editor_named() {
+        assert_eq!(
+            Asked::of("hierarchy"),
+            Asked {
+                hierarchy: true,
+                inspector: false
+            }
+        );
+        assert_eq!(
+            Asked::of("hierarchy, inspector"),
+            Asked {
+                hierarchy: true,
+                inspector: true
+            }
+        );
+        // A panel a later editor names is not this plugin's to draw.
+        assert_eq!(Asked::of("scatter"), Asked::default());
+    }
+
+    #[test]
+    fn names_keys_the_way_egui_does() {
+        let mut world = World::new();
+        let key = |key: &str| PanelInput::Key {
+            key: key.into(),
+            pressed: true,
+            repeat: false,
+            modifiers: default(),
+        };
+        assert!(input(&mut world, key("Enter")).is_ok());
+        assert!(input(&mut world, key("A")).is_ok());
+        assert!(input(&mut world, key("NoSuchKey")).is_err());
     }
 
     fn listed(entities: &str) -> Listed {

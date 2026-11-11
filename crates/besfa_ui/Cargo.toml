@@ -7,3 +7,12 @@ description = "What the Besfa editor and the panels a game draws for it share: t
 [dependencies]
 # The egui both eframe (the editor) and bevy_egui (the game) build on.
 egui = { version = "0.36", default-features = false }
+# The Inspector shows the components the game reports as JSON.
+besfa_protocol = { path = "../besfa_protocol" }
+# Plain: `preserve_order` here would widen serde_json in every game. The
+# editor asks for it itself, to show fields in the order the game sends.
+serde_json = "1"
+
+[dev-dependencies]
+# Clicks through the Inspector.
+egui_kittest = "0.36"
