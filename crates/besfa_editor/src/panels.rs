@@ -12,21 +12,12 @@ use std::{
 use eframe::egui::{self, Id, Label, PointerButton, RichText, ScrollArea, Ui};
 
 use besfa_ui::tree;
-pub use besfa_ui::{ACCENT, ERROR, GOOD, MUTED, TEXT, WARNING, panel_header};
+pub use besfa_ui::{ACCENT, ERROR, GOOD, MUTED, TEXT, WARNING, panel_header, section, tag};
 
 use crate::{
     i18n::t,
     process::{Prebuild, PrebuildPhase},
 };
-
-pub fn section(ui: &mut Ui, title: &str) {
-    ui.add_space(8.0);
-    ui.label(RichText::new(t(title)).small().strong().color(MUTED));
-}
-
-pub fn tag(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(t(text)).small().color(MUTED));
-}
 
 /// The prebuild's message with a spinner, check or warning, for a
 /// right-to-left row: the message ends up rightmost.

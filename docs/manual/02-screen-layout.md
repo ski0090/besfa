@@ -10,7 +10,7 @@
 - [2. 툴바](#2-툴바)
 - [3. Hierarchy 패널](#3-hierarchy-패널)
 - [4. 뷰포트](#4-뷰포트)
-- [5. 오른쪽 패널: Inspector와 Scatter](#5-오른쪽-패널-inspector와-scatter)
+- [5. Inspector와 오른쪽 패널](#5-inspector와-오른쪽-패널)
 - [6. 아래 패널: Log와 Assets](#6-아래-패널-log와-assets)
 - [창 제목](#창-제목)
 
@@ -54,7 +54,7 @@ Play 중과 [모델 미리보기](08-model-preview.md) 중에는 핸들 버튼�
 
 씬에 있는 엔티티(물건)를 트리로 보여 줍니다. 항목을 누르면 그 엔티티를 고르고, 오른쪽 Inspector에 그 엔티티의 컴포넌트가 나옵니다. 위쪽 버튼으로 엔티티를 더하고, 복제하고, 지웁니다.
 
-이 패널은 게임이 뷰포트 안 왼쪽에 직접 그립니다. 그래서 게임이 빌드 중이거나 멈춰서 뷰포트가 비어 있으면 Hierarchy도 나오지 않습니다. 게임의 플러그인이 오래됐으면 이 자리에 `Update besfa_editor_plugin in the game to show the Hierarchy.`가 나옵니다. [플러그인을 업데이트](13-updating.md#게임의-플러그인-업데이트)하세요.
+이 패널과 Inspector는 게임이 뷰포트 안에 직접 그립니다. 그래서 게임이 빌드 중이거나 멈춰서 뷰포트가 비어 있으면 둘 다 나오지 않습니다. 게임의 플러그인이 오래됐으면 이 자리에 `Update besfa_editor_plugin in the game to show the Hierarchy.`가 나옵니다. [플러그인을 업데이트](13-updating.md#게임의-플러그인-업데이트)하세요.
 
 자세한 내용은 [엔티티와 Inspector](03-hierarchy-inspector.md#hierarchy-패널)를 보세요.
 
@@ -62,21 +62,23 @@ Play 중과 [모델 미리보기](08-model-preview.md) 중에는 핸들 버튼�
 
 게임이 그린 화면이 나오는 곳입니다.
 
-- **편집 상태**(Play 전)에는 편집용 카메라로 씬을 봅니다. 마우스로 카메라를 돌리고, 물건을 클릭해 고르고, 핸들로 옮깁니다. 뷰포트 오른쪽 아래에 조작법이 작게 나옵니다. [씬 뷰 조작](04-scene-view.md)
+- **편집 상태**(Play 전)에는 편집용 카메라로 씬을 봅니다. 마우스로 카메라를 돌리고, 물건을 클릭해 고르고, 핸들로 옮깁니다. 뷰포트 아래 가운데에 조작법이 작게 나옵니다. [씬 뷰 조작](04-scene-view.md)
 - **실행 상태**(Play 중)에는 게임 카메라의 화면이 나오고, 마우스와 키보드 입력이 게임으로 갑니다. [실행과 저장](05-play-and-save.md#실행-중-입력)
 
 [모델 미리보기](08-model-preview.md)를 열면 뷰포트 위에 **Scene** 탭과 모델 탭이 생깁니다.
 
-## 5. 오른쪽 패널: Inspector와 Scatter
+## 5. Inspector와 오른쪽 패널
 
-위쪽 탭으로 바꿉니다.
+**Inspector**는 고른 엔티티의 이름과 컴포넌트를 보여 주고 고칩니다. Hierarchy처럼 게임이 뷰포트 안 오른쪽에 직접 그립니다. [엔티티와 Inspector](03-hierarchy-inspector.md#inspector-패널)
 
-| 탭 | 하는 일 |
-| --- | --- |
-| **Inspector** | 고른 엔티티의 이름과 컴포넌트를 보여 주고 고칩니다. [엔티티와 Inspector](03-hierarchy-inspector.md#inspector-패널) |
-| **Scatter** | 흩뿌릴 모델과 붓 설정. [흩뿌리기](10-scatter.md) |
+그 오른쪽에, 쓸 때만 나타나는 패널이 있습니다.
 
-모델 미리보기 탭을 보는 동안에는 이 자리에 모델 패널이 나옵니다. 애니메이션 상태 기계는 오른쪽 패널이 아니라 따로 뜨는 창에 나옵니다(**Window > Animation State Machine**).
+| 패널 | 나타나는 때 | 하는 일 |
+| --- | --- | --- |
+| **Terrain** | 지형을 골랐을 때 | 지형을 올리고 칠하는 도구. [지형](09-terrain.md) |
+| **Scatter** | 툴바의 🌲를 켰을 때 | 흩뿌릴 모델과 붓 설정. [흩뿌리기](10-scatter.md) |
+
+둘 다 나타날 때는 위쪽 탭으로 바꿉니다. 모델 미리보기 탭을 보는 동안에는 Hierarchy와 Inspector 대신 이 자리에 모델 패널이 나옵니다. 애니메이션 상태 기계는 오른쪽 패널이 아니라 따로 뜨는 창에 나옵니다(**Window > Animation State Machine**).
 
 ## 6. 아래 패널: Log와 Assets
 

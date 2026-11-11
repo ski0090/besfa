@@ -92,6 +92,9 @@ fn korean(en: &str) -> Option<&'static str> {
         "Update besfa_editor_plugin in the game to show the Hierarchy." => {
             "계층을 보려면 게임의 besfa_editor_plugin을 업데이트하세요."
         }
+        "Update besfa_editor_plugin in the game to show the Inspector." => {
+            "인스펙터를 보려면 게임의 besfa_editor_plugin을 업데이트하세요."
+        }
         "Empty" => "빈 엔티티",
         "Cube" => "큐브",
         "Sphere" => "구",

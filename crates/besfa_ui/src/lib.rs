@@ -9,6 +9,7 @@ use egui::{
 };
 
 pub mod i18n;
+pub mod inspector;
 
 use i18n::t;
 
@@ -104,6 +105,15 @@ pub fn tree_row<T>(
         }
         show(ui, row);
     });
+}
+
+pub fn section(ui: &mut Ui, title: &str) {
+    ui.add_space(8.0);
+    ui.label(RichText::new(t(title)).small().strong().color(MUTED));
+}
+
+pub fn tag(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(t(text)).small().color(MUTED));
 }
 
 /// The editor's dark theme, with a system font for text egui's fonts lack,

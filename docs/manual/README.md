@@ -54,9 +54,10 @@ Besfa는 [Bevy](https://bevy.org/) 게임 엔진으로 게임을 만들 때 쓰�
 | 툴바 🌲 버튼 | [흩뿌리기](10-scatter.md) |
 | 툴바 오른쪽, **Bevy is ready** 왼쪽에 따로 떨어진 ✔/⚠ 아이콘(누를 수 있음) | [업데이트 - 게임의 플러그인](13-updating.md#게임의-플러그인-업데이트) |
 | 툴바 맨 오른쪽 끝 **✔ Bevy is ready** | [설치와 시작 - Bevy 미리 빌드](01-getting-started.md#bevy-미리-빌드) |
-| 왼쪽 **Hierarchy** 패널 | [엔티티와 Inspector](03-hierarchy-inspector.md#hierarchy-패널) |
-| 오른쪽 **Inspector** 탭 | [엔티티와 Inspector](03-hierarchy-inspector.md#inspector-패널) |
-| 오른쪽 **Scatter** 탭 | [흩뿌리기](10-scatter.md) |
+| 뷰포트 안 왼쪽 **Hierarchy** 패널 | [엔티티와 Inspector](03-hierarchy-inspector.md#hierarchy-패널) |
+| 뷰포트 안 오른쪽 **Inspector** 패널 | [엔티티와 Inspector](03-hierarchy-inspector.md#inspector-패널) |
+| 오른쪽 끝 **Terrain** 패널(지형을 골랐을 때) | [지형](09-terrain.md) |
+| 오른쪽 끝 **Scatter** 패널(🌲를 켰을 때) | [흩뿌리기](10-scatter.md) |
 | **Window > Animation State Machine** 창 | [애니메이션 상태 기계](11-animation.md) |
 | **Window > Agent Window**로 뜨는 **Besfa Agent** 창의 **Chat**, **Organization**, **Settings** 탭 | [Agent 창](15-agent-window.md) |
 | 아래 **Log** 탭 | [화면 둘러보기 - 아래 패널](02-screen-layout.md#6-아래-패널-log와-assets) |

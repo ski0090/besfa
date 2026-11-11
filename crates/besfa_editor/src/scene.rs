@@ -1,8 +1,6 @@
 //! What the running game reports about its world, read from its output, and
 //! the changes the editor made to it, for undo.
 
-use std::collections::HashMap;
-
 use besfa_protocol::{Command, ComponentData, ComponentType, EntityInfo, Report, SystemInfo};
 
 use crate::inspector::Inspected;
@@ -57,17 +55,7 @@ impl Scene {
     /// The placed file `entity` is part of: the entity itself or its nearest
     /// ancestor that shows one.
     pub fn placement<'a>(&'a self, entity: &'a EntityInfo) -> Option<&'a EntityInfo> {
-        let by_id: HashMap<u64, &EntityInfo> = self.entities.iter().map(|e| (e.id, e)).collect();
-        let mut current = Some(entity);
-        // Bounded, so a parent cycle, a game bug, cannot hang the editor.
-        for _ in 0..=self.entities.len() {
-            let entity = current?;
-            if entity.asset.is_some() {
-                return Some(entity);
-            }
-            current = entity.parent.and_then(|parent| by_id.get(&parent).copied());
-        }
-        None
+        besfa_protocol::placement(&self.entities, entity)
     }
 
     /// Takes `line` if it is a report and returns it, for what the page does
@@ -103,8 +91,6 @@ impl Scene {
             // selected one is gone.
             Report::Selected { id } => self.select(*id),
             Report::Saved { error: None } => self.dirty = false,
-            // A drag in the scene view changed a component.
-            Report::Edited { .. } => self.dirty = true,
             _ => {}
         }
         Some(report)

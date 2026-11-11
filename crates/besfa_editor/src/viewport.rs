@@ -10,7 +10,7 @@
 
 use std::{collections::HashSet, path::Path, sync::Arc};
 
-use besfa_protocol::{Button, Command, PointerEvent};
+use besfa_protocol::{Button, Command, Modifiers, PanelInput, PointerEvent};
 use eframe::{
     egui::{self, Event, EventFilter, Key, PointerButton, Pos2, Rect, Sense, Vec2, mutex::RwLock},
     egui_wgpu::{self, RenderState},
@@ -179,6 +179,7 @@ impl ViewportInput {
         rect: Rect,
         texture_size: Vec2,
         playing: bool,
+        (panel_keys, ime): (bool, Option<[f32; 4]>),
         send: &mut dyn FnMut(Command),
     ) -> egui::Response {
         let response = ui.interact(
@@ -202,6 +203,32 @@ impl ViewportInput {
         let focused = response.has_focus();
         let (events, shift) = ui.input(|i| (i.events.clone(), i.modifiers.shift));
         for (index, event) in events.iter().enumerate() {
+            // A field of a panel the game draws has the keyboard: what is
+            // typed is its, repeats and composed text included.
+            if panel_keys
+                && focused
+                && let Some(input) = panel_input(event)
+            {
+                // A key the game held when the field took the keyboard is
+                // let go in the game too, or it would stay down there.
+                if playing
+                    && let Event::Key {
+                        key,
+                        physical_key,
+                        pressed: false,
+                        ..
+                    } = event
+                    && let Some(code) = key_code(physical_key.unwrap_or(*key))
+                {
+                    send(Command::Key {
+                        code,
+                        pressed: false,
+                        text: None,
+                    });
+                }
+                send(Command::PanelInput(input));
+                continue;
+            }
             match event {
                 Event::PointerButton {
                     pos,
@@ -298,6 +325,27 @@ impl ViewportInput {
             }
         }
 
+        // The input method opens at the field's text cursor, which is the
+        // game's to know.
+        if panel_keys
+            && focused
+            && let Some([x, y, width, height]) = ime
+        {
+            let scale = rect.size() / texture_size;
+            let cursor = Rect::from_min_size(
+                rect.min + Vec2::new(x, y) * scale,
+                Vec2::new(width, height) * scale,
+            );
+            ui.ctx().output_mut(|output| {
+                output.ime = Some(egui::output::IMEOutput {
+                    purpose: egui::IMEPurpose::Normal,
+                    rect: cursor,
+                    cursor_rect: cursor,
+                    should_interrupt_composition: false,
+                });
+            });
+        }
+
         if focused {
             // Tab, arrows and Escape are the game's, not focus moves.
             let keys = EventFilter {
@@ -308,15 +356,50 @@ impl ViewportInput {
             };
             ui.memory_mut(|memory| memory.set_focus_lock_filter(response.id, keys));
         } else if self.focused {
-            if playing {
+            // The game lets held keys go, and a field of its panels the
+            // keyboard.
+            if playing || panel_keys {
                 send(Command::FocusLost);
-            } else {
+            }
+            if !playing {
                 self.held.clear();
             }
         }
         self.focused = focused;
         response
     }
+}
+
+/// `event` as the keyboard of a field of a panel the game draws, if it is
+/// the keyboard's.
+fn panel_input(event: &Event) -> Option<PanelInput> {
+    Some(match event {
+        Event::Key {
+            key,
+            pressed,
+            repeat,
+            modifiers,
+            ..
+        } => PanelInput::Key {
+            key: key.name().into(),
+            pressed: *pressed,
+            repeat: *repeat,
+            modifiers: Modifiers {
+                alt: modifiers.alt,
+                ctrl: modifiers.ctrl || modifiers.command,
+                shift: modifiers.shift,
+            },
+        },
+        Event::Text(text) => PanelInput::Text { text: text.clone() },
+        Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+            PanelInput::Preedit { text: text.clone() }
+        }
+        Event::Ime(egui::ImeEvent::Commit(text)) => PanelInput::Commit { text: text.clone() },
+        Event::Copy => PanelInput::Copy,
+        Event::Cut => PanelInput::Cut,
+        Event::Paste(text) => PanelInput::Paste { text: text.clone() },
+        _ => return None,
+    })
 }
 
 fn fly([right, up, forward]: [f32; 3], fast: bool) -> Command {
@@ -484,6 +567,47 @@ mod shared {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passes_the_keyboard_on_to_a_field_of_the_games_panels() {
+        let held_a = Event::Key {
+            key: Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        assert_eq!(
+            panel_input(&held_a),
+            Some(PanelInput::Key {
+                key: "A".into(),
+                pressed: true,
+                repeat: true,
+                modifiers: Modifiers {
+                    ctrl: true,
+                    ..Modifiers::default()
+                },
+            })
+        );
+        // Composed text, as Korean is typed, and the clipboard.
+        let composing = Event::Ime(egui::ImeEvent::Preedit {
+            text: "\u{3131}".into(),
+            active_range_chars: None,
+        });
+        assert_eq!(
+            panel_input(&composing),
+            Some(PanelInput::Preedit {
+                text: "\u{3131}".into()
+            })
+        );
+        assert_eq!(
+            panel_input(&Event::Paste("Box".into())),
+            Some(PanelInput::Paste { text: "Box".into() })
+        );
+        assert_eq!(panel_input(&Event::Copy), Some(PanelInput::Copy));
+        // The pointer goes its own way, as `pointer`.
+        assert_eq!(panel_input(&Event::PointerGone), None);
+    }
 
     #[test]
     fn names_keys_the_way_bevy_does() {

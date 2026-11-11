@@ -76,7 +76,7 @@ Hierarchy 위쪽 **➕**를 누르고 만들 것을 고릅니다. 만든 엔티�
 
 ## Inspector 패널
 
-고른 엔티티의 이름, 컴포넌트, 게임의 시스템을 보여 줍니다.
+고른 엔티티의 이름, 컴포넌트, 게임의 시스템을 보여 줍니다. 뷰포트 안 오른쪽에 있고, Hierarchy처럼 게임이 직접 그립니다.
 
 ![Cube를 고른 Inspector](../images/inspector.png)
 
@@ -141,7 +141,7 @@ Inspector 위쪽 오른쪽 끝의 **⏷** 단추(Show details)를 누르면 자�
 
 ## 특별한 엔티티를 골랐을 때
 
-- **지형**을 고르면 Inspector 맨 위에 지형 도구가 나옵니다. [지형](09-terrain.md)
+- **지형**을 고르면 Inspector 오른쪽에 **Terrain** 패널이 나타납니다. [지형](09-terrain.md)
 - **씬에 놓은 모델이나 프리팹**, 또는 그 부품을 고르면 Inspector 위에 어디서 왔는지 알려 주는 글과 **⮉ Apply to prefab** 단추가 나올 수 있습니다. [에셋과 프리팹](07-assets-prefabs.md)
 
 ---

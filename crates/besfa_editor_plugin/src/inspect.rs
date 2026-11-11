@@ -26,7 +26,7 @@ use serde_json::Value;
 
 use crate::{
     edit::Deleted,
-    panels::Listed,
+    panels::{Inspecting, Listed},
     preview::ModelPreview,
     scene::{SceneEntity, json, left_out, unsaved},
     scene_view::{EditorOnly, Parked},
@@ -106,13 +106,15 @@ fn write(line: &str) {
     let _ = writeln!(stdout, "{line}");
 }
 
-/// Writes `report` unless it is the one written last.
-fn write_if_changed(last: &mut String, report: Report) {
+/// Writes `report` unless it is the one written last. True when it wrote.
+fn write_if_changed(last: &mut String, report: &Report) -> bool {
     let line = report.line();
-    if *last != line {
+    let changed = *last != line;
+    if changed {
         write(&line);
         *last = line;
     }
+    changed
 }
 
 /// Whether what the entities report shows may have changed since it was
@@ -191,7 +193,7 @@ fn report(
         {
             listed.set(entities);
         }
-        write_if_changed(&mut last_entities, report);
+        write_if_changed(&mut last_entities, &report);
     }
 
     // The model preview's part, reported the way the selection is.
@@ -200,35 +202,51 @@ fn report(
         .get_resource::<ModelPreview>()
         .and_then(|preview| preview.selected);
     match part.map(|part| (part, components(world, part))) {
-        Some((part, Some(components))) => write_if_changed(
-            &mut last_part,
-            Report::Entity {
+        Some((part, Some(components))) => {
+            let report = Report::Entity {
                 id: part.to_bits(),
                 changes,
                 components,
-            },
-        ),
+            };
+            write_if_changed(&mut last_part, &report);
+        }
         // Gone with the model; the editor picks the part again by name.
         Some((_, None)) => world.resource_mut::<ModelPreview>().selected = None,
         None => last_part.clear(),
     }
 
     let Some(entity) = world.resource::<Selected>().0 else {
-        last_entity.clear();
+        if !last_entity.is_empty() {
+            last_entity.clear();
+            inspecting(world, None, Vec::new());
+        }
         return;
     };
     match components(world, entity) {
         // A new count makes a new line, so every change is answered.
-        Some(components) => write_if_changed(
-            &mut last_entity,
-            Report::Entity {
+        Some(components) => {
+            let report = Report::Entity {
                 id: entity.to_bits(),
                 changes,
                 components,
-            },
-        ),
+            };
+            if write_if_changed(&mut last_entity, &report)
+                && let Report::Entity { components, .. } = report
+            {
+                inspecting(world, Some(entity), components);
+            }
+        }
         // Despawned; the entities report drops it as well.
         None => select(world, None),
+    }
+}
+
+/// The Inspector the game draws shows the components the editor is told
+/// of, and whose they are.
+fn inspecting(world: &mut World, entity: Option<Entity>, components: Vec<ComponentData>) {
+    if let Some(mut inspecting) = world.get_resource_mut::<Inspecting>() {
+        inspecting.entity = entity;
+        inspecting.components = components;
     }
 }
 

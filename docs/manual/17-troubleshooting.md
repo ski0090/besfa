@@ -10,7 +10,7 @@
 - [게임이 빌드되지 않아요](#게임이-빌드되지-않아요)
 - [툴바에 노란 ⚠가 보여요](#툴바에-노란-가-보여요)
 - [메뉴나 기능이 설명서와 달라요](#메뉴나-기능이-설명서와-달라요)
-- [Hierarchy가 안 보여요](#hierarchy가-안-보여요)
+- [Hierarchy나 Inspector가 안 보여요](#hierarchy나-inspector가-안-보여요)
 - [게임이 따로 창으로 떠요](#게임이-따로-창으로-떠요)
 - [게임 화면이 느려요](#게임-화면이-느려요)
 - [고친 값이 사라졌어요](#고친-값이-사라졌어요)
@@ -62,13 +62,14 @@ Hierarchy가 보이지 않거나, 🌲 흩뿌리기·땅에 내려놓기 같은 
 
 모델 미리보기를 열 때 `The model preview needs the game running with besfa_editor_plugin speaking protocol 3 or later. Update the plugin.`이 나와도 같습니다. 게임이 아직 떠 있지 않을 때도 이 메시지가 나오니, 게임이 뜬 뒤에 다시 해 보세요.
 
-## Hierarchy가 안 보여요
+## Hierarchy나 Inspector가 안 보여요
 
-Hierarchy는 게임이 뷰포트 안에 그립니다.
+Hierarchy와 Inspector는 게임이 뷰포트 안에 그립니다.
 
-- 뷰포트가 비어 있으면(빌드 중, 빌드 실패, 게임이 멈춤) Hierarchy도 없습니다. **Log**에서 이유를 보세요.
+- 뷰포트가 비어 있으면(빌드 중, 빌드 실패, 게임이 멈춤) 둘 다 없습니다. **Log**에서 이유를 보세요.
+- 오른쪽에 `Update besfa_editor_plugin in the game to show the Inspector.`가 나와도 아래와 같이 플러그인을 업데이트하세요.
 - 왼쪽에 `Update besfa_editor_plugin in the game to show the Hierarchy.`가 나오면 게임의 플러그인이 오래된 것입니다. 툴바의 ⚠를 눌러 [업데이트](13-updating.md#게임의-플러그인-업데이트)하세요.
-- 게임이 [따로 창으로 뜬](#게임이-따로-창으로-떠요) 동안에는 Hierarchy가 나오지 않습니다. 씬 뷰에서 클릭해 고르세요.
+- 게임이 [따로 창으로 뜬](#게임이-따로-창으로-떠요) 동안에는 Hierarchy도 Inspector도 나오지 않습니다.
 
 ## 게임이 따로 창으로 떠요
 

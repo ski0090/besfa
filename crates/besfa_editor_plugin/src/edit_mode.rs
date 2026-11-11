@@ -109,6 +109,7 @@ fn reset(world: &mut World) {
     world.insert_resource(shot::Shots::default());
     world.insert_resource(thumbnail::Thumbnails::default());
     world.remove_resource::<input::LastPointer>();
+    panels::reset(world);
     world.insert_resource(Time::<Virtual>::default());
 
     reload_files(world);
@@ -161,6 +162,18 @@ fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
                     waiting.push_front(line);
                     return;
                 }
+                // A press on the scene takes the keyboard from a field of
+                // the panels the game draws, which sets what was typed in
+                // it when it is next drawn. The press waits a frame for
+                // that, with all that follows it: a handle it drags starts
+                // from the typed value, and what it picks is picked after
+                // the value is set.
+                if let Command::Pointer(event) = &command
+                    && panels::press_waits(world, event)
+                {
+                    waiting.push_front(line);
+                    return;
+                }
                 pointed |= matches!(command, Command::Pointer(_));
                 let result = run(world, command);
                 if let Some(seq) = seq {
@@ -168,6 +181,13 @@ fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
                         seq,
                         error: result.err(),
                     });
+                }
+                // The editor's viewport lost the keyboard, and with it a
+                // field of the panels, which sets what was typed in it when
+                // it is next drawn. What follows waits a frame for that: a
+                // save, so the file has the value.
+                if panels::settling(world) {
+                    return;
                 }
             }
             Err(error) => warn!("Unknown editor command {line}: {error}"),
@@ -392,8 +412,10 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
         } => input::key(world, &code, pressed, text),
         Command::FocusLost => {
             input::focus_lost(world);
+            panels::unfocus(world);
             Ok(())
         }
+        Command::PanelInput(input) => panels::input(world, input),
         Command::Tool { tool } => {
             if let Some(mut view) = world.get_resource_mut::<SceneView>() {
                 view.tool = tool;

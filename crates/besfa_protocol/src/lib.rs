@@ -49,14 +49,21 @@ use serde_json::Value;
 /// 15. The Hierarchy panel drawn by the game in the editor's viewport when
 ///     the editor names it in [`PANELS_ENV`]: [`Report::Panel`],
 ///     [`Command::Viewport`]'s `scale` and [`Command::Language`].
-pub const VERSION: u32 = 15;
+/// 16. The Inspector drawn by the game, named `inspector` in [`PANELS_ENV`]:
+///     [`PanelAction`]'s component edits, the keyboard for its fields in
+///     [`Command::PanelInput`] and [`Report::PanelFocus`],
+///     [`Report::Copied`] and [`Report::PanelLayout`].
+pub const VERSION: u32 = 16;
 
 /// The first protocol whose plugins draw the Hierarchy panel themselves.
 pub const HIERARCHY_PROTOCOL: u32 = 15;
 
+/// The first protocol whose plugins draw the Inspector panel themselves.
+pub const INSPECTOR_PROTOCOL: u32 = 16;
+
 /// Set by the editor to the panels it leaves to the game, separated by
-/// commas: `hierarchy`. An editor that draws a panel itself does not name
-/// it, so a newer plugin never draws it a second time.
+/// commas: `hierarchy`, `inspector`. An editor that draws a panel itself
+/// does not name it, so a newer plugin never draws it a second time.
 pub const PANELS_ENV: &str = "BESFA_PANELS";
 
 /// Set by the editor to the pixels a point of its interface takes, so the
@@ -200,6 +207,9 @@ pub enum Command {
     },
     /// The viewport lost the keyboard, so held keys are let go.
     FocusLost,
+    /// The keyboard for a field of a panel the game draws, while the game
+    /// says one has it ([`Report::PanelFocus`]).
+    PanelInput(PanelInput),
     /// Picks the scene view's handle tool.
     Tool {
         tool: Tool,
@@ -471,6 +481,7 @@ impl Command {
             Command::Pointer(_)
                 | Command::Key { .. }
                 | Command::FocusLost
+                | Command::PanelInput(_)
                 | Command::Fly { .. }
                 | Command::Ghost { .. }
                 // Sent while the time slider is dragged.
@@ -638,7 +649,7 @@ pub enum PointerEvent {
 }
 
 /// What a click in a panel the game draws asks of the editor.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum PanelAction {
     /// The Hierarchy's add menu. `pointer`: the middle of the scene view the
@@ -652,6 +663,62 @@ pub enum PanelAction {
     Duplicate,
     Delete,
     SavePrefab,
+    /// The Inspector: gives the selected entity the component with this
+    /// type path, or takes it away.
+    Insert {
+        component: String,
+    },
+    Remove {
+        component: String,
+    },
+    /// The Inspector: writes the placed prefab of this id back to its file.
+    ApplyPrefab {
+        id: u64,
+    },
+}
+
+/// The keys held with a key of a [`PanelInput`].
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct Modifiers {
+    pub alt: bool,
+    pub ctrl: bool,
+    pub shift: bool,
+}
+
+/// The keyboard as a field of a panel the game draws takes it. The game has
+/// no window, so the editor passes on what its own window receives.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "input", rename_all = "snake_case")]
+pub enum PanelInput {
+    /// A key by egui's name for it, like `A`, `Enter` or `ArrowLeft`.
+    Key {
+        key: String,
+        pressed: bool,
+        /// Held down long enough to repeat.
+        #[serde(default)]
+        repeat: bool,
+        #[serde(default)]
+        modifiers: Modifiers,
+    },
+    /// What was typed.
+    Text {
+        text: String,
+    },
+    /// The input method's text so far, not final: Korean being composed.
+    Preedit {
+        text: String,
+    },
+    /// The input method's finished text.
+    Commit {
+        text: String,
+    },
+    Copy,
+    Cut,
+    /// The clipboard's text.
+    Paste {
+        text: String,
+    },
 }
 
 /// What the game tells the editor.
@@ -688,6 +755,21 @@ pub enum Report {
     /// A panel the game draws was clicked. The editor does what its own
     /// panel did, so the edit is recorded for undo the same way.
     Panel(PanelAction),
+    /// Whether a field of a panel the game draws has the keyboard, so the
+    /// editor passes keys on as [`Command::PanelInput`] and keeps its own
+    /// shortcuts back. `ime`: where the field's text cursor is in the
+    /// viewport, as pixels `[x, y, width, height]`, for the input method.
+    PanelFocus {
+        keyboard: bool,
+        #[serde(default)]
+        ime: Option<[f32; 4]>,
+    },
+    /// Text copied or cut in a panel the game draws, for the clipboard.
+    Copied { text: String },
+    /// How many of the viewport's pixels the panels the game draws cover
+    /// from its left and from its right edge, when that changes, so the
+    /// editor knows where the scene view between them is.
+    PanelLayout { left: f32, right: f32 },
     /// The outcome of `save`.
     Saved { error: Option<String> },
     /// The outcome of `save_prefab` and `apply_prefab`.
@@ -910,6 +992,22 @@ fn yes() -> bool {
 pub fn crate_of(path: &str) -> &str {
     let path = path.strip_prefix('<').unwrap_or(path);
     path.split("::").next().unwrap_or(path)
+}
+
+/// The placed file `entity` is part of: the entity itself or its nearest
+/// ancestor that shows one.
+pub fn placement<'a>(entities: &'a [EntityInfo], entity: &'a EntityInfo) -> Option<&'a EntityInfo> {
+    let by_id: HashMap<u64, &EntityInfo> = entities.iter().map(|e| (e.id, e)).collect();
+    let mut current = Some(entity);
+    // Bounded, so a parent cycle, a game bug, cannot hang the list.
+    for _ in 0..=entities.len() {
+        let entity = current?;
+        if entity.asset.is_some() {
+            return Some(entity);
+        }
+        current = entity.parent.and_then(|parent| by_id.get(&parent).copied());
+    }
+    None
 }
 
 /// Entities in tree order, as their index in `entities` and their depth. An
@@ -1328,6 +1426,44 @@ mod tests {
                 kind: SpawnKind::Cube,
                 pointer: Some([594.0, 360.0]),
             }))
+        );
+        let insert = Report::Panel(PanelAction::Insert {
+            component: "my_game::Spin".into(),
+        });
+        assert_eq!(
+            insert.line(),
+            r#"@besfa {"type":"panel","action":"insert","component":"my_game::Spin"}"#
+        );
+        assert_eq!(Report::parse(&insert.line()), Some(insert));
+        // The keyboard for a field of a panel the game draws.
+        let key = request(
+            r#"{"command":"panel_input","input":"key","key":"A","pressed":true,"modifiers":{"ctrl":true}}"#,
+        );
+        assert_eq!(
+            key.command,
+            Command::PanelInput(PanelInput::Key {
+                key: "A".into(),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers {
+                    ctrl: true,
+                    ..Modifiers::default()
+                },
+            })
+        );
+        assert!(key.command.is_input());
+        assert_eq!(
+            request(r#"{"command":"panel_input","input":"preedit","text":"\u3134"}"#).command,
+            Command::PanelInput(PanelInput::Preedit {
+                text: "\u{3134}".into()
+            })
+        );
+        assert_eq!(
+            Report::parse(r#"@besfa {"type":"panel_focus","keyboard":true}"#),
+            Some(Report::PanelFocus {
+                keyboard: true,
+                ime: None
+            })
         );
         // An editor that never sends the scale, and one that does.
         assert_eq!(
