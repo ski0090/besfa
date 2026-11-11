@@ -43,6 +43,7 @@ four H2s in this order: `Sub-features`, `How to get to it (user POV)`,
 - [Save and play](./save-and-play.md): save the scene, persist across a restart, play.
 - [Terrain](./terrain.md): create ground, sculpt and paint it, save its `.terrain` file.
 - [Assets and prefabs](./assets-prefabs.md): place a glTF model, thumbnail, save and place a prefab.
+- [Panels the game draws](./panels.md): the Hierarchy in the viewport, clicked with `pointer` commands.
 
 Not mapped yet (add a file when a change touches them): scatter brush, sky,
 animation state machines, model preview, undo/redo (editor-side history), net

@@ -26,6 +26,7 @@ use serde_json::Value;
 
 use crate::{
     edit::Deleted,
+    panels::Listed,
     preview::ModelPreview,
     scene::{SceneEntity, json, left_out, unsaved},
     scene_view::{EditorOnly, Parked},
@@ -183,7 +184,14 @@ fn report(
     // Thousands of entities, in a scene of placed models, are too many to
     // list every frame.
     if std::mem::take(&mut world.resource_mut::<EntitiesChanged>().0) {
-        write_if_changed(&mut last_entities, entities(world));
+        let report = entities(world);
+        // The Hierarchy the game draws lists the same entities.
+        if let (Report::Entities { entities }, Some(mut listed)) =
+            (&report, world.get_resource_mut::<Listed>())
+        {
+            listed.set(entities);
+        }
+        write_if_changed(&mut last_entities, report);
     }
 
     // The model preview's part, reported the way the selection is.

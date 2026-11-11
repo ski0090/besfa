@@ -678,6 +678,7 @@ name = "besfa_editor"
 version = "0.1.0"
 dependencies = [
  "besfa_protocol",
+ "besfa_ui",
  "eframe",
  "egui_commonmark",
  "egui_kittest",
@@ -695,7 +696,10 @@ version = "0.1.0"
 dependencies = [
  "besfa_components",
  "besfa_protocol",
+ "besfa_ui",
  "bevy",
+ "bevy_egui",
+ "egui_kittest",
  "ron",
  "serde",
  "serde_json",
@@ -730,6 +734,13 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "besfa_ui"
+version = "0.1.0"
+dependencies = [
+ "egui",
 ]
 
 [[package]]
@@ -1149,6 +1160,50 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "bevy_egui"
+version = "0.43.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cee91f48e697b0fd853713f81e95299a3f337f4623b1445df5e3da91284f30a3"
+dependencies = [
+ "bevy_app",
+ "bevy_asset",
+ "bevy_camera",
+ "bevy_color",
+ "bevy_core_pipeline",
+ "bevy_derive",
+ "bevy_ecs",
+ "bevy_extract",
+ "bevy_image",
+ "bevy_input",
+ "bevy_log",
+ "bevy_math",
+ "bevy_mesh",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_render",
+ "bevy_shader",
+ "bevy_shape",
+ "bevy_time",
+ "bevy_transform",
+ "bevy_utils",
+ "bevy_window",
+ "bevy_winit",
+ "bytemuck",
+ "crossbeam-channel",
+ "egui",
+ "encase",
+ "getrandom 0.4.3",
+ "image",
+ "itertools 0.15.0",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu-types",
+ "winit",
 ]
 
 [[package]]
@@ -3543,8 +3598,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
+ "wasm-bindgen",
 ]
 
 [[package]]

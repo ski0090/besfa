@@ -23,7 +23,7 @@ use bevy::{
 use crate::{
     edit, ground, input,
     inspect::{self, Changes, Selected, select, send_report},
-    part_changes,
+    panels, part_changes,
     preview::{self, ModelPreview},
     reimport,
     scene::{
@@ -369,6 +369,10 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             return result.map(drop);
         }
         Command::Pointer(event) => {
+            // A panel the game draws lies over the view at the pointer.
+            if panels::pointer(world, &event) {
+                return Ok(());
+            }
             if let Some(mut preview) = world.get_resource_mut::<ModelPreview>()
                 && preview.showing
             {
@@ -405,7 +409,11 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             }
             Ok(())
         }
-        Command::Ghost { path, pointer } => ground::ghost(world, path.as_deref(), pointer.into()),
+        // Over a panel there is no scene to show the ghost on.
+        Command::Ghost { path, pointer } => {
+            let path = path.filter(|_| !panels::covers(world, pointer.into()));
+            ground::ghost(world, path.as_deref(), pointer.into())
+        }
         // Frames the previewed model, or the selection in the scene view.
         Command::Focus => {
             if let Some(mut preview) = world.get_resource_mut::<ModelPreview>()
@@ -436,7 +444,14 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             }
             Ok(())
         }
-        Command::Viewport { name } => viewport::reopen(world, &name),
+        Command::Language { korean } => {
+            besfa_ui::i18n::set_korean(korean);
+            Ok(())
+        }
+        Command::Viewport { name, scale } => {
+            panels::rescale(world, scale);
+            viewport::reopen(world, &name)
+        }
         Command::Preview { path } => {
             if path.is_some()
                 && !world
@@ -509,7 +524,14 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
                 let view = if game == Some(true) {
                     Shot::game(width, height)
                 } else {
-                    Shot::new(target.into(), eye.map(Vec3::from), top, width, height, markers.unwrap_or(false))
+                    Shot::new(
+                        target.into(),
+                        eye.map(Vec3::from),
+                        top,
+                        width,
+                        height,
+                        markers.unwrap_or(false),
+                    )
                 };
                 view.map(|view| shot::request(world, file.clone(), project_file(&file), view))
             }
@@ -543,6 +565,14 @@ fn spawn_placed(
     place: &Placement,
     make: impl FnOnce(&mut World) -> Result<Entity, String>,
 ) -> Result<(), String> {
+    // Dropped on a panel the game draws: nothing is placed.
+    if place.translation.is_none()
+        && place
+            .pointer
+            .is_some_and(|pointer| panels::covers(world, pointer.into()))
+    {
+        return Ok(());
+    }
     let parent = place.parent.map(|id| edit::parent(world, id)).transpose()?;
     let entity = make(world)?;
     if let (None, Some(pointer)) = (place.translation, place.pointer) {

@@ -37,6 +37,10 @@ egui(eframe, wgpu DX12) 기반 Windows 데스크톱 에디터다. 프로젝트 �
 
 에디터와 게임의 `besfa_editor_plugin`이 함께 쓰는 메시지 타입이다. 에디터가 게임의 stdin에 쓰는 `Request`(`Command`와 답을 받을 `seq`)와 게임이 stdout에 쓰는 `Report`, 그리고 프로토콜 버전이 있다. 자세한 규칙은 [ARCHITECTURE.md](./ARCHITECTURE.md)를 참고한다.
 
+### `crates/besfa_ui`
+
+에디터와, 게임이 뷰포트 안에 그리는 패널(`besfa_editor_plugin`의 `panels`)이 함께 쓰는 egui 코드다. 어두운 테마와 글꼴, 영어 문구를 한국어로 바꾸는 표(`i18n`), 접고 펼치는 트리가 있다.
+
 ### `crates/besfa_components`
 
 게임이 릴리즈에 담는 컴포넌트와 그 플러그인이다([RUNTIME.md](./RUNTIME.md)). 게임은 `besfa_components::default_plugins()`를 `DefaultPlugins` 대신 쓰고, 이것이 씬 파일을 읽고 부품 변경, 지형, 하늘과 렌즈 플레어, 애니메이션 상태 기계를 돌린다. 의존성은 Bevy와 serde뿐이라 에디터 쪽 코드(프로토콜, 뷰포트 공유 텍스처, Bevy `debug` feature)를 끌어오지 않는다. 컴포넌트의 타입 경로는 옮기기 전과 같은 `besfa_editor_plugin::sky::Sky` 등이라 그 전에 저장한 씬도 그대로 읽는다.
@@ -80,6 +84,7 @@ besfa/
 │  ├─ besfa_project/                # 프로젝트 생성, 검증, 템플릿 처리
 │  ├─ besfa_data/                   # .besfa 파일 포맷, 파싱, 검증, 마이그레이션
 │  ├─ besfa_protocol/               # 에디터와 게임 런타임 간 통신 규약
+│  ├─ besfa_ui/                     # 에디터와 게임이 그리는 패널이 함께 쓰는 테마, 번역, 트리
 │  ├─ besfa_components/             # 게임이 릴리즈에 담는 컴포넌트와 플러그인
 │  ├─ besfa_editor_plugin/          # 에디터가 게임을 띄울 때 더하는 Bevy Plugin
 │  ├─ besfa_net/                    # 데디케이트 서버와 그 연결
@@ -107,6 +112,7 @@ besfa/
 | `besfa_editor_plugin` | `.besfa` 데이터와 Bevy ECS/Asset의 연결, 편집 상태 |
 | `besfa_net` | 데디케이트 서버: 창과 GPU 없이 돌리기, 서버와 게임 사이의 UDP 연결 |
 | `besfa_protocol` | 에디터와 실행 중 게임 사이의 메시지 타입 |
+| `besfa_ui` | 에디터와 게임이 그리는 패널이 함께 쓰는 테마, 번역, 트리 |
 | `besfa_viewport_windows` | Bevy 렌더 타깃과 에디터 뷰포트의 GPU 연결 |
 
 ## 테스트
