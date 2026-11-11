@@ -49,19 +49,70 @@ pub struct Inspector {
     details: bool,
     /// The Add component search, while it is open.
     adding: Option<String>,
+    /// The crate groups a click opened (true) or folded, each by its section
+    /// and crate: `components/bevy_transform`. The others are as they start.
+    groups: BTreeMap<String, bool>,
+    /// The entity shown and how far down its panel is scrolled.
+    scroll: Option<(u64, f32)>,
+    /// Where to scroll that entity's panel once it shows again.
+    scroll_to: Option<(u64, f32)>,
+}
+
+/// The furthest a panel is scrolled back to, in points.
+pub const MAX_SCROLL: f32 = 1e6;
+
+/// How the panel looks, for whoever keeps that while the panel is away.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Look {
+    /// Every detail shows.
+    pub details: bool,
+    /// The crate groups a click opened (true) or folded.
+    pub groups: Vec<(String, bool)>,
+    /// The entity shown and how far down its panel is scrolled.
+    pub scroll: Option<(u64, f32)>,
 }
 
 impl Inspector {
     pub fn ui(&mut self, ui: &mut Ui, scene: &Inspected, can_apply_prefab: bool) -> Option<Action> {
         panel_header(ui, "Inspector", |ui| self.details_button(ui));
-        ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                ui.add_space(8.0);
-                let name = self.name(ui, scene);
-                self.components(ui, scene, can_apply_prefab).or(name)
-            })
-            .inner
+        let mut area = ScrollArea::vertical().auto_shrink(false);
+        // Back where it was, once the entity it was scrolled for shows
+        // again; another entity's panel starts at its top.
+        if !scene.components.is_empty()
+            && let Some((entity, offset)) = self.scroll_to.take()
+            && scene.selected == Some(entity)
+        {
+            area = area.vertical_scroll_offset(offset);
+        }
+        let output = area.show(ui, |ui| {
+            ui.add_space(8.0);
+            let name = self.name(ui, scene);
+            self.components(ui, scene, can_apply_prefab).or(name)
+        });
+        self.scroll = scene.selected.map(|entity| (entity, output.state.offset.y));
+        output.inner
+    }
+
+    pub fn look(&self) -> Look {
+        Look {
+            details: self.details,
+            groups: self.groups.clone().into_iter().collect(),
+            scroll: self.scroll,
+        }
+    }
+
+    /// Looks as `look` says from the next frame on.
+    pub fn set_look(&mut self, look: Look) {
+        self.details = look.details;
+        self.groups = look.groups.into_iter().collect();
+        // egui adds to the offset: a number out of all proportion would
+        // overflow there.
+        let sane = |(entity, offset): (u64, f32)| {
+            offset
+                .is_finite()
+                .then(|| (entity, offset.clamp(0.0, MAX_SCROLL)))
+        };
+        self.scroll_to = look.scroll.and_then(sane);
     }
 
     /// Switches between what there is to edit and every detail.
@@ -132,6 +183,7 @@ impl Inspector {
                 let expand = |components: &[&ComponentData]| components.iter().any(|c| c.saved);
                 crate_groups(
                     ui,
+                    &mut self.groups,
                     "components",
                     scene.components,
                     |c| c.crate_name(),
@@ -166,6 +218,7 @@ impl Inspector {
             section(ui, "Systems");
             crate_groups(
                 ui,
+                &mut self.groups,
                 "systems",
                 scene.systems,
                 |s| crate_of(&s.name),
@@ -293,9 +346,13 @@ fn placement(
 }
 
 /// One collapsible group per crate, the game's crate first. The game's crate
-/// and groups `expand` picks start open.
+/// and groups `expand` picks start open; `clicked` has the ones a click
+/// opened or folded, which stay so whatever entity shows, and can be kept
+/// apart from egui's memory.
+#[allow(clippy::too_many_arguments)]
 fn crate_groups<T>(
     ui: &mut Ui,
+    clicked: &mut BTreeMap<String, bool>,
     section: &str,
     items: &[T],
     crate_of: impl Fn(&T) -> &str,
@@ -310,19 +367,27 @@ fn crate_groups<T>(
     let mut crates: Vec<_> = groups.into_iter().collect();
     crates.sort_by_key(|(name, _)| Some(*name) != game);
     for (name, items) in crates {
-        egui::CollapsingHeader::new(
+        // The same crate can show under components and systems.
+        let key = format!("{section}/{name}");
+        let starts_open = Some(name) == game || expand(&items);
+        let open = clicked.get(&key).copied().unwrap_or(starts_open);
+        let header = egui::CollapsingHeader::new(
             RichText::new(format!("{name} ({})", items.len()))
                 .small()
                 .color(TEXT),
         )
-        // The same crate can show under components and systems.
         .id_salt((section, name))
-        .default_open(Some(name) == game || expand(&items))
+        .default_open(open)
+        .open(Some(open))
         .show(ui, |ui| {
             for item in items {
                 show(ui, item);
             }
-        });
+        })
+        .header_response;
+        if header.clicked() {
+            clicked.insert(key, !open);
+        }
     }
 }
 
@@ -1255,6 +1320,85 @@ mod tests {
             "Enter commits"
         );
         assert_eq!(frame(vec![], &committed.unwrap()), None, "once");
+    }
+
+    #[test]
+    fn a_new_panel_looks_as_the_last_one_did() {
+        // The placed zombie of the manual's screenshots.
+        const ZOMBIE: u64 = 4294966789;
+        let report = include_str!("../../besfa_editor/screenshot_data/reports.txt")
+            .lines()
+            .find(|line| line.contains(r#""type":"entity","id":4294966789,"#))
+            .unwrap();
+        let report: Value = serde_json::from_str(report.trim_start_matches("@besfa ")).unwrap();
+        let components: Vec<ComponentData> =
+            serde_json::from_value(report["components"].clone()).unwrap();
+        let show = move |ui: &mut Ui, panel: &mut Inspector| {
+            let scene = Inspected {
+                selected: Some(ZOMBIE),
+                entity: None,
+                placement: None,
+                components: &components,
+                systems: &[],
+                addable: &[],
+                crate_name: None,
+            };
+            panel.ui(ui, &scene, true);
+        };
+        let harness = |panel, height| {
+            Harness::builder()
+                .with_size(egui::vec2(320.0, height))
+                .build_ui_state(show.clone(), panel)
+        };
+        let mut first = Inspector::default();
+        first.set_look(Look {
+            details: true,
+            ..Default::default()
+        });
+        // Tall enough to show every group, for the click.
+        let mut shown = harness(first, 3000.0);
+        shown.run();
+        assert!(shown.query_by_label("GlobalTransform").is_some());
+        shown.get_by_label_contains("bevy_transform").click();
+        shown.run();
+        let look = shown.state().look();
+        assert!(look.details);
+        assert_eq!(
+            look.groups,
+            [("components/bevy_transform".to_owned(), false)]
+        );
+        assert_eq!(look.scroll, Some((ZOMBIE, 0.0)));
+
+        // Every detail, the group a click folded and the scroll are the
+        // panel's own, not egui's memory: a new panel given them looks the
+        // same.
+        let mut next = Inspector::default();
+        next.set_look(Look {
+            scroll: Some((ZOMBIE, 60.0)),
+            ..look.clone()
+        });
+        let mut shown = harness(next, 300.0);
+        shown.run();
+        assert!(shown.query_by_label("GlobalTransform").is_none());
+        assert!(shown.query_by_label("ViewVisibility").is_some());
+        assert_eq!(shown.state().look().scroll, Some((ZOMBIE, 60.0)));
+
+        // A scroll out of all proportion, as only a hand-written state has,
+        // is cut down, and one that is no number is left out.
+        let mut wild = Inspector::default();
+        wild.set_look(Look {
+            scroll: Some((ZOMBIE, 1e30)),
+            ..look.clone()
+        });
+        let mut shown = harness(wild, 300.0);
+        shown.run();
+        assert!(shown.state().look().scroll.unwrap().1 < MAX_SCROLL);
+        let mut none = Inspector::default();
+        none.set_look(Look {
+            scroll: Some((ZOMBIE, f32::NAN)),
+            ..look
+        });
+        assert_eq!(none.scroll_to, None);
     }
 
     #[test]

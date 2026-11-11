@@ -29,9 +29,13 @@ use bevy::{
 use bevy_egui::{
     EguiContext, EguiGlobalSettings, EguiInput, EguiInputSet, EguiPlugin, EguiPreUpdateSet,
     EguiSchedule,
-    egui::{self, Id, RichText, ScrollArea, collapsing_header::CollapsingState},
+    egui::{
+        self, Id, RichText, ScrollArea, collapsing_header::CollapsingState,
+        containers::panel::PanelState,
+    },
     input::EguiInputEvent,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use besfa_protocol::{
@@ -41,7 +45,7 @@ use besfa_protocol::{
 use besfa_ui::{
     MUTED, TEXT,
     i18n::t,
-    inspector::{Action, Inspected, Inspector},
+    inspector::{Action, Inspected, Inspector, Look, MAX_SCROLL},
     panel_header, tree_row, unfolded,
 };
 
@@ -50,7 +54,7 @@ use crate::{
     inspect::{self, Selected, report_selection, send_report},
     part_changes,
     preview::ModelPreview,
-    scene_view::{EDITOR_CAMERA_ORDER, HeadlessView, SceneView},
+    scene_view::{EDITOR_CAMERA_ORDER, EditorCamera, HeadlessView, SceneView},
     viewport::{VIEWPORT_HANDLE, ViewportTexture},
 };
 
@@ -125,7 +129,7 @@ impl Plugin for PanelsPlugin {
         .add_systems(PostStartup, aim.before(CameraUpdateSystems))
         .add_systems(
             PreUpdate,
-            keep_focused
+            (put_back, keep_focused)
                 .after(EguiInputSet::WriteEguiEvents)
                 .before(EguiPreUpdateSet::BeginPass),
         )
@@ -133,7 +137,8 @@ impl Plugin for PanelsPlugin {
         .add_systems(
             PostUpdate,
             (aim, keep_cameras_clear).before(CameraUpdateSystems),
-        );
+        )
+        .add_systems(PostUpdate, follow_camera);
     }
 
     /// The camera is made before any schedule runs, so that Stop, which
@@ -237,6 +242,219 @@ pub(crate) struct Panels {
     told: (f32, f32),
     /// A field just lost the keyboard and has yet to set what was typed.
     settle: bool,
+    /// When the panels were last looked at for what there is to keep, in
+    /// seconds of real time.
+    looked: f32,
+    /// The scene view's camera and its pose, as last seen. There is none
+    /// while the game plays, and Stop makes a new one.
+    camera: Option<(Entity, [f32; 6])>,
+    /// What the editor was last told the panels look like.
+    kept: String,
+    /// What the editor gave back, until the next frame puts it in place.
+    restore: Option<Kept>,
+}
+
+/// How many seconds pass between looks at what the panels look like: soon
+/// enough to be kept before a rebuild.
+const LOOK_EVERY: f32 = 0.5;
+
+/// The names egui keeps the two panels' widths under.
+const HIERARCHY: &str = "hierarchy";
+const INSPECTOR: &str = "inspector";
+/// Where egui's memory has how far down the Hierarchy is scrolled, and where
+/// to scroll it once its rows are listed.
+const SCROLL: &str = "hierarchy scroll";
+const SCROLL_TO: &str = "hierarchy scroll to";
+
+/// What egui's memory knows the fold of `entity`'s row in the Hierarchy by.
+fn fold_id(entity: u64) -> Id {
+    Id::new(("hierarchy fold", entity))
+}
+
+/// What a restart of the game would lose of the panels and the scene view,
+/// for the editor to keep meanwhile ([`Report::PanelState`]).
+///
+/// Each thing is read from egui and put back by hand. egui can write its
+/// whole memory, but that feature of it turns on features of serde, smallvec
+/// and accesskit, which Bevy shares: every game would build most of Bevy
+/// again.
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+#[serde(default)]
+struct Kept {
+    /// How wide the Hierarchy and the Inspector are, in egui's points.
+    widths: [Option<f32>; 2],
+    /// The entities whose children the Hierarchy shows.
+    unfolded: Vec<u64>,
+    /// How far down the Hierarchy is scrolled.
+    scroll: f32,
+    /// The Inspector shows every detail.
+    details: bool,
+    /// The Inspector's crate groups a click opened (true) or folded.
+    groups: Vec<(String, bool)>,
+    /// The entity the Inspector shows and how far down it is scrolled.
+    inspector_scroll: Option<(u64, f32)>,
+    /// The scene view's camera: what it looks at, its yaw, pitch and
+    /// distance.
+    camera: Option<[f32; 6]>,
+}
+
+impl Kept {
+    /// What egui's memory has of the panels: their widths, the folds of the
+    /// listed `entities` and the Hierarchy's scroll.
+    fn seen(ctx: &egui::Context, entities: impl Iterator<Item = u64>) -> Self {
+        let width = |panel: &str| {
+            PanelState::load(ctx, Id::new(panel)).map(|state| state.outer_rect.width())
+        };
+        let open = |entity: &u64| {
+            CollapsingState::load(ctx, fold_id(*entity)).is_some_and(|fold| fold.is_open())
+        };
+        Self {
+            widths: [HIERARCHY, INSPECTOR].map(width),
+            unfolded: entities.filter(open).collect(),
+            scroll: ctx
+                .data(|data| data.get_temp(Id::new(SCROLL)))
+                .unwrap_or(0.0),
+            ..default()
+        }
+    }
+
+    /// The widths, the folds and the scroll back into egui's memory.
+    fn put(&self, ctx: &egui::Context) {
+        for (panel, width) in [HIERARCHY, INSPECTOR].into_iter().zip(self.widths) {
+            if let Some(width) = width.filter(|width| width.is_finite() && *width > 0.0) {
+                // Only the width is read back; egui keeps it to its range.
+                let outer_rect =
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 0.0));
+                ctx.data_mut(|data| {
+                    data.insert_persisted(Id::new(panel), PanelState { outer_rect });
+                });
+            }
+        }
+        for entity in &self.unfolded {
+            let mut fold = CollapsingState::load_with_default_open(ctx, fold_id(*entity), false);
+            fold.set_open(true);
+            fold.store(ctx);
+        }
+        // egui adds to the offset: a number out of all proportion would
+        // overflow there.
+        if self.scroll.is_finite() && self.scroll > 0.0 {
+            let scroll = self.scroll.min(MAX_SCROLL);
+            ctx.data_mut(|data| data.insert_temp(Id::new(SCROLL_TO), scroll));
+        }
+    }
+}
+
+/// Where the scene view's camera is: what it looks at, its yaw, pitch and
+/// distance.
+fn pose(camera: &EditorCamera) -> [f32; 6] {
+    let focus = camera.focus;
+    [
+        focus.x,
+        focus.y,
+        focus.z,
+        camera.yaw,
+        camera.pitch,
+        camera.distance,
+    ]
+}
+
+/// The scene view's camera back at `pose`. It keeps that pose: a game
+/// camera in the scene, whose pose it would start from, is not taken up
+/// again.
+fn set_pose(camera: &mut EditorCamera, pose: [f32; 6]) {
+    let [x, y, z, yaw, pitch, distance] = pose;
+    if pose.iter().all(|value| value.is_finite()) {
+        *camera = EditorCamera {
+            focus: Vec3::new(x, y, z),
+            yaw,
+            pitch,
+            distance,
+            adopted: true,
+        };
+    }
+}
+
+/// Remembers where the scene view's camera is while there is one. Play
+/// takes it away and Stop makes a new one, which starts where the last one
+/// was instead of at the scene's own camera.
+fn follow_camera(mut panels: ResMut<Panels>, mut cameras: Query<(Entity, &mut EditorCamera)>) {
+    let Ok((entity, mut camera)) = cameras.single_mut() else {
+        return;
+    };
+    if let Some((last, pose)) = panels.camera
+        && last != entity
+    {
+        set_pose(&mut camera, pose);
+    }
+    panels.camera = Some((entity, pose(&camera)));
+}
+
+/// The editor hands back what the last game's panels looked like. Once it
+/// is in place the editor is told again: by then it may have kept what this
+/// game looked like as it started.
+pub(crate) fn restore(world: &mut World, state: &str) -> Result<(), String> {
+    let kept: Kept = serde_json::from_str(state)
+        .map_err(|error| format!("what the panels looked like does not read: {error}"))?;
+    if let Some(mut panels) = world.get_resource_mut::<Panels>() {
+        panels.restore = Some(kept);
+    }
+    Ok(())
+}
+
+/// Puts what the editor handed back in place, between egui's passes.
+fn put_back(world: &mut World) {
+    let Some(kept) = world.resource_mut::<Panels>().restore.take() else {
+        return;
+    };
+    let mut contexts = world.query_filtered::<&mut EguiContext, With<PanelsCamera>>();
+    if let Ok(mut context) = contexts.single_mut(world) {
+        kept.put(context.get_mut());
+    }
+    // As the pose of a camera that is gone: `follow_camera` puts the one
+    // there is at it, or the one Stop makes when this game started playing.
+    if let Some(pose) = kept.camera {
+        world.resource_mut::<Panels>().camera = Some((Entity::PLACEHOLDER, pose));
+    }
+    world.resource_mut::<Inspecting>().panel.set_look(Look {
+        details: kept.details,
+        groups: kept.groups,
+        scroll: kept.inspector_scroll,
+    });
+}
+
+/// Tells the editor what the panels look like, when that changed since it
+/// was last told.
+fn keep(world: &mut World, ctx: &egui::Context) {
+    // By the clock, not by frames: a slow game is looked at as often.
+    let now = world.resource::<Time<Real>>().elapsed_secs();
+    let mut panels = world.resource_mut::<Panels>();
+    if now - panels.looked < LOOK_EVERY || panels.restore.is_some() {
+        return;
+    }
+    panels.looked = now;
+    // The camera Play took away is still where it was.
+    let camera = panels.camera.map(|(_, pose)| pose);
+    let listed = world.resource::<Listed>().entities.iter();
+    let seen = Kept::seen(ctx, listed.map(|entity| entity.id));
+    let look = world.resource::<Inspecting>().panel.look();
+    let kept = Kept {
+        details: look.details,
+        groups: look.groups,
+        inspector_scroll: look.scroll,
+        // A number that is none would not read back, and the rest with it.
+        camera: camera.filter(|pose| pose.iter().all(|value| value.is_finite())),
+        ..seen
+    };
+    let Ok(state) = serde_json::to_string(&kept) else {
+        return;
+    };
+    let mut panels = world.resource_mut::<Panels>();
+    if panels.kept != state {
+        send_report(&Report::PanelState {
+            state: state.clone(),
+        });
+        panels.kept = state;
+    }
 }
 
 impl Panels {
@@ -559,7 +777,7 @@ fn draw(world: &mut World) {
 
     let mut left = 0.0;
     if asked.hierarchy && !previewing {
-        let panel = egui::Panel::left("hierarchy")
+        let panel = egui::Panel::left(HIERARCHY)
             .default_size(220.0)
             .show(&mut root, |ui| {
                 hierarchy(ui, world.resource::<Listed>(), selected, editing)
@@ -610,7 +828,7 @@ fn draw(world: &mut World) {
                 addable: &inspecting.addable,
                 crate_name: inspecting.crate_name.as_deref(),
             };
-            egui::Panel::right("inspector")
+            egui::Panel::right(INSPECTOR)
                 .default_size(320.0)
                 .show(&mut root, |ui| inspecting.panel.ui(ui, &inspected, editing))
         });
@@ -655,6 +873,7 @@ fn draw(world: &mut World) {
         panels.told = (left, right);
         send_report(&Report::PanelLayout { left, right });
     }
+    keep(world, &ctx);
 }
 
 /// Where the focused field's text cursor is, in viewport pixels.
@@ -768,7 +987,7 @@ fn hierarchy(
     let depth = |&(_, depth): &(usize, usize)| depth;
     // Folds start closed, as Unity's do: placed models' parts, thousands in a
     // big scene, and a group's members are seldom what is picked here.
-    let fold = |row: &(usize, usize)| (Id::new(("hierarchy fold", entity(row).id)), false);
+    let fold = |row: &(usize, usize)| (fold_id(entity(row).id), false);
     // A new selection, picked in the scene view too, opens the folds above
     // it once it is listed.
     let at = rows.iter().position(|row| Some(entity(row).id) == selected);
@@ -796,31 +1015,34 @@ fn hierarchy(
         .y
         .max(ui.text_style_height(&egui::TextStyle::Body) + 2.0 * spacing.button_padding.y);
     let visible = unfolded(ui.ctx(), rows, depth, fold);
-    ScrollArea::vertical().auto_shrink(false).show_rows(
-        ui,
-        row_height,
-        visible.len(),
-        |ui, range| {
-            for &at in &visible[range] {
-                tree_row(ui, rows, at, depth, fold, |ui, row| {
-                    let entity = entity(row);
-                    let is_selected = Some(entity.id) == selected;
-                    // Entities the game spawns while running are not saved.
-                    let mut text = RichText::new(entity.label());
-                    text = if entity.scene { text } else { text.italics() };
-                    text = text.color(if entity.name.is_none() || !entity.scene {
-                        MUTED
-                    } else {
-                        TEXT
-                    });
-                    if ui.selectable_label(is_selected, text).clicked() {
-                        let pick = (!is_selected).then(|| Entity::from_bits(entity.id));
-                        click = Some(Click::Select(pick));
-                    }
+    let mut area = ScrollArea::vertical().auto_shrink(false);
+    // Back where the last game's was, once there are rows again.
+    if !visible.is_empty()
+        && let Some(offset) = ui.data_mut(|data| data.remove_temp::<f32>(Id::new(SCROLL_TO)))
+    {
+        area = area.vertical_scroll_offset(offset);
+    }
+    let output = area.show_rows(ui, row_height, visible.len(), |ui, range| {
+        for &at in &visible[range] {
+            tree_row(ui, rows, at, depth, fold, |ui, row| {
+                let entity = entity(row);
+                let is_selected = Some(entity.id) == selected;
+                // Entities the game spawns while running are not saved.
+                let mut text = RichText::new(entity.label());
+                text = if entity.scene { text } else { text.italics() };
+                text = text.color(if entity.name.is_none() || !entity.scene {
+                    MUTED
+                } else {
+                    TEXT
                 });
-            }
-        },
-    );
+                if ui.selectable_label(is_selected, text).clicked() {
+                    let pick = (!is_selected).then(|| Entity::from_bits(entity.id));
+                    click = Some(Click::Select(pick));
+                }
+            });
+        }
+    });
+    ui.data_mut(|data| data.insert_temp(Id::new(SCROLL), output.state.offset.y));
     click
 }
 
@@ -1019,6 +1241,174 @@ mod tests {
         };
         assert_eq!(panels.scene_middle(), Some([590.0, 360.0]));
         assert_eq!(Panels::default().scene_middle(), None);
+    }
+
+    #[test]
+    fn keeps_what_the_panels_look_like_for_the_editor() {
+        let mut world = panels(200.0, 300.0);
+        let camera = EditorCamera {
+            focus: Vec3::new(1.0, 2.0, 3.0),
+            yaw: 0.5,
+            pitch: -0.25,
+            distance: 12.0,
+            adopted: false,
+        };
+        let kept = Kept {
+            widths: [Some(300.0), None],
+            unfolded: vec![7],
+            details: true,
+            inspector_scroll: Some((7, 40.0)),
+            camera: Some(pose(&camera)),
+            ..default()
+        };
+        let state = serde_json::to_string(&kept).unwrap();
+
+        // Handed back by the editor: waits for the next frame, and the
+        // editor is told what the panels look like once it is in place.
+        restore(&mut world, &state).unwrap();
+        let panels = world.resource::<Panels>();
+        assert_eq!(panels.restore.as_ref(), Some(&kept));
+        assert_eq!(panels.kept, "");
+
+        // The camera is back, and stays: the scene's own camera is not
+        // taken up again.
+        let mut moved = EditorCamera {
+            adopted: false,
+            ..camera
+        };
+        moved.distance = 99.0;
+        set_pose(&mut moved, pose(&camera));
+        assert_eq!(
+            moved,
+            EditorCamera {
+                adopted: true,
+                ..camera
+            }
+        );
+
+        // From a plugin that kept less, or nonsense: what reads is used.
+        assert_eq!(serde_json::from_str::<Kept>("{}").unwrap(), Kept::default());
+        assert!(restore(&mut world, "not json").is_err());
+        let mut still = camera;
+        set_pose(&mut still, [f32::NAN; 6]);
+        assert_eq!(still, camera);
+    }
+
+    #[test]
+    fn the_scene_views_camera_is_where_it_was_after_play() {
+        let mut world = panels(200.0, 300.0);
+        let camera = EditorCamera {
+            focus: Vec3::new(1.0, 2.0, 3.0),
+            yaw: 0.5,
+            pitch: -0.25,
+            distance: 12.0,
+            adopted: true,
+        };
+        let first = world.spawn(camera).id();
+        world.run_system_cached(follow_camera).unwrap();
+        assert_eq!(
+            world.resource::<Panels>().camera,
+            Some((first, pose(&camera)))
+        );
+
+        // Play takes the camera away: its pose is still known, for the
+        // editor to keep.
+        world.despawn(first);
+        world.run_system_cached(follow_camera).unwrap();
+        assert_eq!(
+            world.resource::<Panels>().camera,
+            Some((first, pose(&camera)))
+        );
+
+        // Stop makes a new one, at the scene's own camera: it goes back.
+        let fresh = EditorCamera {
+            distance: 5.0,
+            adopted: false,
+            ..camera
+        };
+        let second = world.spawn(fresh).id();
+        world.run_system_cached(follow_camera).unwrap();
+        assert_eq!(world.get::<EditorCamera>(second), Some(&camera));
+        assert_eq!(
+            world.resource::<Panels>().camera,
+            Some((second, pose(&camera)))
+        );
+
+        // A game that started playing never had a camera. Handed the last
+        // game's, it tells that pose on, and Stop's camera goes there.
+        let mut world = panels(200.0, 300.0);
+        world.init_resource::<Inspecting>();
+        let kept = Kept {
+            camera: Some(pose(&camera)),
+            ..default()
+        };
+        restore(&mut world, &serde_json::to_string(&kept).unwrap()).unwrap();
+        put_back(&mut world);
+        world.run_system_cached(follow_camera).unwrap();
+        assert_eq!(
+            world.resource::<Panels>().camera.map(|(_, pose)| pose),
+            kept.camera
+        );
+        let stopped = world.spawn(fresh).id();
+        world.run_system_cached(follow_camera).unwrap();
+        assert_eq!(world.get::<EditorCamera>(stopped), Some(&camera));
+    }
+
+    #[test]
+    fn a_new_game_takes_back_the_widths_the_folds_and_the_scroll() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut entities = vec![
+            r#"{"id":1,"name":"Barrel","asset":"models/barrel.glb"}"#.to_owned(),
+            r#"{"id":2,"name":"Stave","parent":1,"scene":false}"#.to_owned(),
+        ];
+        entities.extend((3..1000).map(|id| format!(r#"{{"id":{id},"name":"Rock {id}"}}"#)));
+        let entities = listed(&entities.join(","));
+        let ids = || entities.entities.iter().map(|entity| entity.id);
+        let panel = |ui: &mut egui::Ui| {
+            egui::Panel::left(HIERARCHY)
+                .default_size(220.0)
+                .show(ui, |ui| hierarchy(ui, &entities, None, false));
+        };
+
+        // As a game starts: its own width, all folded, at the top.
+        let mut first = Harness::new_ui(panel);
+        first.run();
+        let fresh = Kept::seen(&first.ctx, ids());
+        assert_eq!(fresh.widths, [Some(220.0), None]);
+        assert_eq!((fresh.unfolded.as_slice(), fresh.scroll), (&[][..], 0.0));
+
+        // A scroll out of all proportion, as only a hand-written state has,
+        // is cut down before egui gets it.
+        let wild = egui::Context::default();
+        Kept {
+            scroll: 1e30,
+            ..default()
+        }
+        .put(&wild);
+        assert_eq!(
+            wild.data(|data| data.get_temp::<f32>(Id::new(SCROLL_TO))),
+            Some(MAX_SCROLL)
+        );
+
+        // Handed what the last game's looked like, before it draws.
+        let kept = Kept {
+            widths: [Some(300.0), None],
+            unfolded: vec![1],
+            scroll: 400.0,
+            ..default()
+        };
+        let mut next = Harness::new_ui(panel);
+        kept.put(&next.ctx);
+        next.run();
+        assert_eq!(Kept::seen(&next.ctx, ids()), kept);
+        assert!(next.query_by_label("Barrel").is_none(), "scrolled past");
+
+        // Scrolled back to the top, the fold is open.
+        next.ctx
+            .data_mut(|data| data.insert_temp(Id::new(SCROLL_TO), 0.0_f32));
+        next.run();
+        assert!(next.query_by_label("Stave").is_some());
     }
 
     #[test]

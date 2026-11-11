@@ -53,13 +53,20 @@ use serde_json::Value;
 ///     [`PanelAction`]'s component edits, the keyboard for its fields in
 ///     [`Command::PanelInput`] and [`Report::PanelFocus`],
 ///     [`Report::Copied`] and [`Report::PanelLayout`].
-pub const VERSION: u32 = 16;
+/// 17. What the panels and the scene view look like, for the editor to keep
+///     while the game restarts: [`Report::PanelState`] and
+///     [`Command::PanelState`].
+pub const VERSION: u32 = 17;
 
 /// The first protocol whose plugins draw the Hierarchy panel themselves.
 pub const HIERARCHY_PROTOCOL: u32 = 15;
 
 /// The first protocol whose plugins draw the Inspector panel themselves.
 pub const INSPECTOR_PROTOCOL: u32 = 16;
+
+/// The first protocol whose plugins say what their panels look like and
+/// take it back after a restart.
+pub const PANEL_STATE_PROTOCOL: u32 = 17;
 
 /// Set by the editor to the panels it leaves to the game, separated by
 /// commas: `hierarchy`, `inspector`. An editor that draws a panel itself
@@ -210,6 +217,11 @@ pub enum Command {
     /// The keyboard for a field of a panel the game draws, while the game
     /// says one has it ([`Report::PanelFocus`]).
     PanelInput(PanelInput),
+    /// Puts the panels and the scene view back the way the last
+    /// [`Report::PanelState`] said they were, in a game started since.
+    PanelState {
+        state: String,
+    },
     /// Picks the scene view's handle tool.
     Tool {
         tool: Tool,
@@ -770,6 +782,11 @@ pub enum Report {
     /// from its left and from its right edge, when that changes, so the
     /// editor knows where the scene view between them is.
     PanelLayout { left: f32, right: f32 },
+    /// What the panels the game draws and the scene view look like now:
+    /// what is folded and scrolled, how wide the panels are, where the scene
+    /// view's camera is. Only the plugin reads it; the editor keeps the
+    /// latest and hands it to the next game ([`Command::PanelState`]).
+    PanelState { state: String },
     /// The outcome of `save`.
     Saved { error: Option<String> },
     /// The outcome of `save_prefab` and `apply_prefab`.
@@ -1465,6 +1482,19 @@ mod tests {
                 ime: None
             })
         );
+        // What the panels look like goes to the editor and comes back as is.
+        let state = Report::PanelState {
+            state: r#"{"details":true}"#.into(),
+        };
+        assert_eq!(Report::parse(&state.line()), Some(state));
+        let back = request(r#"{"command":"panel_state","state":"{\"details\":true}","seq":3}"#);
+        assert_eq!(
+            back.command,
+            Command::PanelState {
+                state: r#"{"details":true}"#.into()
+            }
+        );
+        assert!(!back.command.is_input());
         // An editor that never sends the scale, and one that does.
         assert_eq!(
             request(r#"{"command":"viewport","name":"a"}"#).command,

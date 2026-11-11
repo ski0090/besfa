@@ -17,6 +17,9 @@ it, as `panel_input`.
   the viewport right of the panel; a click there still picks, and a click on
   the panel never reaches the scene.
 - The cameras' narrowed viewports never reach the scene file.
+- What the panels and the scene view look like (`panel_state`: folds, widths,
+  scroll, the Inspector's details, the scene view's camera) is told to the
+  editor when it changes, and a game handed it back looks the same.
 - A click on a field of the Inspector takes the keyboard (`panel_focus`, with
   the text cursor's place for the input method); typing and Enter set the
   value in the game at once and tell the editor (`edited`); copying hands the
@@ -53,8 +56,13 @@ press in the scene closing an open menu, fly keys sent during a right press
 on the panel leaving the scene view where it was, the panel still answering
 after Stop, the Inspector's name field (focus, typing, the `edited` report,
 copy, letting the keyboard go, a typed value set before a save, before a
-fast click on the scene and before a handle is dragged), and Play, a `screenshot` with `game`, Stop and
-Save leaving the scene file as the save before Play wrote it.
+fast click on the scene and before a handle is dragged), Play, a
+`screenshot` with `game`, Stop and Save leaving the scene file as the save
+before Play wrote it, and a second game, built again after the first is
+killed, taking back the first one's widened Hierarchy and zoomed scene view
+from its `panel_state`, which is reported only when it changes, and the
+scene view's camera where it was after Play and Stop in that game, with
+nothing handed back.
 
 ## Gotchas
 

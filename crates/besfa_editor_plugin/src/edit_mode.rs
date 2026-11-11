@@ -416,6 +416,7 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::PanelInput(input) => panels::input(world, input),
+        Command::PanelState { state } => panels::restore(world, &state),
         Command::Tool { tool } => {
             if let Some(mut view) = world.get_resource_mut::<SceneView>() {
                 view.tool = tool;
