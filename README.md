@@ -30,6 +30,7 @@ The editor and the game are separate processes. The editor starts the game with 
 | `besfa_editor` | The egui desktop editor |
 | `besfa_cli` | The `besfa` command: create projects, prebuild Bevy, build, test and run games, take screenshots, run the MCP server |
 | `besfa_protocol` | Messages between the editor and the game |
+| `besfa_ui` | The theme, languages and tree the editor shares with the panels a game draws |
 | `besfa_editor_plugin` | The Bevy plugin the editor runs games with |
 | `besfa_components` | Components games ship: scene file, terrain, sky, animation state machines |
 | `besfa_net` | Dedicated servers and their connections |

@@ -27,7 +27,7 @@ use crate::{
     panels::{ACCENT, ERROR, MUTED, Reimport, TEXT, panel_header, section, tag},
     project,
     review::{self, Change, Edits, ROOT, Review},
-    scene::{Scene, tree_rows},
+    scene::Scene,
 };
 
 const VIEWS: [(View, &str, &str); 6] = [
@@ -847,7 +847,7 @@ impl ModelPreview {
         if model.parts.is_empty() {
             tag(ui, "No parts");
         }
-        let rows = tree_rows(&model.parts);
+        let rows = besfa_protocol::tree_rows(&model.parts);
         // Long part lists scroll on their own, so what follows stays near.
         ScrollArea::vertical()
             .id_salt("preview_parts")

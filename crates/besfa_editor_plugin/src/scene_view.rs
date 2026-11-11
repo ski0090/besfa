@@ -24,6 +24,7 @@ use bevy::{
 use crate::{
     ground::transform_value,
     inspect::{Selected, report_selection, send_report},
+    panels::PanelsCamera,
     preview::{ModelPreview, PreviewCamera},
     scene::SceneEntity,
 };
@@ -280,6 +281,7 @@ fn park_game_cameras(
         (
             Without<EditorCamera>,
             Without<PreviewCamera>,
+            Without<PanelsCamera>,
             Without<Parked>,
         ),
     >,
@@ -386,9 +388,16 @@ fn spawn_editor_camera(mut commands: Commands, mut images: ResMut<Assets<Image>>
             TextureFormat::Rgba8UnormSrgb,
             None,
         );
-        editor.insert(RenderTarget::Image(images.add(image).into()));
+        let image = images.add(image);
+        editor.insert(RenderTarget::Image(image.clone().into()));
+        commands.insert_resource(HeadlessView(image));
     }
 }
+
+/// The picture the scene view draws into when the game has no window and no
+/// viewport, which the panels the game draws share.
+#[derive(Resource)]
+pub(crate) struct HeadlessView(pub(crate) Handle<Image>);
 
 /// Starts the view where the game's camera looks once the scene has one.
 fn adopt_game_camera(

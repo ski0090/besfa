@@ -21,10 +21,9 @@ mod scene;
 mod terrain;
 mod viewport;
 
-use std::sync::Arc;
 
 use eframe::{
-    egui::{self, Color32, ViewportCommand},
+    egui::{self, ViewportCommand},
     egui_wgpu, wgpu,
 };
 
@@ -57,7 +56,7 @@ fn main() -> eframe::Result {
         "Besfa Editor",
         options,
         Box::new(|cc| {
-            style(&cc.egui_ctx);
+            besfa_ui::style(&cc.egui_ctx);
             i18n::load();
             let recent = RecentProjects::standard();
             Ok(Box::new(App {
@@ -118,30 +117,6 @@ impl eframe::App for App {
             self.title = title;
         }
     }
-}
-
-/// The editor's dark theme, with a system font for text egui's fonts lack,
-/// like Korean in paths and build errors.
-fn style(ctx: &egui::Context) {
-    if let Ok(font) = std::fs::read(r"C:\Windows\Fonts\malgun.ttf") {
-        let mut fonts = egui::FontDefinitions::default();
-        fonts
-            .font_data
-            .insert("system".into(), Arc::new(egui::FontData::from_owned(font)));
-        for family in fonts.families.values_mut() {
-            family.push("system".into());
-        }
-        ctx.set_fonts(fonts);
-    }
-    ctx.set_theme(egui::Theme::Dark);
-    ctx.style_mut_of(egui::Theme::Dark, |style| {
-        let visuals = &mut style.visuals;
-        visuals.panel_fill = Color32::from_rgb(0x1A, 0x1D, 0x23);
-        visuals.window_fill = Color32::from_rgb(0x20, 0x24, 0x2B);
-        visuals.extreme_bg_color = Color32::from_rgb(0x11, 0x13, 0x16);
-        visuals.selection.bg_fill = Color32::from_rgb(0x2E, 0x3D, 0x5A);
-        visuals.hyperlink_color = panels::ACCENT;
-    });
 }
 
 /// Builds and games the editor starts inherit this job, and the kernel kills

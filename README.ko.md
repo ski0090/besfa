@@ -30,6 +30,7 @@ Besfa는 Windows에서 쓰는 [Bevy](https://bevy.org/) 게임 엔진용 데스�
 | `besfa_editor` | egui 데스크톱 에디터 |
 | `besfa_cli` | `besfa` 명령: 프로젝트 만들기, Bevy 미리 빌드, 게임 빌드·테스트·실행, 스크린샷, MCP 서버 띄우기 |
 | `besfa_protocol` | 에디터와 게임 사이의 메시지 |
+| `besfa_ui` | 에디터와 게임이 그리는 패널이 함께 쓰는 테마, 번역, 트리 |
 | `besfa_editor_plugin` | 에디터가 게임을 띄울 때 넣는 Bevy 플러그인 |
 | `besfa_components` | 게임이 릴리스에 담는 컴포넌트: 씬 파일, 지형, 하늘, 애니메이션 상태 기계 |
 | `besfa_net` | 데디케이트 서버와 그 연결 |

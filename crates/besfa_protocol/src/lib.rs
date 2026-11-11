@@ -9,6 +9,8 @@
 //! talks to an older plugin: a message only ever gains fields that the other
 //! side may leave out, and [`VERSION`] counts what a plugin understands.
 
+use std::collections::{HashMap, HashSet};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -44,7 +46,25 @@ use serde_json::Value;
 /// 12. Markers in pictures of the scene, [`Command::Screenshot`]'s `markers`.
 /// 13. [`Command::Reset`].
 /// 14. Pictures of what the player sees, [`Command::Screenshot`]'s `game`.
-pub const VERSION: u32 = 14;
+/// 15. The Hierarchy panel drawn by the game in the editor's viewport when
+///     the editor names it in [`PANELS_ENV`]: [`Report::Panel`],
+///     [`Command::Viewport`]'s `scale` and [`Command::Language`].
+pub const VERSION: u32 = 15;
+
+/// The first protocol whose plugins draw the Hierarchy panel themselves.
+pub const HIERARCHY_PROTOCOL: u32 = 15;
+
+/// Set by the editor to the panels it leaves to the game, separated by
+/// commas: `hierarchy`. An editor that draws a panel itself does not name
+/// it, so a newer plugin never draws it a second time.
+pub const PANELS_ENV: &str = "BESFA_PANELS";
+
+/// Set by the editor to the pixels a point of its interface takes, so the
+/// game's panels are drawn at the editor's size.
+pub const SCALE_ENV: &str = "BESFA_SCALE";
+
+/// Set by the editor to `ko` when it shows Korean, so the game's panels do.
+pub const LANGUAGE_ENV: &str = "BESFA_LANG";
 
 /// The game's cargo feature that brings in `besfa_editor_plugin`, in games
 /// that depend on `besfa_components` and leave the editor out of release
@@ -210,9 +230,17 @@ pub enum Command {
         fast: bool,
     },
     /// Renders into the editor's shared texture of this name from now on,
-    /// after the editor resized the viewport.
+    /// after the editor resized the viewport. `scale`: the pixels a point of
+    /// the editor's interface takes now, for the game's panels.
     Viewport {
         name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f32>,
+    },
+    /// Shows the panels the game draws in Korean, or in English: the editor's
+    /// language changed while the game runs.
+    Language {
+        korean: bool,
     },
     /// Shows the glTF model at `path`, relative to the asset directory, in
     /// the model preview instead of the scene view, loading it unless it is
@@ -609,6 +637,23 @@ pub enum PointerEvent {
     Scroll { delta: f32 },
 }
 
+/// What a click in a panel the game draws asks of the editor.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum PanelAction {
+    /// The Hierarchy's add menu. `pointer`: the middle of the scene view the
+    /// panels leave, in viewport pixels, where what is made is placed.
+    Spawn {
+        kind: SpawnKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pointer: Option<[f32; 2]>,
+    },
+    /// Its buttons, which act on the selected entity.
+    Duplicate,
+    Delete,
+    SavePrefab,
+}
+
 /// What the game tells the editor.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -640,6 +685,9 @@ pub enum Report {
     /// The game picked an entity itself, or none once the selected one is
     /// gone.
     Selected { id: Option<u64> },
+    /// A panel the game draws was clicked. The editor does what its own
+    /// panel did, so the edit is recorded for undo the same way.
+    Panel(PanelAction),
     /// The outcome of `save`.
     Saved { error: Option<String> },
     /// The outcome of `save_prefab` and `apply_prefab`.
@@ -862,6 +910,36 @@ fn yes() -> bool {
 pub fn crate_of(path: &str) -> &str {
     let path = path.strip_prefix('<').unwrap_or(path);
     path.split("::").next().unwrap_or(path)
+}
+
+/// Entities in tree order, as their index in `entities` and their depth. An
+/// entity whose parent is not reported is a root.
+pub fn tree_rows(entities: &[EntityInfo]) -> Vec<(usize, usize)> {
+    let ids: HashSet<u64> = entities.iter().map(|entity| entity.id).collect();
+    let mut children: HashMap<Option<u64>, Vec<usize>> = HashMap::new();
+    for (at, entity) in entities.iter().enumerate() {
+        let parent = entity.parent.filter(|parent| ids.contains(parent));
+        children.entry(parent).or_default().push(at);
+    }
+    let mut rows = Vec::new();
+    // A parent cycle would be a game bug; this keeps it from hanging the list.
+    let mut seen = HashSet::new();
+    let mut stack: Vec<(usize, usize)> = children
+        .get(&None)
+        .into_iter()
+        .flatten()
+        .rev()
+        .map(|&at| (at, 0))
+        .collect();
+    while let Some((at, depth)) = stack.pop() {
+        let id = entities[at].id;
+        if seen.insert(id) {
+            rows.push((at, depth));
+            let below = children.get(&Some(id)).into_iter().flatten().rev();
+            stack.extend(below.map(|&child| (child, depth + 1)));
+        }
+    }
+    rows
 }
 
 #[cfg(test)]
@@ -1199,6 +1277,73 @@ mod tests {
         assert_eq!(run_features(new), "bevy/dynamic_linking,besfa_editor");
         let elsewhere = "[package.metadata]\nbesfa_editor = 1\n";
         assert_eq!(run_features(elsewhere), "bevy/dynamic_linking");
+    }
+
+    #[test]
+    fn lists_entities_as_a_tree() {
+        let entity = |id, parent| EntityInfo {
+            id,
+            name: None,
+            parent,
+            scene: true,
+            asset: None,
+            sky: false,
+        };
+        let entities = [
+            entity(1, None),
+            entity(2, Some(1)),
+            entity(3, Some(2)),
+            entity(4, None),
+            entity(5, Some(6)),
+            entity(6, Some(5)),
+        ];
+        let rows: Vec<_> = tree_rows(&entities)
+            .iter()
+            .map(|&(at, depth)| (entities[at].id, depth))
+            .collect();
+        // The cycle has no root, so it is not listed.
+        assert_eq!(rows, [(1, 0), (2, 1), (3, 2), (4, 0)]);
+    }
+
+    #[test]
+    fn panel_clicks_are_reports() {
+        let spawn = Report::Panel(PanelAction::Spawn {
+            kind: SpawnKind::Cube,
+            pointer: None,
+        });
+        assert_eq!(
+            spawn.line(),
+            r#"@besfa {"type":"panel","action":"spawn","kind":"cube"}"#
+        );
+        assert_eq!(Report::parse(&spawn.line()), Some(spawn));
+        assert_eq!(
+            Report::parse(r#"@besfa {"type":"panel","action":"save_prefab"}"#),
+            Some(Report::Panel(PanelAction::SavePrefab))
+        );
+        assert_eq!(
+            Report::parse(
+                r#"@besfa {"type":"panel","action":"spawn","kind":"cube","pointer":[594.0,360.0]}"#
+            ),
+            Some(Report::Panel(PanelAction::Spawn {
+                kind: SpawnKind::Cube,
+                pointer: Some([594.0, 360.0]),
+            }))
+        );
+        // An editor that never sends the scale, and one that does.
+        assert_eq!(
+            request(r#"{"command":"viewport","name":"a"}"#).command,
+            Command::Viewport {
+                name: "a".into(),
+                scale: None
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"viewport","name":"a","scale":1.5}"#).command,
+            Command::Viewport {
+                name: "a".into(),
+                scale: Some(1.5)
+            }
+        );
     }
 
     #[test]

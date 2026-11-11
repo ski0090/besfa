@@ -1,0 +1,9 @@
+[package]
+name = "besfa_ui"
+version = "0.1.0"
+edition = "2024"
+description = "What the Besfa editor and the panels a game draws for it share: the theme, the languages and the tree"
+
+[dependencies]
+# The egui both eframe (the editor) and bevy_egui (the game) build on.
+egui = { version = "0.36", default-features = false }

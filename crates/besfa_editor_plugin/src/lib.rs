@@ -15,6 +15,7 @@ mod edit_mode;
 mod ground;
 mod input;
 mod inspect;
+mod panels;
 mod part_changes;
 mod preview;
 mod reimport;
@@ -61,8 +62,12 @@ pub fn default_plugins() -> PluginGroupBuilder {
 
     plugins = besfa_components::windowless(plugins, 60.0);
     if viewport {
-        plugins.add(viewport::ViewportPlugin)
-    } else {
-        plugins
+        plugins = plugins.add(viewport::ViewportPlugin);
     }
+    // Set by an editor that leaves these panels to the game. besfa_mcp
+    // does not set it, so its game draws none.
+    if panels::PanelsPlugin::asked() {
+        plugins = plugins.add(panels::PanelsPlugin);
+    }
+    plugins
 }

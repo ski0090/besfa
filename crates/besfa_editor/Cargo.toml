@@ -7,6 +7,8 @@ description = "The Besfa editor: project hub and scene editor for Bevy games"
 [dependencies]
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
 besfa_protocol = { path = "../besfa_protocol" }
+# The theme, languages and tree shared with the panels a game draws.
+besfa_ui = { path = "../besfa_ui" }
 # Keeps component fields in the order the game reports them.
 serde_json = { version = "1", features = ["preserve_order"] }
 # Editor data files under the project's besfa/ folder are RON.

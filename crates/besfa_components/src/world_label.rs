@@ -100,7 +100,7 @@ fn follow(
             .map(|target| target.entity())
             .or(only)
             .and_then(|camera| cameras.get(camera).ok())
-            .and_then(|(_, camera, eye)| camera.world_to_viewport(eye, place).ok())
+            .and_then(|(_, camera, eye)| viewport_pixel(camera, eye, place))
             .map(|pixel| corner(label, pixel));
         match shown {
             Some(pixel) => {
@@ -111,6 +111,20 @@ fn follow(
             None => node.display = Display::None,
         }
     }
+}
+
+/// Where `place` shows, in pixels from the top left of the camera's
+/// viewport, which is where bevy_ui lays a node out. `world_to_viewport`
+/// counts from the top left of the whole target, so for a camera that draws
+/// into part of it, as beside the editor's panels, the node would be off by
+/// where that part starts.
+pub(crate) fn viewport_pixel(
+    camera: &Camera,
+    eye: &GlobalTransform,
+    place: Vec3,
+) -> Option<Vec2> {
+    let origin = camera.logical_viewport_rect()?.min;
+    Some(camera.world_to_viewport(eye, place).ok()? - origin)
 }
 
 #[cfg(test)]

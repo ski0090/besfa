@@ -1,7 +1,7 @@
 //! What the running game reports about its world, read from its output, and
 //! the changes the editor made to it, for undo.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use besfa_protocol::{Command, ComponentData, ComponentType, EntityInfo, Report, SystemInfo};
 
@@ -12,9 +12,6 @@ use crate::inspector::Inspected;
 #[derive(Default)]
 pub struct Scene {
     pub entities: Vec<EntityInfo>,
-    /// `entities` in tree order, made when they are reported rather than
-    /// each frame: a scene of placed models reports thousands.
-    rows: Vec<(usize, usize)>,
     /// The entity whose components are shown; the game reports them.
     pub selected: Option<u64>,
     pub components: Vec<ComponentData>,
@@ -51,11 +48,6 @@ impl Scene {
         self.changes
     }
 
-    /// The entities as [`tree_rows`] lists them.
-    pub fn rows(&self) -> &[(usize, usize)] {
-        &self.rows
-    }
-
     pub fn selected_entity(&self) -> Option<&EntityInfo> {
         self.entities
             .iter()
@@ -87,7 +79,6 @@ impl Scene {
         match &report {
             Report::Entities { entities } => {
                 self.entities = entities.clone();
-                self.rows = tree_rows(&self.entities);
             }
             // A report for an earlier selection, or from before the latest
             // change, may still be in the pipe. Early plugins send no count.
@@ -160,36 +151,6 @@ impl Scene {
             ..Self::default()
         };
     }
-}
-
-/// Entities in tree order, as their index in `entities` and their depth. An
-/// entity whose parent is not reported is a root.
-pub fn tree_rows(entities: &[EntityInfo]) -> Vec<(usize, usize)> {
-    let ids: HashSet<u64> = entities.iter().map(|entity| entity.id).collect();
-    let mut children: HashMap<Option<u64>, Vec<usize>> = HashMap::new();
-    for (at, entity) in entities.iter().enumerate() {
-        let parent = entity.parent.filter(|parent| ids.contains(parent));
-        children.entry(parent).or_default().push(at);
-    }
-    let mut rows = Vec::new();
-    // A parent cycle would be a game bug; this keeps it from hanging the editor.
-    let mut seen = HashSet::new();
-    let mut stack: Vec<(usize, usize)> = children
-        .get(&None)
-        .into_iter()
-        .flatten()
-        .rev()
-        .map(|&at| (at, 0))
-        .collect();
-    while let Some((at, depth)) = stack.pop() {
-        let id = entities[at].id;
-        if seen.insert(id) {
-            rows.push((at, depth));
-            let below = children.get(&Some(id)).into_iter().flatten().rev();
-            stack.extend(below.map(|&child| (child, depth + 1)));
-        }
-    }
-    rows
 }
 
 /// A change to the scene as the game commands that make and unmake it.
@@ -392,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_the_placed_file_and_lists_the_tree() {
+    fn finds_the_placed_file() {
         let mut scene = Scene::default();
         scene.handle(
             r#"@besfa {"type":"entities","entities":[{"id":1,"asset":"prefabs/a.scn.ron"},{"id":2,"parent":1},{"id":3,"parent":2},{"id":4},{"id":5,"parent":6},{"id":6,"parent":5}]}"#,
@@ -401,13 +362,6 @@ mod tests {
         assert_eq!(scene.placement(deep).map(|e| e.id), Some(1));
         assert_eq!(scene.placement(&scene.entities[3]), None);
         assert_eq!(scene.placement(&scene.entities[4]), None, "a cycle ends");
-        let rows: Vec<_> = scene
-            .rows()
-            .iter()
-            .map(|&(at, d)| (scene.entities[at].id, d))
-            .collect();
-        // The cycle has no root, so it is not listed.
-        assert_eq!(rows, [(1, 0), (2, 1), (3, 2), (4, 0)]);
     }
 
     #[test]

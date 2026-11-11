@@ -16,7 +16,8 @@ use std::{
 };
 
 use besfa_protocol::{
-    Command, Placement, Report, Request, ScatterBrush, SpawnKind, TerrainBrush, Tool, VERSION,
+    Command, HIERARCHY_PROTOCOL, LANGUAGE_ENV, PANELS_ENV, PanelAction, Placement, Report, Request,
+    SCALE_ENV, ScatterBrush, SpawnKind, TerrainBrush, Tool, VERSION,
 };
 use eframe::{
     egui::{
@@ -30,12 +31,11 @@ use serde_json::Value;
 use crate::{
     agent::{self, AgentPanel, AgentSettings, Agents, Route},
     animation,
-    i18n::{self, t},
+    i18n::{self, Language, t},
     inspector::{Action, Inspector, TRANSFORM},
     organization::{ORGANIZATIONS_DIR, OrgPanel},
     panels::{
-        self, ACCENT, AssetAction, AssetBrowser, GOOD, HierarchyAction, MUTED, Reimport, WARNING,
-        prebuild_status,
+        self, ACCENT, AssetAction, AssetBrowser, GOOD, MUTED, Reimport, WARNING, prebuild_status,
     },
     preview::ModelPreview,
     process::{CliProcess, Output, Prebuild},
@@ -163,6 +163,9 @@ pub struct Editor {
     /// The viewport panel's size in physical pixels, which the texture
     /// follows once it settles.
     wanted_viewport: Option<[u32; 2]>,
+    /// The pixels a point takes in the editor's window, for the panels the
+    /// game draws.
+    scale: f32,
     resize_at: Option<Instant>,
     input: ViewportInput,
     tool: Tool,
@@ -262,6 +265,7 @@ impl Editor {
             scatter: ScatterTools::default(),
             right_tab: RightTab::Inspector,
             wanted_viewport: None,
+            scale: 1.0,
             resize_at: None,
             input: ViewportInput::default(),
             tool: Tool::Translate,
@@ -371,14 +375,21 @@ impl Editor {
                     },
                 }
             });
-        egui::Panel::left("hierarchy")
-            .default_size(220.0)
-            .show(ui, |ui| {
-                let protocol = self.protocol.unwrap_or_default();
-                if let Some(action) = panels::hierarchy(ui, &self.scene, !self.playing, protocol) {
-                    self.on_hierarchy(action);
-                }
-            });
+        // The game draws the Hierarchy in the viewport. A plugin from before
+        // it did leaves the game without one.
+        if self.protocol.is_some() && !self.draws_hierarchy() {
+            egui::Panel::left("hierarchy")
+                .default_size(220.0)
+                .show(ui, |ui| {
+                    panels::panel_header(ui, "Hierarchy", |_| {});
+                    ui.label(
+                        RichText::new(t(
+                            "Update besfa_editor_plugin in the game to show the Hierarchy.",
+                        ))
+                        .color(MUTED),
+                    );
+                });
+        }
         egui::Panel::right("inspector")
             .default_size(320.0)
             .show(ui, |ui| {
@@ -576,6 +587,7 @@ impl Editor {
         }
         // Read by besfa_editor_plugin: start paused, play on `play`.
         let mut env = vec![("BESFA_EDIT_MODE", "1")];
+        let scale = ctx.pixels_per_point().to_string();
         if let Some((name, adapter)) = &shared {
             // The plugin takes the size from the texture itself. It opens the
             // texture on D3D12, on the editor's GPU.
@@ -583,7 +595,14 @@ impl Editor {
                 ("BESFA_VIEWPORT", name.as_str()),
                 ("WGPU_BACKEND", "dx12"),
                 ("WGPU_ADAPTER_NAME", adapter),
+                // The panels left to the game, which draws them in the
+                // viewport at the editor's size and in its language.
+                (PANELS_ENV, "hierarchy"),
+                (SCALE_ENV, scale.as_str()),
             ]);
+            if Language::current() == Language::Korean {
+                env.push((LANGUAGE_ENV, "ko"));
+            }
             match &path {
                 // DXC, or FXC should it fail to load.
                 Some(path) => env.extend([("WGPU_DX12_COMPILER", "auto"), ("PATH", path.as_str())]),
@@ -809,6 +828,11 @@ impl Editor {
         match report {
             Report::Hello { version } => {
                 self.protocol = Some(version);
+                // The language may have changed since the game was started.
+                if self.draws_hierarchy() {
+                    let korean = Language::current() == Language::Korean;
+                    self.send(Command::Language { korean });
+                }
                 if let Some(warning) = protocol_warning(version) {
                     self.log(warning);
                 }
@@ -818,6 +842,7 @@ impl Editor {
                 self.protocol = Some(0);
                 self.log(protocol_warning(0).unwrap_or_default());
             }
+            Report::Panel(action) => self.on_panel(action),
             // What one drop moved, undone in one step.
             Report::Moved { moves } if !moves.is_empty() => {
                 let set = |id, value| Self::set_command(id, TRANSFORM, value);
@@ -1087,21 +1112,24 @@ impl Editor {
         }
     }
 
-    fn on_hierarchy(&mut self, action: HierarchyAction) {
+    /// Whether the game's plugin draws the Hierarchy itself.
+    fn draws_hierarchy(&self) -> bool {
+        self.protocol
+            .is_some_and(|protocol| protocol >= HIERARCHY_PROTOCOL)
+    }
+
+    /// A click in the Hierarchy the game draws.
+    fn on_panel(&mut self, action: PanelAction) {
         match action {
-            // The game reports the selected entity's components back.
-            HierarchyAction::Select(id) => {
-                self.scene.select(id);
-                self.send(Command::Select { id });
-            }
             // The game reports what it spawns, which records the undo.
-            // Lights and cameras keep their own height and aim.
-            HierarchyAction::Spawn(kind) => {
+            // Lights and cameras keep their own height and aim. The rest
+            // goes where the game says the scene view's middle is.
+            PanelAction::Spawn { kind, pointer } => {
                 let pointer = matches!(
                     kind,
                     SpawnKind::Empty | SpawnKind::Cube | SpawnKind::Sphere | SpawnKind::Plane
                 )
-                .then(|| self.viewport_middle())
+                .then(|| pointer.or_else(|| self.viewport_middle()))
                 .flatten();
                 self.edit(
                     Command::Spawn {
@@ -1114,10 +1142,11 @@ impl Editor {
                     vec![],
                 )
             }
-            HierarchyAction::Duplicate => self.duplicate(),
-            HierarchyAction::Delete => self.delete(),
-            HierarchyAction::SavePrefab => {
-                if let Some(entity) = self.scene.selected_entity() {
+            PanelAction::Duplicate => self.duplicate(),
+            PanelAction::Delete => self.delete(),
+            // Edit mode's, as the button is.
+            PanelAction::SavePrefab => {
+                if let Some(entity) = self.scene.selected_entity().filter(|_| !self.playing) {
                     self.dialog = Some(Dialog::PrefabName(
                         entity.name.clone().unwrap_or("Prefab".into()),
                     ));
@@ -1445,8 +1474,14 @@ impl Editor {
                         self.agents.check(ui.ctx());
                     }
                 };
+                let language = Language::current();
                 if let Some(error) = i18n::settings_menu(ui, agent_settings) {
                     self.log(format!("Could not save the settings: {error}"));
+                }
+                // The panels the game draws follow, on a plugin that draws any.
+                if Language::current() != language && self.draws_hierarchy() {
+                    let korean = Language::current() == Language::Korean;
+                    self.send(Command::Language { korean });
                 }
                 ui.menu_button(t("Help"), |ui| {
                     let assets = Button::new(t("Bevy Assets")).shortcut_text("Ctrl+9");
@@ -1644,9 +1679,10 @@ impl Editor {
                     "Click select  ·  Right-drag orbit  ·  Right-hold + WASD/QE fly  ·  Middle-drag pan  ·  Scroll zoom  ·  F focus",
                 )
             };
+            // On the right: the game draws the Hierarchy over the left.
             ui.painter().text(
-                rect.left_bottom() + egui::vec2(8.0, -8.0),
-                egui::Align2::LEFT_BOTTOM,
+                rect.right_bottom() + egui::vec2(-8.0, -8.0),
+                egui::Align2::RIGHT_BOTTOM,
                 hint,
                 egui::FontId::proportional(11.0),
                 Color32::from_white_alpha(0x99),
@@ -1694,6 +1730,7 @@ impl Editor {
     /// Follows the viewport panel's size, `physical` pixels, once it settles.
     fn fit_viewport(&mut self, physical: egui::Vec2, ctx: &egui::Context) {
         let size = [physical.x, physical.y].map(|side| side.round().clamp(16.0, 4096.0) as u32);
+        self.scale = ctx.pixels_per_point();
         if Some(size) != self.wanted_viewport {
             self.wanted_viewport = Some(size);
             self.resize_at = Some(Instant::now() + RESIZE_DELAY);
@@ -1717,7 +1754,8 @@ impl Editor {
             Ok(viewport) => {
                 let name = viewport.name.clone();
                 self.retired.extend(self.viewport.replace(viewport));
-                self.viewport_request = self.send(Command::Viewport { name });
+                let scale = Some(self.scale);
+                self.viewport_request = self.send(Command::Viewport { name, scale });
             }
             Err(error) => self.log(format!("Could not resize the viewport: {error}")),
         }
@@ -2104,6 +2142,9 @@ fn protocol_warning(version: u32) -> Option<String> {
                 .into(),
         );
     }
+    if version < HIERARCHY_PROTOCOL {
+        return Some("The plugin is too old to show the Hierarchy.".into());
+    }
     let (age, fix) = if version < VERSION {
         ("older", "plugin")
     } else {
@@ -2265,6 +2306,12 @@ mod tests {
                 .unwrap()
                 .contains("Update the editor")
         );
+        // Before the game drew the Hierarchy, there is none to show.
+        assert!(
+            protocol_warning(HIERARCHY_PROTOCOL - 1)
+                .unwrap()
+                .contains("too old to show the Hierarchy")
+        );
     }
 
     #[test]
@@ -2347,6 +2394,37 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(editor.history.can_redo() && !editor.history.can_undo());
+        drop(editor);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_click_in_the_games_hierarchy_does_what_the_editors_did() {
+        let dir = std::env::temp_dir().join(format!("besfa_panel_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
+        let mut editor = Editor::new(Project::new(dir.to_string_lossy()), None, &waiting, &ctx);
+        editor
+            .scene
+            .handle(r#"@besfa {"type":"entities","entities":[{"id":7,"name":"Ship"}]}"#);
+        let save_prefab = Report::Panel(PanelAction::SavePrefab);
+
+        // Nothing selected: the game's button is off, and a stray report
+        // opens nothing.
+        editor.on_report(save_prefab.clone(), &ctx);
+        assert!(editor.dialog.is_none());
+
+        // The game selects on a click and says so, then asks for the prefab.
+        editor.scene.handle(r#"@besfa {"type":"selected","id":7}"#);
+        editor.on_report(save_prefab.clone(), &ctx);
+        assert!(matches!(&editor.dialog, Some(Dialog::PrefabName(name)) if name == "Ship"));
+
+        // Prefabs are saved in edit mode only.
+        editor.dialog = None;
+        editor.playing = true;
+        editor.on_report(save_prefab, &ctx);
+        assert!(editor.dialog.is_none());
         drop(editor);
         let _ = fs::remove_dir_all(dir);
     }
@@ -2561,7 +2639,7 @@ mod tests {
                 },
                 state,
             );
-        crate::style(&harness.ctx);
+        besfa_ui::style(&harness.ctx);
         harness.run();
         save(&mut harness, "hub", None);
 
@@ -2657,7 +2735,7 @@ mod tests {
                 },
                 screen,
             );
-        crate::style(&harness.ctx);
+        besfa_ui::style(&harness.ctx);
         let ctx = harness.ctx.clone();
         let read = |editor: &mut Editor, lines: &[&str]| {
             for line in lines {
@@ -2689,30 +2767,6 @@ mod tests {
         harness.state_mut().callouts.clear();
         harness.run_steps(4);
         save(&mut harness, "inspector", Some(RIGHT_PANEL));
-
-        // What the hierarchy's + adds.
-        harness
-            .get_all_by_label("➕")
-            .find(|node| node.rect().min.x < 300.0)
-            .unwrap()
-            .click();
-        harness.remove_cursor();
-        harness.run_steps(4);
-        save(
-            &mut harness,
-            "hierarchy-add-menu",
-            Some(egui::Rect::from_min_size(
-                egui::pos2(0.0, 46.0),
-                egui::vec2(380.0, 290.0),
-            )),
-        );
-        harness
-            .get_all_by_label("➕")
-            .find(|node| node.rect().min.x < 300.0)
-            .unwrap()
-            .click();
-        harness.remove_cursor();
-        harness.run_steps(4);
 
         // Terrain painting, and the sky.
         let editor = &mut harness.state_mut().editor;
@@ -2994,7 +3048,7 @@ mod tests {
             .build_ui(|ui| {
                 animation_panel(ui, scene);
             });
-        crate::style(&harness.ctx);
+        besfa_ui::style(&harness.ctx);
         harness.run_steps(4);
         save(
             &mut harness,

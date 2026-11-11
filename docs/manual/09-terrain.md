@@ -45,7 +45,7 @@ Hierarchy 위쪽 **➕**에서 **Terrain**을 고릅니다. 원점에 한 변 25
 - 오른쪽·가운데 버튼과 휠의 카메라 조작은 그대로 쓸 수 있습니다.
 - **Shift**를 누르고 있는 동안 Raise와 Lower가 서로 바뀝니다. 다른 도구에서는 Shift가 아무것도 하지 않습니다.
 - 누른 뒤 뗄 때까지가 한 획이고, 한 획은 [되돌리기](06-undo.md) 한 번으로 되돌립니다.
-- 붓을 쓰는 동안 지형의 핸들은 숨고, 뷰포트 왼쪽 아래 안내가 `Paint to sculpt; hold Shift to invert.`로 바뀝니다.
+- 붓을 쓰는 동안 지형의 핸들은 숨고, 뷰포트 오른쪽 아래 안내가 `Paint to sculpt; hold Shift to invert.`로 바뀝니다.
 
 ## 겉면 칠하기
 
