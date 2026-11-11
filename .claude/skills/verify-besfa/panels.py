@@ -7,11 +7,24 @@ import json, os, queue, subprocess, sys, threading, time
 project = sys.argv[1]
 env = dict(os.environ, NO_COLOR="1", BESFA_EDIT_MODE="1", BESFA_HEADLESS="1",
            BESFA_PANELS="hierarchy,inspector", BESFA_SCALE="1")
-game = subprocess.Popen(["cargo", "run", "-q", "--features", "bevy/dynamic_linking,besfa_editor"],
-                        cwd=project, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-lines = queue.Queue()
-threading.Thread(target=lambda: [lines.put(l.rstrip()) for l in game.stdout], daemon=True).start()
+
+
+def start():
+    """Starts the game; `game` and `lines` are the one running now."""
+    global game, lines
+    game = subprocess.Popen(["cargo", "run", "-q", "--features", "bevy/dynamic_linking,besfa_editor"],
+                            cwd=project, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+    lines = queue.Queue()
+    out, sink = game.stdout, lines
+    threading.Thread(target=lambda: [sink.put(l.rstrip()) for l in out], daemon=True).start()
+
+
+def stop():
+    subprocess.run(["taskkill", "/PID", str(game.pid), "/T", "/F"], capture_output=True)
+
+
+start()
 seq = 0
 failures = []
 NAME = "bevy_ecs::name::Name"
@@ -295,8 +308,58 @@ try:
     after = open(scene, encoding="utf-8").read()
     check("Play, Stop, Save leaves the scene file as it was", before == after, f"{len(before)} vs {len(after)} bytes")
     check("the game is still running", game.poll() is None)
+
+    # ---- what the panels and the scene view look like is kept for the next
+    # game: zoom the scene view and make the Hierarchy wider by its edge
+    press("move", 590, 300)
+    send({"command": "pointer", "event": "scroll", "delta": 240})
+    press("move", 221, 300)
+    press("down", 221, 300)
+    press("move", 400, 300)
+    press("up", 400, 300)
+    states = kinds(reports(2.5), "panel_state")
+    state = states[-1]["state"] if states else "{}"
+    check("the game tells the editor what its panels look like", bool(states), state)
+    kept = json.loads(state)
+    check("and only when that changes", not kinds(reports(2.0), "panel_state"))
+
+    # The next game is built again, as after a change to the game's code.
+    stop()
+    os.utime(os.path.join(project, "src", "main.rs"))
+    start()
+    first = reports(300, lambda r: r.get("type") == "entities")
+    first += reports(1.5)
+    fresh = kinds(first, "panel_state")
+    fresh = json.loads(fresh[-1]["state"]) if fresh else {}
+    check("a new game starts with the scene view where it comes", fresh.get("camera") not in (None, kept.get("camera")), f"{fresh.get('camera')} vs {kept.get('camera')}")
+    # The game says how much of the viewport its panels cover.
+    wide = kept.get("widths", [None])[0]
+    layout = kinds(first, "panel_layout")[-1:]
+    check("and with its Hierarchy as wide as it comes", bool(layout) and layout[0]["left"] not in (None, wide), f"{layout} vs {wide}")
+
+    send({"command": "panel_state", "state": state})
+    seen = reports(3, lambda r: r.get("type") == "panel_layout")
+    layout = kinds(seen, "panel_layout")[-1:]
+    check("handed the last game's, the Hierarchy is as wide as it was", bool(layout) and layout[0]["left"] == wide, f"{layout} vs {wide}")
+    press("move", 401, 300)
+    press("down", 401, 300)
+    press("move", 380, 300)
+    press("up", 380, 300)
+    again = kinds(reports(2.5), "panel_state")
+    camera = json.loads(again[-1]["state"]).get("camera") if again else None
+    check("and the scene view's camera is where it was", camera is not None and camera == kept.get("camera"), f"{camera} vs {kept.get('camera')}")
+
+    # Stop starts the scene over in the same game, which puts the scene
+    # view's camera back at the scene's own: handed its state, it stays.
+    n = send({"command": "reset"}, wait=True)
+    reports(30, lambda r: r.get("type") == "hello")
+    n = send({"command": "panel_state", "state": again[-1]["state"] if again else state}, wait=True)
+    reports(5, lambda r: r.get("type") == "done" and r.get("seq") == n)
+    after = kinds(reports(2.5), "panel_state")
+    camera = json.loads(after[-1]["state"]).get("camera") if after else kept.get("camera")
+    check("and after Stop too", camera == kept.get("camera") and game.poll() is None, f"{camera} vs {kept.get('camera')}")
 finally:
-    subprocess.run(["taskkill", "/PID", str(game.pid), "/T", "/F"], capture_output=True)
+    stop()
     shot = os.path.join(project, "panel-shot.png")
     if os.path.exists(shot):
         os.remove(shot)
