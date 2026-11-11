@@ -47,7 +47,6 @@ pub fn prebuild_status(ui: &mut Ui, prebuild: &Prebuild) {
     };
 }
 
-/// What the add menu spawns, with its label.
 /// Files the scene can show: glTF models, and scene and prefab files.
 pub fn can_place(path: &str) -> bool {
     can_preview(path) || path.ends_with(".scn.ron")

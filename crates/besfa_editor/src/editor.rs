@@ -828,6 +828,11 @@ impl Editor {
         match report {
             Report::Hello { version } => {
                 self.protocol = Some(version);
+                // The language may have changed since the game was started.
+                if self.draws_hierarchy() {
+                    let korean = Language::current() == Language::Korean;
+                    self.send(Command::Language { korean });
+                }
                 if let Some(warning) = protocol_warning(version) {
                     self.log(warning);
                 }
@@ -1117,13 +1122,14 @@ impl Editor {
     fn on_panel(&mut self, action: PanelAction) {
         match action {
             // The game reports what it spawns, which records the undo.
-            // Lights and cameras keep their own height and aim.
-            PanelAction::Spawn { kind } => {
+            // Lights and cameras keep their own height and aim. The rest
+            // goes where the game says the scene view's middle is.
+            PanelAction::Spawn { kind, pointer } => {
                 let pointer = matches!(
                     kind,
                     SpawnKind::Empty | SpawnKind::Cube | SpawnKind::Sphere | SpawnKind::Plane
                 )
-                .then(|| self.viewport_middle())
+                .then(|| pointer.or_else(|| self.viewport_middle()))
                 .flatten();
                 self.edit(
                     Command::Spawn {

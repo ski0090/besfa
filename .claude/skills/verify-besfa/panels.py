@@ -45,13 +45,17 @@ def reports(seconds, until=None):
     return seen
 
 
+def press(event, x, y, button="left"):
+    command = {"command": "pointer", "event": event, "x": x, "y": y}
+    if event != "move":
+        command["button"] = button
+    send(command)
+    time.sleep(0.12)
+
+
 def click(x, y):
     for event in ("move", "down", "up"):
-        command = {"command": "pointer", "event": event, "x": x, "y": y}
-        if event != "move":
-            command["button"] = "left"
-        send(command)
-        time.sleep(0.12)
+        press(event, x, y)
 
 
 def check(name, ok, detail=""):
@@ -88,6 +92,8 @@ try:
         if asked:
             break
     check("the add menu asks the editor to spawn", bool(asked) and asked[0].get("action") == "spawn", str(asked))
+    middle = (asked[0].get("pointer") or [0, 0]) if asked else [0, 0]
+    check("and says where the scene view's middle is", 700 < middle[0] < 800 and middle[1] == 360, str(middle))
 
     click(50, 41)
     seen = reports(2, lambda r: r.get("type") == "selected")
@@ -102,6 +108,33 @@ try:
     seen = reports(1.5)
     check("a click on the empty panel does not reach the scene", not kinds(seen, "selected"), str(kinds(seen, "selected")))
 
+    # A menu left open closes on a press in the scene.
+    click(115, 11)
+    time.sleep(0.4)
+    click(900, 600)
+    reports(0.8)
+    click(125, 36)
+    seen = reports(1.2)
+    check("a press in the scene closes the add menu", not kinds(seen, "panel"), str(kinds(seen, "panel")))
+
+    # A right press on the panel is the panel's: the fly keys the editor
+    # sends while it is held do not fly the scene view on the next hold.
+    click(900, 600)
+    reports(0.8)
+    press("move", 50, 400)
+    press("down", 50, 400, "right")
+    send({"command": "fly", "right": 0, "up": 0, "forward": 1, "fast": False})
+    time.sleep(0.3)
+    press("up", 50, 400, "right")
+    press("move", 900, 600)
+    press("down", 900, 600, "right")
+    time.sleep(0.6)
+    press("up", 900, 600, "right")
+    reports(0.5)
+    click(754, 360)
+    seen = reports(2, lambda r: r.get("type") == "selected")
+    check("fly keys during a press on the panel leave the scene view still", kinds(seen, "selected")[-1:] == [{"type": "selected", "id": cube}], str(kinds(seen, "selected")))
+
     scene = os.path.join(project, "assets", "scenes", "main.scn.ron")
     n = send({"command": "save"}, wait=True)
     reports(10, lambda r: r.get("type") == "done" and r.get("seq") == n)
@@ -114,7 +147,12 @@ try:
     shot = kinds(seen, "screenshot")
     check("a picture of the game is still taken while it plays", bool(shot) and not shot[-1].get("error"), str(shot))
     send({"command": "reset"})
+    seen = reports(20, lambda r: r.get("type") == "entities")
     time.sleep(1.5)
+    click(50, 41)
+    seen = reports(2, lambda r: r.get("type") == "selected")
+    picked = kinds(seen, "selected")[-1:]
+    check("the panel is still there after Stop", bool(picked) and picked[0]["id"] is not None, str(picked))
     n = send({"command": "save"}, wait=True)
     seen = reports(10, lambda r: r.get("type") == "done" and r.get("seq") == n)
     after = open(scene, encoding="utf-8").read()

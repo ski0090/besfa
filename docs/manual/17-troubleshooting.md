@@ -58,7 +58,7 @@ Log에 이런 메시지가 나올 수 있습니다.
 
 ## 메뉴나 기능이 설명서와 달라요
 
-Hierarchy의 **➕** 메뉴에 **Terrain**이나 **Sky**가 없거나, 🌲 흩뿌리기·땅에 내려놓기 같은 기능이 꺼져 있다면 대개 게임의 플러그인이 오래된 것입니다. [플러그인을 업데이트](13-updating.md#게임의-플러그인-업데이트)하세요.
+Hierarchy가 보이지 않거나, 🌲 흩뿌리기·땅에 내려놓기 같은 기능이 꺼져 있다면 대개 게임의 플러그인이 오래된 것입니다. [플러그인을 업데이트](13-updating.md#게임의-플러그인-업데이트)하세요.
 
 모델 미리보기를 열 때 `The model preview needs the game running with besfa_editor_plugin speaking protocol 3 or later. Update the plugin.`이 나와도 같습니다. 게임이 아직 떠 있지 않을 때도 이 메시지가 나오니, 게임이 뜬 뒤에 다시 해 보세요.
 

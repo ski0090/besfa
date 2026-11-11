@@ -431,10 +431,12 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             forward,
             fast,
         } => {
-            // The preview takes the button's release, which would stop it.
+            // The preview takes the button's release, which would stop it,
+            // and so does a panel the game draws while the press is its.
             if world
                 .get_resource::<ModelPreview>()
                 .is_some_and(|preview| preview.showing)
+                || panels::holds(world)
             {
                 return Ok(());
             }

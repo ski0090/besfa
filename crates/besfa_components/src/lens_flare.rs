@@ -149,9 +149,12 @@ fn flare(
         return None;
     }
     let size = camera.logical_viewport_size()?;
-    let at = camera
-        .world_to_viewport(transform, transform.translation() + *direction)
-        .ok()?;
+    // In the viewport's own pixels, as `size` and the rings' nodes are.
+    let at = crate::world_label::viewport_pixel(
+        camera,
+        transform,
+        transform.translation() + *direction,
+    )?;
     let strength = sun.flare.min(1.0) * fade(at, size);
     if strength <= 0.0 {
         return None;

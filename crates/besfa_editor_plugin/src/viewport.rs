@@ -34,7 +34,7 @@ impl Plugin for ViewportPlugin {
 
 /// Keeps the wgpu texture alive for as long as the view renders into it.
 #[derive(Resource)]
-struct ViewportTexture(
+pub(crate) struct ViewportTexture(
     #[expect(dead_code, reason = "held only to keep the texture alive")] wgpu::Texture,
 );
 
@@ -45,7 +45,14 @@ fn open_viewport(
     device: Res<RenderDevice>,
     mut views: ResMut<ManualTextureViews>,
     mut exit: MessageWriter<AppExit>,
+    opened: Option<Res<ViewportTexture>>,
 ) {
+    // Stop runs the startup schedules again in this process. The viewport is
+    // still open, and after a resize it is another texture than the one
+    // `BESFA_VIEWPORT` names, which the editor has let go of.
+    if opened.is_some() {
+        return;
+    }
     let name = std::env::var("BESFA_VIEWPORT").unwrap_or_default();
     let texture = match shared::open(device.wgpu_device(), &name) {
         Ok(texture) => texture,

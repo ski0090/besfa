@@ -638,12 +638,15 @@ pub enum PointerEvent {
 }
 
 /// What a click in a panel the game draws asks of the editor.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum PanelAction {
-    /// The Hierarchy's add menu.
+    /// The Hierarchy's add menu. `pointer`: the middle of the scene view the
+    /// panels leave, in viewport pixels, where what is made is placed.
     Spawn {
         kind: SpawnKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pointer: Option<[f32; 2]>,
     },
     /// Its buttons, which act on the selected entity.
     Duplicate,
@@ -1306,6 +1309,7 @@ mod tests {
     fn panel_clicks_are_reports() {
         let spawn = Report::Panel(PanelAction::Spawn {
             kind: SpawnKind::Cube,
+            pointer: None,
         });
         assert_eq!(
             spawn.line(),
@@ -1315,6 +1319,15 @@ mod tests {
         assert_eq!(
             Report::parse(r#"@besfa {"type":"panel","action":"save_prefab"}"#),
             Some(Report::Panel(PanelAction::SavePrefab))
+        );
+        assert_eq!(
+            Report::parse(
+                r#"@besfa {"type":"panel","action":"spawn","kind":"cube","pointer":[594.0,360.0]}"#
+            ),
+            Some(Report::Panel(PanelAction::Spawn {
+                kind: SpawnKind::Cube,
+                pointer: Some([594.0, 360.0]),
+            }))
         );
         // An editor that never sends the scale, and one that does.
         assert_eq!(

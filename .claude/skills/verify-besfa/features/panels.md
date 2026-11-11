@@ -36,9 +36,12 @@ python .claude/skills/verify-besfa/panels.py <project>
 
 It prints one `ok` or `FAIL` line per check and exits 1 on a failure: the row
 click and its second click, the delete button and the add menu as `panel`
-reports, a pick in the scene view right of the panel, a click on the empty
-panel that changes no selection, and Play, a `screenshot` with `game`, Stop
-and Save leaving the scene file as the save before Play wrote it.
+reports (the menu's with the scene view's middle), a pick in the scene view
+right of the panel, a click on the empty panel that changes no selection, a
+press in the scene closing an open menu, fly keys sent during a right press
+on the panel leaving the scene view where it was, the panel still answering
+after Stop, and Play, a `screenshot` with `game`, Stop and Save leaving the
+scene file as the save before Play wrote it.
 
 ## Gotchas
 
@@ -52,3 +55,8 @@ and Save leaving the scene file as the save before Play wrote it.
   UI Automation cannot click its rows.
 - The first `save` rewrites the template's scene file in the game's own
   layout, so compare a save with a later save, not with the template.
+- The scene file check cannot fail for the cameras' narrowed viewports here:
+  a windowless game's own cameras draw into no viewport, so only the scene
+  view is narrowed. In the editor the game's cameras are narrowed during
+  Play; Stop despawns them, and in edit mode they are switched off, which
+  gives them their whole target back before a save.
