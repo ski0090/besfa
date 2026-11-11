@@ -108,6 +108,18 @@ try:
     seen = reports(1.5)
     check("a click on the empty panel does not reach the scene", not kinds(seen, "selected"), str(kinds(seen, "selected")))
 
+    # A drag in the scene that starts near the panel is the scene's alone:
+    # the panel's edge stays where it is.
+    press("move", 236, 600)
+    press("down", 236, 600)
+    press("move", 500, 600)
+    press("up", 500, 600)
+    click(115, 11)
+    time.sleep(0.4)
+    click(125, 36)
+    asked = kinds(reports(1.2, lambda r: r.get("type") == "panel"), "panel")
+    check("a drag that starts beside the panel leaves its edge alone", bool(asked) and asked[0].get("pointer") == middle, str(asked))
+
     # A menu left open closes on a press in the scene.
     click(115, 11)
     time.sleep(0.4)
@@ -123,12 +135,12 @@ try:
     reports(0.8)
     press("move", 50, 400)
     press("down", 50, 400, "right")
-    send({"command": "fly", "right": 0, "up": 0, "forward": 1, "fast": False})
+    send({"command": "fly", "right": 1, "up": 0, "forward": 0, "fast": False})
     time.sleep(0.3)
     press("up", 50, 400, "right")
     press("move", 900, 600)
     press("down", 900, 600, "right")
-    time.sleep(0.6)
+    time.sleep(1.5)
     press("up", 900, 600, "right")
     reports(0.5)
     click(754, 360)

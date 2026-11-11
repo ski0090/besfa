@@ -65,10 +65,11 @@ impl PanelsPlugin {
 
 impl Plugin for PanelsPlugin {
     fn build(&self, app: &mut App) {
-        // A game with egui of its own keeps its contexts as it set them up.
-        // It has to add `EguiPlugin` before the plugins of
-        // `default_plugins()`: Bevy takes a plugin only once, and by the
-        // time the game's own are added this one has added it.
+        // ponytail: a game that adds `EguiPlugin` itself cannot run under
+        // the editor yet. Bevy takes a plugin only once and this one adds it
+        // first, as part of `default_plugins()`, and egui cannot be added
+        // before Bevy's own plugins either. Take the game's when a game
+        // with egui of its own shows up.
         if !app.is_plugin_added::<EguiPlugin>() {
             app.add_plugins(EguiPlugin::default());
             app.world_mut()
@@ -98,8 +99,8 @@ impl Plugin for PanelsPlugin {
 
     /// The camera is made before any schedule runs, so that Stop, which
     /// despawns what the game and its startup made, keeps it: with it stay
-    /// the panels' egui, its theme and font, and what is folded and how wide
-    /// the panels are.
+    /// the panels' egui, its theme and font, and how wide the panels are.
+    /// What is folded does not stay: Stop numbers the entities anew.
     fn finish(&self, app: &mut App) {
         app.world_mut().spawn((
             Name::new("Panels camera"),
@@ -161,6 +162,9 @@ pub(crate) struct Panels {
     /// viewport's size in pixels, as drawn last frame.
     left: f32,
     size: Vec2,
+    /// How far past its edge, in pixels, the panel's edge is still grabbed
+    /// to make it wider or narrower.
+    grab: f32,
     /// Where the pointer was last, in viewport pixels.
     pointer: Option<Vec2>,
     /// While a button is down: whether the press started on a panel.
@@ -171,9 +175,10 @@ pub(crate) struct Panels {
 }
 
 impl Panels {
-    /// Whether the Hierarchy's strip lies over the viewport at `x` pixels.
+    /// Whether the Hierarchy's strip, with the edge it is resized by, lies
+    /// over the viewport at `x` pixels.
     fn over(&self, x: f32) -> bool {
-        x < self.left
+        self.left > 0.0 && x < self.left + self.grab
     }
 
     /// The middle of the scene view the panels leave, in viewport pixels.
@@ -273,22 +278,28 @@ pub(crate) fn pointer(world: &mut World, event: &PointerEvent) -> bool {
     panels.pointer = at;
     let point = |x: f32, y: f32| egui::pos2(x / scale, y / scale);
     let mut events = Vec::new();
-    // The panels see every move and press, the scene's too: a row stops
-    // looking hovered once the pointer leaves, and a press on the scene
-    // closes an open menu. Whose the press is decides who acts on it.
     let taken = match *event {
         PointerEvent::Move { x, y } => {
+            // Always, so a row stops looking hovered once the pointer leaves.
             events.push(egui::Event::PointerMoved(point(x, y)));
             panels.held.unwrap_or(over)
         }
+        // Only the panels' own presses: egui would act on the scene's too,
+        // and drag the panel's edge along with a drag that starts near it.
         PointerEvent::Down { x, y, button } => {
-            events.push(egui::Event::PointerMoved(point(x, y)));
-            events.push(pressed(point(x, y), button, true));
-            *panels.held.get_or_insert(over)
+            let on_panel = *panels.held.get_or_insert(over);
+            if on_panel {
+                events.push(egui::Event::PointerMoved(point(x, y)));
+                events.push(pressed(point(x, y), button, true));
+            }
+            on_panel
         }
         PointerEvent::Up { x, y, button } => {
-            events.push(pressed(point(x, y), button, false));
-            panels.held.take().unwrap_or(over)
+            let on_panel = panels.held.take().unwrap_or(over);
+            if on_panel {
+                events.push(pressed(point(x, y), button, false));
+            }
+            on_panel
         }
         PointerEvent::Scroll { delta } => {
             if over {
@@ -305,6 +316,13 @@ pub(crate) fn pointer(world: &mut World, event: &PointerEvent) -> bool {
             over
         }
     };
+    // A press on the scene closes a menu the panels left open.
+    if matches!(event, PointerEvent::Down { .. }) && !taken {
+        let mut contexts = world.query_filtered::<&mut EguiContext, With<PanelsCamera>>();
+        if let Ok(mut context) = contexts.single_mut(world) {
+            egui::Popup::close_all(context.get_mut());
+        }
+    }
     let mut cameras = world.query_filtered::<Entity, With<PanelsCamera>>();
     if let Ok(context) = cameras.single(world) {
         for event in events {
@@ -354,6 +372,7 @@ fn draw(
             .max_rect(ctx.viewport_rect()),
     );
     panels.size = egui_to_vec2(ctx.viewport_rect().size()) * panels.scale;
+    panels.grab = ctx.global_style().interaction.resize_grab_radius_side * panels.scale;
     // The model preview shows one model, not the scene the Hierarchy lists.
     if preview.is_some_and(|preview| preview.showing) {
         panels.left = 0.0;
@@ -498,6 +517,18 @@ fn rest(size: UVec2, left: u32) -> Option<(UVec2, UVec2)> {
     (left > 0 && size.x > left).then(|| (UVec2::new(left, 0), UVec2::new(size.x - left, size.y)))
 }
 
+/// What Bevy makes of the part `given` to a camera when its target is now
+/// `size`: the part cut off at the target's edge.
+fn cut(given: (UVec2, UVec2), size: UVec2) -> (UVec2, UVec2) {
+    let mut viewport = Viewport {
+        physical_position: given.0,
+        physical_size: given.1,
+        ..default()
+    };
+    viewport.clamp_to_size(size);
+    (viewport.physical_position, viewport.physical_size)
+}
+
 /// Keeps the scene view and the game's cameras to the part of the viewport
 /// the panels leave, so nothing is drawn under them. A camera with a
 /// viewport of its own keeps it, also one the game sets later, and a camera
@@ -517,16 +548,18 @@ fn keep_cameras_clear(
             .viewport
             .as_ref()
             .map(|viewport| (viewport.physical_position, viewport.physical_size));
-        // Ours while it is what this system gave it; the game's once the
-        // game has set another.
+        // Ours while it is what this system gave it, also after Bevy cut it
+        // to a target that shrank; the game's once the game has set another.
         let ours = match (panels.kept_clear.get(&entity), now) {
-            (Some(given), Some(now)) if *given == now => true,
-            (Some(_), _) => {
-                panels.kept_clear.remove(&entity);
-                false
+            (Some(given), Some(now)) => {
+                *given == now
+                    || camera.physical_target_size().map(|size| cut(*given, size)) == Some(now)
             }
-            (None, _) => false,
+            _ => false,
         };
+        if !ours {
+            panels.kept_clear.remove(&entity);
+        }
         let in_viewport = camera.is_active && shares_target(target, headless.as_deref());
         let rest = camera
             .physical_target_size()
@@ -607,6 +640,10 @@ mod tests {
     #[test]
     fn a_press_on_the_panel_is_held_until_it_is_released() {
         let mut world = panels(200.0);
+        // The edge is grabbed from the scene's side too.
+        world.resource_mut::<Panels>().grab = 6.0;
+        assert!(covers(&mut world, Vec2::new(204.0, 10.0)));
+        assert!(!covers(&mut world, Vec2::new(207.0, 10.0)));
         let button = Button::Right;
         pointer(
             &mut world,
@@ -647,6 +684,14 @@ mod tests {
         );
         assert_eq!(rest(size, 0), None, "no panel, the whole target");
         assert_eq!(rest(size, 1280), None, "nothing left to draw into");
+        // The editor made the viewport smaller: Bevy cuts the part off at
+        // the new edge, which is still the part this module gave.
+        let given = rest(size, 220).unwrap();
+        assert_eq!(
+            cut(given, UVec2::new(900, 500)),
+            (UVec2::new(220, 0), UVec2::new(680, 500))
+        );
+        assert_eq!(cut(given, size), given);
         let panels = Panels {
             left: 220.0,
             size: size.as_vec2(),
