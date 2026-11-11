@@ -38,6 +38,7 @@ It prints one `ok` or `FAIL` line per check and exits 1 on a failure: the row
 click and its second click, the delete button and the add menu as `panel`
 reports (the menu's with the scene view's middle), a pick in the scene view
 right of the panel, a click on the empty panel that changes no selection, a
+drag starting in the scene just past the panel's edge leaving the edge alone, a
 press in the scene closing an open menu, fly keys sent during a right press
 on the panel leaving the scene view where it was, the panel still answering
 after Stop, and Play, a `screenshot` with `game`, Stop and Save leaving the

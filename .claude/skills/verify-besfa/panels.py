@@ -109,9 +109,10 @@ try:
     check("a click on the empty panel does not reach the scene", not kinds(seen, "selected"), str(kinds(seen, "selected")))
 
     # A drag in the scene that starts near the panel is the scene's alone:
-    # the panel's edge stays where it is.
-    press("move", 236, 600)
-    press("down", 236, 600)
+    # the panel's edge, at 220 and grabbed up to 3 pixels past it, stays
+    # where it is. egui would take a press up to 8 pixels past it.
+    press("move", 226, 600)
+    press("down", 226, 600)
     press("move", 500, 600)
     press("up", 500, 600)
     click(115, 11)
