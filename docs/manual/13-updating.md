@@ -69,6 +69,7 @@ cargo update -p besfa_editor_plugin
 - 아이콘은 "어느 쪽이 더 새것인지"는 구분하지 않고 다른지만 봅니다.
 - 플러그인 변경은 GitHub의 `main`에 올라가야 게임에 반영됩니다. 플러그인을 직접 고쳐 올렸다면, 에디터를 다시 시작해 미리 빌드를 새 커밋으로 올린 뒤 각 프로젝트에서 아이콘을 누르세요.
 - 설명서에서 "플러그인이 오래됐다"고 하는 메뉴나 기능이 안 보일 때도 이 아이콘을 누르면 됩니다.
+- Hierarchy와 Inspector는 게임의 플러그인이 그립니다. 플러그인이 오래됐으면 그 자리에 `Update besfa_editor_plugin in the game to show the Hierarchy.`나 `... to show the Inspector.`가 나오니, 이 아이콘을 눌러 업데이트하세요. 패널을 그리지 않던 플러그인에서 올라온 뒤 첫 빌드는 Bevy의 글자와 UI 부분을 다시 빌드해서 평소보다 오래 걸립니다.
 - [Claude Code](14-claude-code.md)가 쓰는 `besfa mcp`는 CLI를 설치할 때 알던 명령만 받고, 모르는 명령은 거절합니다. 플러그인을 업데이트해 새 명령이 생겼다면 CLI도 다시 설치하세요(`cargo install --path crates/besfa_cli`).
 - 반대로 게임의 플러그인이 그 명령보다 오래됐으면 `besfa mcp`는 `Command N needs protocol X and this game's besfa_editor_plugin speaks Y; …`라며 거절합니다. 이때는 게임에서 `cargo update -p besfa_editor_plugin`을 실행하세요.
 

@@ -70,6 +70,7 @@ Hierarchy와 Inspector는 게임이 뷰포트 안에 그립니다.
 - 오른쪽에 `Update besfa_editor_plugin in the game to show the Inspector.`가 나와도 아래와 같이 플러그인을 업데이트하세요.
 - 왼쪽에 `Update besfa_editor_plugin in the game to show the Hierarchy.`가 나오면 게임의 플러그인이 오래된 것입니다. 툴바의 ⚠를 눌러 [업데이트](13-updating.md#게임의-플러그인-업데이트)하세요.
 - 게임이 [따로 창으로 뜬](#게임이-따로-창으로-떠요) 동안에는 Hierarchy도 Inspector도 나오지 않습니다.
+- 게임 코드가 `bevy_egui`의 `EguiPlugin`을 직접 더하면 에디터에서 게임이 시작하지 못합니다. 두 패널을 그리는 플러그인이 같은 `EguiPlugin`을 먼저 더하는데, Bevy는 같은 플러그인을 두 번 받지 않기 때문입니다. 게임 자신의 egui 화면은 아직 에디터와 함께 쓸 수 없습니다.
 
 ## 게임이 따로 창으로 떠요
 
@@ -83,6 +84,7 @@ Log에 `No Windows SDK DXC found: the game compiles its shaders with FXC, which 
 
 - **Stop**을 누르면 씬이 파일에 저장된 모습으로 돌아갑니다. 실행 중(Play)에 바꾼 것은 저장되지 않습니다. [실행과 저장](05-play-and-save.md#편집-상태와-실행-상태)
 - 편집 상태에서 고친 것은 **Save scene**(Ctrl+S)으로 저장해야 다음에 열 때도 남습니다. 창 제목에 `*`가 있으면 아직 저장하지 않은 것입니다.
+- Inspector 칸에 입력하고 **Enter**를 누르지 않은 값은, 칸 바깥을 누르거나 **Ctrl+S**를 눌러야 반영됩니다. 입력하던 중에 코드가 바뀌어 게임이 다시 빌드되면 입력하던 글자는 남지 않습니다.
 - 프리팹 안쪽을 고친 것은 Save scene이 아니라 [Apply to prefab](07-assets-prefabs.md#프리팹-고치기)으로 저장합니다.
 
 ---
