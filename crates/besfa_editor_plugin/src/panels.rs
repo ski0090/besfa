@@ -21,6 +21,8 @@
 //! and the editor sends the command its own panel sent: undo, the unsaved
 //! mark and saving stay where they were.
 
+use std::collections::{HashMap, HashSet};
+
 use bevy::{
     camera::{CameraUpdateSystems, Hdr, RenderTarget, Viewport, visibility::RenderLayers},
     ecs::{entity::EntityHashMap, schedule::ScheduleLabel},
@@ -143,8 +145,8 @@ impl Plugin for PanelsPlugin {
 
     /// The camera is made before any schedule runs, so that Stop, which
     /// despawns what the game and its startup made, keeps it: with it stay
-    /// the panels' egui, its theme and font, and how wide the panels are.
-    /// What is folded does not stay: Stop numbers the entities anew.
+    /// the panels' egui, its theme and font, how wide the panels are and
+    /// what is unfolded.
     fn finish(&self, app: &mut App) {
         app.world_mut().spawn((
             Name::new("Panels camera"),
@@ -188,13 +190,39 @@ pub(crate) struct PanelsCamera;
 pub(crate) struct Listed {
     entities: Vec<EntityInfo>,
     rows: Vec<(usize, usize)>,
+    /// What egui's memory knows each entity's fold by, in the order of
+    /// `entities`.
+    folds: Vec<Id>,
 }
 
 impl Listed {
     pub(crate) fn set(&mut self, entities: &[EntityInfo]) {
         self.entities = entities.to_vec();
         self.rows = tree_rows(&self.entities);
+        self.folds = fold_ids(&self.entities, &self.rows);
     }
+}
+
+/// What egui's memory knows the fold of each entity's row by, in the order
+/// of `entities`: the names from the root down to the row, each with its
+/// count among the rows of that name beside it. Not the entity's id: Stop
+/// and a new game number the entities anew, and what was unfolded stays so.
+fn fold_ids(entities: &[EntityInfo], rows: &[(usize, usize)]) -> Vec<Id> {
+    let mut ids = vec![Id::NULL; entities.len()];
+    // The folds of the rows above the one at hand, each with the names
+    // seen under it so far. The first is above the roots.
+    let mut above: Vec<(Id, HashMap<&str, u32>)> =
+        vec![(Id::new("hierarchy fold"), HashMap::new())];
+    for &(at, depth) in rows {
+        above.truncate(depth + 1);
+        let (parent, seen) = above.last_mut().expect("the one above the roots stays");
+        let name = entities[at].name.as_deref().unwrap_or("");
+        let nth = seen.entry(name).or_default();
+        ids[at] = parent.with((name, *nth));
+        *nth += 1;
+        above.push((ids[at], HashMap::new()));
+    }
+    ids
 }
 
 /// What the Inspector shows, as the game reports it to the editor: the
@@ -265,11 +293,8 @@ const INSPECTOR: &str = "inspector";
 /// to scroll it once its rows are listed.
 const SCROLL: &str = "hierarchy scroll";
 const SCROLL_TO: &str = "hierarchy scroll to";
-
-/// What egui's memory knows the fold of `entity`'s row in the Hierarchy by.
-fn fold_id(entity: u64) -> Id {
-    Id::new(("hierarchy fold", entity))
-}
+/// Where egui's memory has the folds to open once the rows are listed.
+const UNFOLD: &str = "hierarchy unfold";
 
 /// What a restart of the game would lose of the panels and the scene view,
 /// for the editor to keep meanwhile ([`Report::PanelState`]).
@@ -283,7 +308,8 @@ fn fold_id(entity: u64) -> Id {
 struct Kept {
     /// How wide the Hierarchy and the Inspector are, in egui's points.
     widths: [Option<f32>; 2],
-    /// The entities whose children the Hierarchy shows.
+    /// The rows of the Hierarchy whose children show, each by its fold's
+    /// number ([`fold_ids`]).
     unfolded: Vec<u64>,
     /// How far down the Hierarchy is scrolled.
     scroll: f32,
@@ -299,18 +325,16 @@ struct Kept {
 }
 
 impl Kept {
-    /// What egui's memory has of the panels: their widths, the folds of the
-    /// listed `entities` and the Hierarchy's scroll.
-    fn seen(ctx: &egui::Context, entities: impl Iterator<Item = u64>) -> Self {
+    /// What egui's memory has of the panels: their widths, which of the
+    /// listed rows' `folds` are open and the Hierarchy's scroll.
+    fn seen(ctx: &egui::Context, folds: impl Iterator<Item = Id>) -> Self {
         let width = |panel: &str| {
             PanelState::load(ctx, Id::new(panel)).map(|state| state.outer_rect.width())
         };
-        let open = |entity: &u64| {
-            CollapsingState::load(ctx, fold_id(*entity)).is_some_and(|fold| fold.is_open())
-        };
+        let open = |fold: &Id| CollapsingState::load(ctx, *fold).is_some_and(|fold| fold.is_open());
         Self {
             widths: [HIERARCHY, INSPECTOR].map(width),
-            unfolded: entities.filter(open).collect(),
+            unfolded: folds.filter(open).map(|fold| fold.value()).collect(),
             scroll: ctx
                 .data(|data| data.get_temp(Id::new(SCROLL)))
                 .unwrap_or(0.0),
@@ -330,10 +354,12 @@ impl Kept {
                 });
             }
         }
-        for entity in &self.unfolded {
-            let mut fold = CollapsingState::load_with_default_open(ctx, fold_id(*entity), false);
-            fold.set_open(true);
-            fold.store(ctx);
+        // egui makes a fold's id only from what it was made of, not from
+        // its number: the folds open once the rows that have them are
+        // listed ([`hierarchy`]).
+        if !self.unfolded.is_empty() {
+            let unfolded: HashSet<u64> = self.unfolded.iter().copied().collect();
+            ctx.data_mut(|data| data.insert_temp(Id::new(UNFOLD), unfolded));
         }
         // egui adds to the offset: a number out of all proportion would
         // overflow there.
@@ -434,8 +460,7 @@ fn keep(world: &mut World, ctx: &egui::Context) {
     panels.looked = now;
     // The camera Play took away is still where it was.
     let camera = panels.camera.map(|(_, pose)| pose);
-    let listed = world.resource::<Listed>().entities.iter();
-    let seen = Kept::seen(ctx, listed.map(|entity| entity.id));
+    let seen = Kept::seen(ctx, world.resource::<Listed>().folds.iter().copied());
     let look = world.resource::<Inspecting>().panel.look();
     let kept = Kept {
         details: look.details,
@@ -987,7 +1012,22 @@ fn hierarchy(
     let depth = |&(_, depth): &(usize, usize)| depth;
     // Folds start closed, as Unity's do: placed models' parts, thousands in a
     // big scene, and a group's members are seldom what is picked here.
-    let fold = |row: &(usize, usize)| (fold_id(entity(row).id), false);
+    let fold = |&(at, _): &(usize, usize)| (listed.folds[at], false);
+    // What the last game had unfolded, once there are rows again.
+    if !rows.is_empty()
+        && let Some(unfolded) =
+            ui.data_mut(|data| data.remove_temp::<HashSet<u64>>(Id::new(UNFOLD)))
+    {
+        for id in listed
+            .folds
+            .iter()
+            .filter(|id| unfolded.contains(&id.value()))
+        {
+            let mut state = CollapsingState::load_with_default_open(ui.ctx(), *id, false);
+            state.set_open(true);
+            state.store(ui.ctx());
+        }
+    }
     // A new selection, picked in the scene view too, opens the folds above
     // it once it is listed.
     let at = rows.iter().position(|row| Some(entity(row).id) == selected);
@@ -1364,7 +1404,7 @@ mod tests {
         ];
         entities.extend((3..1000).map(|id| format!(r#"{{"id":{id},"name":"Rock {id}"}}"#)));
         let entities = listed(&entities.join(","));
-        let ids = || entities.entities.iter().map(|entity| entity.id);
+        let ids = || entities.folds.iter().copied();
         let panel = |ui: &mut egui::Ui| {
             egui::Panel::left(HIERARCHY)
                 .default_size(220.0)
@@ -1394,7 +1434,7 @@ mod tests {
         // Handed what the last game's looked like, before it draws.
         let kept = Kept {
             widths: [Some(300.0), None],
-            unfolded: vec![1],
+            unfolded: vec![entities.folds[0].value()],
             scroll: 400.0,
             ..default()
         };
@@ -1475,6 +1515,46 @@ mod tests {
         *harness.state_mut() = Some(Entity::from_bits(3));
         harness.run();
         assert!(harness.query_by_label("Mast").is_some());
+    }
+
+    #[test]
+    fn what_is_unfolded_stays_so_when_the_entities_are_numbered_anew() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let ship = |first: u64| {
+            listed(&format!(
+                r#"{{"id":{first},"name":"Ship"}},{{"id":{},"name":"Hull","parent":{first}}},{{"id":{},"name":"Ship"}},{{"id":{},"name":"Sail","parent":{}}}"#,
+                first + 1,
+                first + 2,
+                first + 3,
+                first + 2,
+            ))
+        };
+        let mut harness = Harness::new_ui_state(
+            |ui, entities: &mut Listed| {
+                hierarchy(ui, entities, None, false);
+            },
+            ship(1),
+        );
+        harness.run();
+        // The first Ship's fold, not the second's: rows of one name are
+        // told apart by their place.
+        harness.get_all_by_label("Unfold").next().unwrap().click();
+        harness.run();
+        assert!(harness.query_by_label("Hull").is_some());
+        assert!(harness.query_by_label("Sail").is_none());
+
+        // As after Stop, or in the next game: other ids, the same tree.
+        *harness.state_mut() = ship(101);
+        harness.run();
+        assert!(harness.query_by_label("Hull").is_some());
+        assert!(harness.query_by_label("Sail").is_none());
+
+        // The editor is told the fold by a number no entity's id is in.
+        let entities = harness.state();
+        let kept = Kept::seen(&harness.ctx, entities.folds.iter().copied());
+        assert_eq!(kept.unfolded, [entities.folds[0].value()]);
+        assert_eq!(entities.folds, ship(1).folds);
     }
 
     #[test]
