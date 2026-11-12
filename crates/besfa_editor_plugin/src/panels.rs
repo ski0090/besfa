@@ -836,8 +836,12 @@ pub(crate) fn reset(world: &mut World) {
     let mut contexts = world.query_filtered::<&mut EguiContext, With<PanelsCamera>>();
     if let (Some(rows), Ok(mut context)) = (rows, contexts.single_mut(world)) {
         let ctx = context.get_mut();
+        // With how far down the list is scrolled: it has no rows until
+        // the new entities are listed, and is at its top by then.
+        let seen = Kept::seen(ctx, &rows);
         Kept {
-            unfolded: Kept::seen(ctx, &rows).unfolded,
+            unfolded: seen.unfolded,
+            scroll: seen.scroll,
             ..default()
         }
         .put(ctx);
