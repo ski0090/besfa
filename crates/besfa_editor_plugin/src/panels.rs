@@ -377,7 +377,10 @@ impl Kept {
             .filter(|&&(entity, _)| fold(entity).is_some())
             .map(|&(_, place)| place)
             .collect();
-        if !starts.is_disjoint(&own) {
+        // Not while the places are new: the rows drawn before have folds
+        // of their own, closed, until the Hierarchy unfolds them.
+        let new = ctx.data(|data| data.get_temp::<bool>(Id::new(UNFOLD_NOW)).is_some());
+        if !new && !starts.is_disjoint(&own) {
             let left: HashSet<u64> = starts.difference(&own).copied().collect();
             ctx.data_mut(|data| data.insert_temp(Id::new(UNFOLD), Arc::new(left)));
         }
@@ -838,6 +841,12 @@ pub(crate) fn reset(world: &mut World) {
             ..default()
         }
         .put(ctx);
+    }
+    // The entities listed are gone. Until the new ones are listed there is
+    // no row: none to pick, and none whose fold of its own would stand for
+    // the row that gets its place.
+    if let Some(mut listed) = world.get_resource_mut::<Listed>() {
+        *listed = default();
     }
     if let Some(mut panels) = world.get_resource_mut::<Panels>() {
         panels.settle = false;
@@ -1655,6 +1664,9 @@ mod tests {
             ..default()
         }
         .put(&harness.ctx);
+        // A look before the Hierarchy is drawn again leaves the place be,
+        // though the old row has a fold of its own.
+        Kept::seen(&harness.ctx, &harness.state().placed());
         *harness.state_mut() = one(103, "Sail");
         harness.run();
         assert!(harness.query_by_label("Sail").is_some());
