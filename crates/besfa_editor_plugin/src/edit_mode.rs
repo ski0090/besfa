@@ -206,6 +206,7 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
     }
     let result = match command {
         Command::Play => {
+            panels::play(world);
             world.resource_mut::<Time<Virtual>>().unpause();
             // First, so a camera inside the model is not handed back.
             preview::close(world);
