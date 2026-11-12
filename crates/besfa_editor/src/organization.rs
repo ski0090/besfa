@@ -1727,16 +1727,17 @@ impl OrgPanel {
             return Some(error);
         }
         // An edit of the tree is one click or drop, not a drag's every frame.
-        if self.tree != tree_before
-            && let Err(error) = write_ron(&self.tree_file, &self.tree)
-        {
-            return Some(error);
-        }
-        // Not on every frame of a drag.
-        if !ui.input(|input| input.pointer.any_down()) {
-            return self.save().err();
-        }
-        None
+        let tree_error = (self.tree != tree_before)
+            .then(|| write_ron(&self.tree_file, &self.tree))
+            .and_then(Result::err);
+        // Not on every frame of a drag. A tree that would not write does not
+        // keep the organization from being written.
+        let org_error = if ui.input(|input| input.pointer.any_down()) {
+            None
+        } else {
+            self.save().err()
+        };
+        tree_error.or(org_error)
     }
 
     fn picked_node(&self) -> Option<u32> {
