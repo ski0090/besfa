@@ -436,6 +436,18 @@ fn korean(en: &str) -> Option<&'static str> {
         }
         "That link would make a loop." => "그 링크는 순환을 만듭니다.",
         "Delete agent" => "에이전트 삭제",
+        "+ Folder" => "+ 폴더",
+        "New folder" => "새 폴더",
+        "Remove folder" => "폴더 제거",
+        "Keeps what is inside." => "안에 있는 것은 남습니다.",
+        "My agents" => "내 에이전트",
+        "Add to roles tree" => "역할 트리에 추가",
+        "Keeps this agent in the tree on the left, to add again." => {
+            "이 에이전트를 왼쪽 트리에 두고 다시 추가할 수 있게 합니다."
+        }
+        "Right-click a row to rename or delete it. Drag rows to move them." => {
+            "행을 오른쪽 클릭해 이름을 바꾸거나 지웁니다. 행을 끌어 옮깁니다."
+        }
         "Effort" => "추론 수준",
         "waiting" => "대기 중",
         "working" => "작업 중",

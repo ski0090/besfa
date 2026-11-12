@@ -18,6 +18,8 @@ use eframe::egui::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod roles_tree;
+
 use crate::{
     agent::{self, AgentSettings, Agents, Ask, Message, Provider},
     i18n::t,
@@ -30,6 +32,9 @@ pub const ORGANIZATIONS_DIR: &str = "besfa/organizations";
 
 /// Next to that folder: the last run, while it has agents left to go.
 const RUN_FILE: &str = "organization-run.ron";
+
+/// Next to it too: the roles tree, which every organization shares.
+const TREE_FILE: &str = "roles.ron";
 
 /// Characters a Windows file name cannot hold.
 const NOT_IN_NAMES: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
@@ -110,15 +115,20 @@ impl Department {
         Department::Operations,
     ];
 
-    fn label(self) -> &'static str {
-        t(match self {
+    /// The English name, which is also a folder's name in the roles tree.
+    fn key(self) -> &'static str {
+        match self {
             Department::Leadership => "Leadership",
             Department::Design => "Design",
             Department::Programming => "Programming",
             Department::ArtAudio => "Art & Audio",
             Department::Quality => "Quality",
             Department::Operations => "Operations",
-        })
+        }
+    }
+
+    fn label(self) -> &'static str {
+        t(self.key())
     }
 
     fn color(self) -> Color32 {
@@ -642,6 +652,22 @@ impl Organization {
         id
     }
 
+    /// Adds an agent at `pos` from one saved in the roles tree.
+    fn add_saved(&mut self, saved: roles_tree::Saved, pos: Pos2) -> u32 {
+        let id = self.id();
+        self.nodes.push(Node {
+            id,
+            name: saved.name,
+            instructions: saved.instructions,
+            provider: saved.provider,
+            model: saved.model,
+            effort: saved.effort,
+            pos: pos.into(),
+            ..Default::default()
+        });
+        id
+    }
+
     fn remove(&mut self, id: u32) {
         self.nodes.retain(|node| node.id != id);
         self.links.retain(|&(from, to)| from != id && to != id);
@@ -1004,6 +1030,9 @@ fn graph_pointer(ui: &Ui) -> Option<Pos2> {
 /// group. Tasks come from the chat.
 pub struct OrgPanel {
     org: Organization,
+    /// The roles tree on the left, kept in `tree_file`.
+    tree: roles_tree::Tree,
+    tree_file: PathBuf,
     /// The folder of every organization.
     dir: PathBuf,
     /// The one shown, and the one a run goes through.
@@ -1062,8 +1091,11 @@ impl OrgPanel {
         let name = names[0].clone();
         let paused = read_ron::<Paused>(&dir.with_file_name(RUN_FILE))
             .filter(|paused| dir.join(format!("{}.besfa", paused.organization)).is_file());
+        let tree_file = dir.with_file_name(TREE_FILE);
         Self {
             org: Organization::read(&dir.join(format!("{name}.besfa"))),
+            tree: read_ron(&tree_file).unwrap_or_default(),
+            tree_file,
             dir,
             rename: name.clone(),
             name,
@@ -1669,6 +1701,7 @@ impl OrgPanel {
     /// saved, renamed or deleted.
     pub fn ui(&mut self, ui: &mut Ui) -> Option<String> {
         let before = (self.name.clone(), self.org.clone());
+        let tree_before = self.tree.clone();
         egui::Panel::left("org_roles")
             .default_size(200.0)
             .show(ui, |ui| self.palette(ui));
@@ -1691,6 +1724,12 @@ impl OrgPanel {
             self.unsaved = true;
         }
         if let Err(error) = picked {
+            return Some(error);
+        }
+        // An edit of the tree is one click or drop, not a drag's every frame.
+        if self.tree != tree_before
+            && let Err(error) = write_ron(&self.tree_file, &self.tree)
+        {
             return Some(error);
         }
         // Not on every frame of a drag.
@@ -1733,26 +1772,27 @@ impl OrgPanel {
                 let id = self.org.add("", self.drop_point(ui));
                 self.selected = vec![id];
             }
-            for department in Department::ALL {
-                egui::CollapsingHeader::new(
-                    RichText::new(department.label()).color(department.color()),
-                )
-                .id_salt(("department", department as usize))
-                .default_open(department == Department::Leadership)
-                .show(ui, |ui| {
-                    for role in ROLES.iter().filter(|role| role.department == department) {
-                        let button = egui::Button::new(title(role.name)).frame(false);
-                        if ui
-                            .add_enabled(!running, button)
-                            .on_hover_text(role.summary)
-                            .clicked()
-                        {
-                            let id = self.org.add(role.name, self.drop_point(ui));
-                            self.selected = vec![id];
-                            self.group = None;
-                        }
-                    }
-                });
+            if ui
+                .button(t("+ Folder"))
+                .on_hover_text(t("Right-click a row to rename or delete it. Drag rows to move them."))
+                .clicked()
+            {
+                self.tree.new_folder(&[]);
+            }
+            ui.add_space(4.0);
+            let pos = self.drop_point(ui);
+            match self.tree.show(ui, running) {
+                Some(roles_tree::Entry::Role(name)) => {
+                    let id = self.org.add(&name, pos);
+                    self.selected = vec![id];
+                    self.group = None;
+                }
+                Some(roles_tree::Entry::Agent(saved)) => {
+                    let id = self.org.add_saved(saved, pos);
+                    self.selected = vec![id];
+                    self.group = None;
+                }
+                _ => {}
             }
         });
     }
@@ -2198,6 +2238,17 @@ impl OrgPanel {
                 .clicked()
             {
                 remove = true;
+                ui.close();
+            }
+            // CCGS roles are in the tree already.
+            let own = self.org.node(id).filter(|node| node.role.is_empty());
+            if let Some(node) = own
+                && ui
+                    .button(t("Add to roles tree"))
+                    .on_hover_text(t("Keeps this agent in the tree on the left, to add again."))
+                    .clicked()
+            {
+                self.tree.add_agent(roles_tree::Saved::of(node));
                 ui.close();
             }
         });
@@ -2992,6 +3043,56 @@ mod tests {
         assert!(dir.join("Organization 2.besfa").is_file());
         assert_eq!(Organization::read(&file).nodes.len(), 5);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dragging_a_row_into_a_folder_moves_it_and_the_tree_is_kept() {
+        use egui::{Event, PointerButton};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let base = std::env::temp_dir().join(format!("besfa-tree-ui-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let mut panel = OrgPanel::new(base.join("organizations"));
+        panel.tree.add_agent(roles_tree::Saved {
+            name: "UI Designer".into(),
+            ..Default::default()
+        });
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1200.0, 700.0))
+            .with_step_dt(1.0 / 60.0)
+            .build_ui_state(|ui, panel: &mut OrgPanel| drop(panel.ui(ui)), panel);
+        harness.run();
+        // A saved agent shows by name, in its folder.
+        harness.get_by_label("UI Designer");
+        let from = harness.get_by_label("Producer").rect().center();
+        let to = harness.get_by_label("▸ Design").rect().center();
+        let button = |pressed| Event::PointerButton {
+            pos: if pressed { from } else { to },
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        harness.event(Event::PointerMoved(from));
+        harness.run_steps(2);
+        harness.event(button(true));
+        harness.run_steps(2);
+        for step in 1..=5 {
+            harness.event(Event::PointerMoved(from + (to - from) * (step as f32 / 5.0)));
+            harness.run_steps(2);
+        }
+        harness.event(button(false));
+        harness.run_steps(3);
+        let tree = &harness.state().tree;
+        let in_folder = |folder: usize| match &tree.entries[folder] {
+            roles_tree::Entry::Folder(folder) => folder.entries.clone(),
+            _ => Vec::new(),
+        };
+        let producer = roles_tree::Entry::Role("producer".into());
+        assert!(!in_folder(0).contains(&producer), "left Leadership");
+        assert_eq!(in_folder(1).last(), Some(&producer), "last in Design");
+        assert!(harness.state().org.nodes.is_empty(), "a drag adds nothing");
+        // Kept in the project for the next start.
+        assert_eq!(&read_ron::<roles_tree::Tree>(&base.join("roles.ron")), &Some(tree.clone()));
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
