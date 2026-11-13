@@ -202,6 +202,16 @@ pub fn invocation(
 ) -> (String, Vec<String>, Vec<(String, String)>) {
     let mut args: Vec<String> = provider.args().iter().map(|arg| arg.to_string()).collect();
     let rules = access.rules();
+    let mut env = match route {
+        Route::Cli => Vec::new(),
+        Route::Key(key) => vec![(provider.key_env().into(), key.clone())],
+    };
+    if provider == Provider::Claude && cfg!(windows) {
+        // Bash off and PowerShell on: this PC's shell. Claude turns
+        // PowerShell off along with Bash unless the variable is set.
+        args.extend(["--disallowedTools".into(), "Bash".into()]);
+        env.push(("CLAUDE_CODE_USE_POWERSHELL_TOOL".into(), "1".into()));
+    }
     if provider == Provider::Claude && !rules.is_empty() {
         // The list takes every value up to the next flag.
         args.push("--allowedTools".into());
@@ -233,10 +243,6 @@ pub fn invocation(
             args.push(format!("--image={}", file.display()));
         }
     }
-    let env = match route {
-        Route::Cli => Vec::new(),
-        Route::Key(key) => vec![(provider.key_env().into(), key.clone())],
-    };
     (provider.command().into(), args, env)
 }
 
@@ -307,8 +313,9 @@ impl ProjectAccess {
                 format!("mcp__{name}")
             })
             .collect();
+        let shell = shell_tool();
         if self.github {
-            rules.extend(["Bash(git *)".into(), "Bash(gh *)".into()]);
+            rules.extend([format!("{shell}(git *)"), format!("{shell}(gh *)")]);
         }
         rules.extend(
             self.commands
@@ -326,7 +333,7 @@ impl ProjectAccess {
                     if rule {
                         command.into()
                     } else {
-                        format!("Bash({command})")
+                        format!("{shell}({command})")
                     }
                 }),
         );
@@ -490,6 +497,12 @@ pub fn send_prompt(process: &mut CliProcess, program: &str, input: String) {
 /// Whether `line` is Claude's result, after which it reads nothing more.
 pub fn ended(line: &str) -> bool {
     serde_json::from_str::<Value>(line).is_ok_and(|event| event["type"] == "result")
+}
+
+/// The tool Claude runs commands in: PowerShell on Windows, where
+/// `invocation` turns Bash off, so the saved commands match its calls.
+fn shell_tool() -> &'static str {
+    if cfg!(windows) { "PowerShell" } else { "Bash" }
 }
 
 /// `project` as one key however it is written: Windows ignores case, takes
@@ -2149,28 +2162,33 @@ mod tests {
         let besfa = ProjectAccess::default();
         let (program, args, env) = invocation(Provider::Claude, &Route::Cli, "opus", &[], &besfa);
         assert_eq!(program, "claude");
-        assert_eq!(
-            args,
-            [
-                "-p",
-                "--permission-mode",
-                "acceptEdits",
-                "--input-format",
-                "stream-json",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--permission-prompt-tool",
-                "stdio",
-                "--append-system-prompt",
-                AGENT_WINDOW,
-                "--allowedTools",
-                "mcp__besfa",
-                "--model",
-                "opus"
-            ]
-        );
-        assert!(env.is_empty());
+        let mut expected = vec![
+            "-p",
+            "--permission-mode",
+            "acceptEdits",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--permission-prompt-tool",
+            "stdio",
+            "--append-system-prompt",
+            AGENT_WINDOW,
+        ];
+        if cfg!(windows) {
+            expected.extend(["--disallowedTools", "Bash"]);
+        }
+        expected.extend(["--allowedTools", "mcp__besfa", "--model", "opus"]);
+        assert_eq!(args, expected);
+        if cfg!(windows) {
+            assert_eq!(
+                env,
+                [("CLAUDE_CODE_USE_POWERSHELL_TOOL".to_string(), "1".to_string())]
+            );
+        } else {
+            assert!(env.is_empty());
+        }
 
         let (program, args, env) =
             invocation(Provider::OpenAi, &Route::Key("sk".into()), "", &[], &besfa);
@@ -2203,17 +2221,20 @@ mod tests {
                 " cargo *\r\n\npwsh -File tools/drive.ps1 *\nBash(just *)\nPowerShell(cargo *)\n"
                     .into(),
         };
+        // Plain lines are for this PC's shell tool; a written rule stays as
+        // it is.
+        let shell = shell_tool();
         assert_eq!(
             allowed(&access),
             [
-                "mcp__besfa",
-                "mcp__my_server",
-                "Bash(git *)",
-                "Bash(gh *)",
-                "Bash(cargo *)",
-                "Bash(pwsh -File tools/drive.ps1 *)",
-                "Bash(just *)",
-                "PowerShell(cargo *)"
+                "mcp__besfa".to_string(),
+                "mcp__my_server".into(),
+                format!("{shell}(git *)"),
+                format!("{shell}(gh *)"),
+                format!("{shell}(cargo *)"),
+                format!("{shell}(pwsh -File tools/drive.ps1 *)"),
+                "Bash(just *)".into(),
+                "PowerShell(cargo *)".into(),
             ]
         );
 
