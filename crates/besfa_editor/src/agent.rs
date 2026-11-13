@@ -388,6 +388,11 @@ impl Ask {
         })
     }
 
+    /// The request it came in, which its answer names.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     /// What it would do: the command it runs, the file or address it
     /// reaches, or else all it was given.
     pub fn what(&self) -> String {
