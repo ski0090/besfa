@@ -404,8 +404,8 @@ fn korean(en: &str) -> Option<&'static str> {
         }
         "Round {} of {}: {} agents go again." => "라운드 {}/{}: 에이전트 {}개가 다시 돕니다.",
         "Roles" => "역할",
-        "Claude Code Game Studios' agents. Click one to add it." => {
-            "Claude Code Game Studios의 에이전트입니다. 클릭하면 추가됩니다."
+        "Claude Code Game Studios' agents. Double-click one to add it." => {
+            "Claude Code Game Studios의 에이전트입니다. 더블 클릭하면 추가됩니다."
         }
         "+ Custom agent" => "+ 사용자 에이전트",
         "Group selection" => "선택 항목 묶기",
@@ -445,9 +445,12 @@ fn korean(en: &str) -> Option<&'static str> {
         "Keeps this agent in the tree on the left, to add again." => {
             "이 에이전트를 왼쪽 트리에 두고 다시 추가할 수 있게 합니다."
         }
-        "Right-click a row to rename or delete it. Drag rows to move them." => {
-            "행을 오른쪽 클릭해 이름을 바꾸거나 지웁니다. 행을 끌어 옮깁니다."
+        "Right-click a row to rename or delete it. An agent moves to another folder in its settings." => {
+            "행을 오른쪽 클릭해 이름을 바꾸거나 지웁니다. 에이전트는 설정에서 다른 폴더로 옮깁니다."
         }
+        "Roles tree" => "역할 트리",
+        "Top level" => "맨 위",
+        "Not in the tree" => "트리에 없음",
         "Effort" => "추론 수준",
         "waiting" => "대기 중",
         "working" => "작업 중",

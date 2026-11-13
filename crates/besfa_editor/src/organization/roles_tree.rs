@@ -1,8 +1,8 @@
 //! The Organization tab's left tree: folders holding the CCGS roles and the
-//! user's saved agents. Rows drag between folders, folders can be added,
-//! renamed and removed, and the tree is kept in the project.
+//! user's saved agents. Folders can be added, renamed and removed, an agent
+//! moves to a folder from its settings, and the tree is kept in the project.
 
-use eframe::egui::{self, Id, RichText, Sense, Stroke, Ui, Vec2};
+use eframe::egui::{self, Id, RichText, Ui};
 use serde::{Deserialize, Serialize};
 
 use super::{Department, Effort, Node, ROLES, find_role, title};
@@ -32,7 +32,7 @@ pub struct Folder {
     pub entries: Vec<Entry>,
 }
 
-/// What a click on a saved agent adds to the graph.
+/// What a double click on a saved agent adds to the graph.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
 pub struct Saved {
@@ -175,24 +175,109 @@ impl Tree {
         }
     }
 
-    /// Draws the tree, and returns the role or agent that was clicked.
+    /// Every folder with its path and its name as people read it, such as
+    /// "Design / Level".
+    pub fn folders(&self) -> Vec<(Path, String)> {
+        fn walk(entries: &[Entry], path: &mut Path, prefix: &str, out: &mut Vec<(Path, String)>) {
+            for (index, entry) in entries.iter().enumerate() {
+                if let Entry::Folder(folder) = entry {
+                    path.push(index);
+                    let name = format!("{prefix}{}", t(&folder.name));
+                    out.push((path.clone(), name.clone()));
+                    walk(&folder.entries, path, &format!("{name} / "), out);
+                    path.pop();
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.entries, &mut Vec::new(), "", &mut out);
+        out
+    }
+
+    /// Where the tree keeps `node`: a CCGS role by its file name, one of the
+    /// user's own agents by the name it was saved under.
+    fn locate(&self, node: &Node) -> Option<Path> {
+        fn find(entries: &[Entry], node: &Node, path: &mut Path) -> Option<Path> {
+            for (index, entry) in entries.iter().enumerate() {
+                path.push(index);
+                let found = match entry {
+                    Entry::Folder(folder) => find(&folder.entries, node, path),
+                    Entry::Role(name) => {
+                        (!node.role.is_empty() && *name == node.role).then(|| path.clone())
+                    }
+                    Entry::Agent(saved) => {
+                        (node.role.is_empty() && saved.name == node.name).then(|| path.clone())
+                    }
+                };
+                path.pop();
+                if found.is_some() {
+                    return found;
+                }
+            }
+            None
+        }
+        find(&self.entries, node, &mut Vec::new())
+    }
+
+    /// The folder holding `node`'s entry (empty for the top level), or none
+    /// when the tree has no entry for it.
+    fn folder_of(&self, node: &Node) -> Option<Path> {
+        let mut path = self.locate(node)?;
+        path.pop();
+        Some(path)
+    }
+
+    /// Moves `node`'s entry to the end of `folder`, or adds one there.
+    fn put(&mut self, node: &Node, folder: &[usize]) {
+        if let Some(from) = self.locate(node) {
+            self.move_to(&from, folder, usize::MAX);
+        } else if let Some(list) = self.list_mut(folder) {
+            list.push(if node.role.is_empty() {
+                Entry::Agent(Saved::of(node))
+            } else {
+                Entry::Role(node.role.clone())
+            });
+        }
+    }
+
+    /// The folder `node`'s entry is in, to choose another from. This is how
+    /// an agent moves in the tree.
+    pub fn folder_picker(&mut self, ui: &mut Ui, id: u32, node: &Node) {
+        let current = self.folder_of(node);
+        let folders = self.folders();
+        let top = t("Top level").to_string();
+        let text = match &current {
+            None => t("Not in the tree").to_string(),
+            Some(path) if path.is_empty() => top.clone(),
+            Some(path) => folders
+                .iter()
+                .find(|(other, _)| other == path)
+                .map_or_else(String::new, |(_, name)| name.clone()),
+        };
+        let mut chosen = None;
+        egui::ComboBox::from_id_salt(("org_tree_folder", id))
+            .selected_text(text)
+            .show_ui(ui, |ui| {
+                for (path, name) in std::iter::once((Vec::new(), top)).chain(folders) {
+                    if ui
+                        .selectable_label(current.as_ref() == Some(&path), name)
+                        .clicked()
+                    {
+                        chosen = Some(path);
+                    }
+                }
+            });
+        if let Some(path) = chosen {
+            self.put(node, &path);
+        }
+    }
+
+    /// Draws the tree, and returns the role or agent that was double-clicked.
     /// `running` keeps clicks from adding to a graph that is running.
     pub fn show(&mut self, ui: &mut Ui, running: bool) -> Option<Entry> {
         let mut edits = Edits::default();
         rows(ui, &mut self.entries, &mut Vec::new(), running, &mut edits);
-        // Room below the last row to drop onto, for the end of the root.
-        let tail = ui.allocate_response(Vec2::new(ui.available_width(), 40.0), Sense::hover());
-        if tail.dnd_hover_payload::<Path>().is_some() {
-            let stroke = Stroke::new(2.0, ui.visuals().selection.bg_fill);
-            ui.painter()
-                .hline(tail.rect.x_range(), tail.rect.top(), stroke);
-        }
-        if let Some(from) = tail.dnd_release_payload::<Path>() {
-            edits.moved = Some((from.to_vec(), Vec::new(), usize::MAX));
-        }
-        if let Some((from, into, at)) = edits.moved {
-            self.move_to(&from, &into, at);
-        } else if let Some(parent) = edits.new_folder {
+        if let Some(parent) = edits.new_folder {
             self.new_folder(&parent);
         } else if let Some(path) = edits.removed {
             self.remove(&path);
@@ -203,8 +288,6 @@ impl Tree {
 
 #[derive(Default)]
 struct Edits {
-    /// From, the folder to, and the place in it.
-    moved: Option<(Path, Path, usize)>,
     new_folder: Option<Path>,
     removed: Option<Path>,
     add: Option<Entry>,
@@ -230,7 +313,7 @@ fn rows(ui: &mut Ui, entries: &mut [Entry], path: &mut Path, running: bool, edit
                 if let Some(color) = color {
                     text = text.color(color);
                 }
-                let button = row(ui, &here, true, edits, text, "");
+                let button = row(ui, text, "");
                 if button.clicked() {
                     folder.open = !folder.open;
                 }
@@ -263,16 +346,16 @@ fn rows(ui: &mut Ui, entries: &mut [Entry], path: &mut Path, running: bool, edit
                     None => RichText::new(title(name)).weak(),
                 };
                 let hover = found.map_or("", |role| role.summary);
-                let button = row(ui, &here, false, edits, text, hover);
-                if button.clicked() && !running && found.is_some() {
+                let button = row(ui, text, hover);
+                if button.double_clicked() && !running && found.is_some() {
                     edits.add = Some(Entry::Role(name.clone()));
                 }
                 button.context_menu(|ui| delete(ui, &here, edits));
             }
             Entry::Agent(saved) => {
                 let hover = saved.instructions.lines().next().unwrap_or_default();
-                let button = row(ui, &here, false, edits, RichText::new(&saved.name), hover);
-                if button.clicked() && !running {
+                let button = row(ui, RichText::new(&saved.name), hover);
+                if button.double_clicked() && !running {
                     edits.add = Some(Entry::Agent(saved.clone()));
                 }
                 button.context_menu(|ui| {
@@ -292,60 +375,14 @@ fn delete(ui: &mut Ui, here: &[usize], edits: &mut Edits) {
     }
 }
 
-/// One row, a button to click, to drag from and to drop onto: a folder takes
-/// what is dropped on its lower part into it, any other row takes it before
-/// or after itself. Returns the button's response.
-fn row(
-    ui: &mut Ui,
-    here: &[usize],
-    folder: bool,
-    edits: &mut Edits,
-    text: RichText,
-    hover: &str,
-) -> egui::Response {
-    let button = egui::Button::new(text)
-        .frame(false)
-        .sense(Sense::click_and_drag());
-    let mut response = ui.add(button).on_hover_cursor(egui::CursorIcon::Grab);
-    if !hover.is_empty() {
-        response = response.on_hover_text(hover);
-    }
-    response.dnd_set_drag_payload(here.to_vec());
-    let rect = response.rect;
-    let Some(from) = response.dnd_hover_payload::<Path>() else {
-        return response;
-    };
-    let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) else {
-        return response;
-    };
-    let fraction = (pointer.y - rect.top()) / rect.height().max(1.0);
-    let (parent, index) = here.split_at(here.len() - 1);
-    let (into, at) = if folder && fraction > 0.25 {
-        (here.to_vec(), usize::MAX)
+/// One row: a button, with `hover` over it when there is some.
+fn row(ui: &mut Ui, text: RichText, hover: &str) -> egui::Response {
+    let response = ui.add(egui::Button::new(text).frame(false));
+    if hover.is_empty() {
+        response
     } else {
-        let after = !folder && fraction > 0.5;
-        (parent.to_vec(), index[0] + usize::from(after))
-    };
-    // Not onto itself, or into what it holds.
-    if into.starts_with(&from) {
-        return response;
+        response.on_hover_text(hover)
     }
-    let stroke = Stroke::new(2.0, ui.visuals().selection.bg_fill);
-    if at == usize::MAX {
-        ui.painter()
-            .rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
-    } else {
-        let y = if at > index[0] {
-            rect.bottom()
-        } else {
-            rect.top()
-        };
-        ui.painter().hline(rect.x_range(), y, stroke);
-    }
-    if let Some(from) = response.dnd_release_payload::<Path>() {
-        edits.moved = Some((from.to_vec(), into, at));
-    }
-    response
 }
 
 #[cfg(test)]
@@ -450,5 +487,37 @@ mod tests {
         for role in ROLES {
             assert_eq!(all.iter().filter(|&&name| name == role.name).count(), 1);
         }
+    }
+
+    #[test]
+    fn an_agent_is_put_in_a_folder_by_its_settings() {
+        let designer = Node {
+            name: "UI Designer".into(),
+            ..Default::default()
+        };
+        let producer = Node {
+            role: "producer".into(),
+            ..Default::default()
+        };
+        let mut tree = Tree {
+            entries: vec![
+                folder("a", vec![role("producer")]),
+                folder("b", vec![folder("c", vec![])]),
+            ],
+        };
+        assert_eq!(tree.folder_of(&designer), None, "not saved yet");
+        assert_eq!(tree.folder_of(&producer), Some(vec![0]));
+        // Saving puts a copy in the folder; picking again moves it.
+        tree.put(&designer, &[1, 0]);
+        assert_eq!(tree.folder_of(&designer), Some(vec![1, 0]));
+        tree.put(&designer, &[]);
+        assert_eq!(tree.folder_of(&designer), Some(vec![]));
+        tree.put(&producer, &[1]);
+        assert_eq!(
+            names(&tree.entries),
+            ["a[]", "b[c[],producer]", "UI Designer"]
+        );
+        let all: Vec<String> = tree.folders().into_iter().map(|(_, name)| name).collect();
+        assert_eq!(all, ["a", "b", "b / c"]);
     }
 }
