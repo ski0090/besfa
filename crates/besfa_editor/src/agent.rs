@@ -82,18 +82,16 @@ impl Provider {
         }
     }
 
-    /// Headless, with the prompt on stdin. Each may edit files in the
-    /// project without asking. Codex and Gemini may do nothing more, since
-    /// nobody can answer their permission prompts. Claude may also do what
-    /// `invocation` allows from the project's `ProjectAccess`, and asks
-    /// about the rest on stdout as JSON events, with the prompt and the
-    /// answers going in on stdin (see `Ask`).
+    /// Headless, with the prompt on stdin. Codex and Gemini may edit files
+    /// in the project without asking and do nothing more, since nobody can
+    /// answer their permission prompts. Claude decides by the project's
+    /// `Permission`, may also do what `invocation` allows from its
+    /// `ProjectAccess`, and asks about the rest on stdout as JSON events,
+    /// with the prompt and the answers going in on stdin (see `Ask`).
     fn args(self) -> &'static [&'static str] {
         match self {
             Provider::Claude => &[
                 "-p",
-                "--permission-mode",
-                "acceptEdits",
                 "--input-format",
                 "stream-json",
                 "--output-format",
@@ -206,6 +204,9 @@ pub fn invocation(
         Route::Cli => Vec::new(),
         Route::Key(key) => vec![(provider.key_env().into(), key.clone())],
     };
+    if provider == Provider::Claude {
+        args.extend(["--permission-mode".into(), access.permission.mode().into()]);
+    }
     if provider == Provider::Claude && access.shell == Shell::PowerShell {
         // Bash off and PowerShell on. Claude turns PowerShell off along
         // with Bash unless the variable is set.
@@ -278,6 +279,31 @@ pub struct ProjectAccess {
     /// The shell tool Claude runs commands in. A project's CCGS roles that
     /// list Bash in their `tools:` need Bash.
     pub shell: Shell,
+    /// How Claude decides about what the rules above do not allow.
+    pub permission: Permission,
+}
+
+/// How Claude decides about a tool call its allow rules do not cover.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Permission {
+    /// Claude's classifier lets safe calls through and asks about the rest.
+    #[default]
+    Auto,
+    /// Edits files without asking; asks about commands and other tools.
+    AcceptEdits,
+    /// Asks before every edit, command and tool.
+    Manual,
+}
+
+impl Permission {
+    /// Claude's `--permission-mode` for it.
+    fn mode(self) -> &'static str {
+        match self {
+            Permission::Auto => "auto",
+            Permission::AcceptEdits => "acceptEdits",
+            Permission::Manual => "manual",
+        }
+    }
 }
 
 /// The shell tool Claude runs commands in.
@@ -318,6 +344,7 @@ impl Default for ProjectAccess {
             merge: false,
             commands: String::new(),
             shell: Shell::default(),
+            permission: Permission::default(),
         }
     }
 }
@@ -916,6 +943,26 @@ pub fn settings_tab(
                 _ => panels::MUTED,
             };
             ui.label(RichText::new(gh).color(color).small());
+        });
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            ui.strong(t("Permissions"));
+            ui.horizontal_wrapped(|ui| {
+                ui.radio_value(&mut access.permission, Permission::Auto, t("Auto"));
+                ui.radio_value(
+                    &mut access.permission,
+                    Permission::AcceptEdits,
+                    t("Accept edits"),
+                );
+                ui.radio_value(&mut access.permission, Permission::Manual, t("Ask every time"));
+            });
+            let note_text = match access.permission {
+                Permission::Auto => t("Claude decides on its own which edits and commands to run without asking, and may refuse the rest or ask about them in the chat. What it judges safe can include commands you would want to check, so keep branch protection on in GitHub."),
+                Permission::AcceptEdits => t("Claude edits the project's files without asking, and asks in the chat before commands and other tools the rules below do not allow."),
+                Permission::Manual => t("Claude asks in the chat before every edit, command and tool the rules below do not allow."),
+            };
+            note(ui, note_text);
+            note(ui, t("Only Claude follows this choice. Codex and Gemini edit files without asking and do nothing more."));
         });
         if cfg!(windows) {
             ui.group(|ui| {
@@ -2199,10 +2246,9 @@ mod tests {
         let besfa = ProjectAccess::default();
         let (program, args, env) = invocation(Provider::Claude, &Route::Cli, "opus", &[], &besfa);
         assert_eq!(program, "claude");
+        // Auto is the default permission mode.
         let mut expected = vec![
             "-p",
-            "--permission-mode",
-            "acceptEdits",
             "--input-format",
             "stream-json",
             "--output-format",
@@ -2212,6 +2258,8 @@ mod tests {
             "stdio",
             "--append-system-prompt",
             AGENT_WINDOW,
+            "--permission-mode",
+            "auto",
         ];
         if cfg!(windows) {
             expected.extend(["--disallowedTools", "Bash"]);
@@ -2235,6 +2283,33 @@ mod tests {
 
         let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &[], &besfa);
         assert_eq!(args, ["--prompt", "", "--approval-mode", "auto_edit"]);
+    }
+
+    #[test]
+    fn passes_the_projects_permission_mode_to_claude_only() {
+        let mode = |permission: Permission, provider: Provider| {
+            let access = ProjectAccess {
+                permission,
+                ..Default::default()
+            };
+            let (_, args, _) = invocation(provider, &Route::Cli, "", &[], &access);
+            args.iter()
+                .position(|arg| arg == "--permission-mode")
+                .map(|at| args[at + 1].clone())
+        };
+        assert_eq!(mode(Permission::Auto, Provider::Claude).as_deref(), Some("auto"));
+        assert_eq!(
+            mode(Permission::AcceptEdits, Provider::Claude).as_deref(),
+            Some("acceptEdits")
+        );
+        assert_eq!(mode(Permission::Manual, Provider::Claude).as_deref(), Some("manual"));
+        assert_eq!(mode(Permission::Auto, Provider::OpenAi), None);
+        assert_eq!(mode(Permission::Auto, Provider::Gemini), None);
+
+        // A project saved before the choice existed gets the default.
+        let old: ProjectAccess = ron::from_str("(github:true)").unwrap();
+        assert_eq!(old.permission, Permission::Auto);
+        assert!(old.github);
     }
 
     #[test]
@@ -2284,6 +2359,7 @@ mod tests {
                 " cargo *\r\n\npwsh -File tools/drive.ps1 *\nBash(just *)\nPowerShell(cargo *)\n"
                     .into(),
             shell: Shell::default(),
+            permission: Permission::default(),
         };
         // Plain lines are for the chosen shell tool; a written rule stays as
         // it is.
@@ -2400,8 +2476,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("besfa-real-ask-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
+        // Auto may run the command without asking; this tests the asking.
         let none = ProjectAccess {
             servers: Default::default(),
+            permission: Permission::AcceptEdits,
             ..Default::default()
         };
         let invocation = invocation(Provider::Claude, &Route::Cli, "haiku", &[], &none);
@@ -2908,6 +2986,7 @@ thoughts {:?}",
         let model = std::env::var("BESFA_HANDOFF_MODEL").unwrap_or("sonnet".into());
         let none = ProjectAccess {
             servers: Default::default(),
+            permission: Permission::AcceptEdits,
             ..Default::default()
         };
         let lineup = "- Studio (3 agents): Game Designer (Designs mechanics and how they feel.); Gameplay Programmer (Implements gameplay in Rust.); Qa Tester (Writes and runs tests, reports bugs.)\n";
