@@ -1062,7 +1062,11 @@ fn uncommitted(project: &Path) -> u64 {
     let run_file = format!(":(exclude)besfa/{RUN_FILE}");
     let paths = ["--", ".", run_file.as_str()];
     let mut hasher = std::hash::DefaultHasher::new();
-    git(project, &[&["status", "--porcelain", "-uall"][..], &paths].concat()).hash(&mut hasher);
+    git(
+        project,
+        &[&["status", "--porcelain", "-uall"][..], &paths].concat(),
+    )
+    .hash(&mut hasher);
     git(project, &[&["diff", "HEAD"][..], &paths].concat()).hash(&mut hasher);
     hasher.finish()
 }
@@ -1865,7 +1869,7 @@ impl OrgPanel {
                 git = false;
                 chat.push(Message {
                     speaker: Some((run.organization.clone(), [0x8A; 3])),
-                    text: t("An agent left changes in the project folder without committing them, so the agents go one at a time there.").into(),
+                    text: t("The project folder has uncommitted changes since the run began, so the agents go one at a time there.").into(),
                     ..Default::default()
                 });
             }

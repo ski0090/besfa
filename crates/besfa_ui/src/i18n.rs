@@ -403,8 +403,8 @@ fn korean(en: &str) -> Option<&'static str> {
             "이 프로젝트의 설정 > 에이전트 설정에 저장됩니다."
         }
         "Round {} of {}: {} agents go again." => "라운드 {}/{}: 에이전트 {}개가 다시 돕니다.",
-        "An agent left changes in the project folder without committing them, so the agents go one at a time there." => {
-            "에이전트가 프로젝트 폴더에 커밋하지 않은 변경을 남겨서, 에이전트들이 그 폴더에서 한 명씩 돕니다."
+        "The project folder has uncommitted changes since the run began, so the agents go one at a time there." => {
+            "실행을 시작한 뒤 프로젝트 폴더에 커밋하지 않은 변경이 생겨서, 에이전트들이 그 폴더에서 한 명씩 돕니다."
         }
         "Roles" => "역할",
         "Claude Code Game Studios' agents. Double-click one to add it." => {
