@@ -1332,8 +1332,14 @@ impl AgentPanel {
             chat = saved.clone();
         }
         // A run the chat's agent handed over leaves the user's own pick, so
-        // what they send next goes where it went before.
-        let handed = (chat.messages.iter()).any(|m| m.child.as_deref() == Some(organization));
+        // what they send next goes where it went before. Its marker follows
+        // the user's last prompt; the name may since have changed.
+        let asked = chat
+            .messages
+            .iter()
+            .rposition(|m| m.user)
+            .map_or(0, |at| at + 1);
+        let handed = chat.messages[asked..].iter().any(|m| m.child.is_some());
         self.show_chat(chat);
         if !handed {
             self.organization = Some(organization.into());
@@ -2920,9 +2926,21 @@ thoughts {:?}",
             child: Some("Studio".into()),
             ..Default::default()
         };
+        let said = |user: bool| Message {
+            user,
+            text: "Add a jump.".into(),
+            ..Default::default()
+        };
         let mut other = AgentPanel::default();
-        other.restore((6, &[handed]), &[], "Studio");
+        // Under the name it has since been renamed to, too.
+        let run = [said(true), handed.clone(), said(false)];
+        other.restore((6, &run), &[], "Game Team");
         assert_eq!(other.organization(), None);
+        // One sent to it straight after an earlier handoff picks it.
+        let mut later = AgentPanel::default();
+        let run = [said(true), handed, said(false), said(true), said(false)];
+        later.restore((7, &run), &[], "Studio");
+        assert_eq!(later.organization(), Some("Studio"));
 
         let mut harness = tab(None);
         harness.state_mut().org = org;
