@@ -1310,6 +1310,13 @@ impl AgentPanel {
         files: &[PathBuf],
         organization: &str,
     ) {
+        // A run the chat's agent handed over leaves the user's own pick, so
+        // what they send next goes where it went before. Its marker follows
+        // the prompt that started the run, the last one in the run's own copy
+        // of the chat, since nobody can send while it runs; the saved copy
+        // may hold later prompts, and the name may since have changed.
+        let started = messages.iter().rposition(|m| m.user).map_or(0, |at| at + 1);
+        let handed = messages[started..].iter().any(|m| m.child.is_some());
         let mut messages = messages.to_vec();
         // An agent the editor closed on said nothing yet.
         for message in &mut messages {
@@ -1331,15 +1338,6 @@ impl AgentPanel {
         {
             chat = saved.clone();
         }
-        // A run the chat's agent handed over leaves the user's own pick, so
-        // what they send next goes where it went before. Its marker follows
-        // the user's last prompt; the name may since have changed.
-        let asked = chat
-            .messages
-            .iter()
-            .rposition(|m| m.user)
-            .map_or(0, |at| at + 1);
-        let handed = chat.messages[asked..].iter().any(|m| m.child.is_some());
         self.show_chat(chat);
         if !handed {
             self.organization = Some(organization.into());
@@ -2936,6 +2934,18 @@ thoughts {:?}",
         let run = [said(true), handed.clone(), said(false)];
         other.restore((6, &run), &[], "Game Team");
         assert_eq!(other.organization(), None);
+        // Also when the user went on in that chat after it paused, as the
+        // manual's "Stop, then ask it to do it itself" has them do.
+        let mut went_on = AgentPanel::default();
+        let run = [said(true), said(false), handed.clone(), said(false)];
+        went_on.chat = Chat {
+            id: 8,
+            messages: [&run[..], &[said(true), said(false)]].concat(),
+            ..Default::default()
+        };
+        went_on.restore((8, &run), &[], "Studio");
+        assert_eq!(went_on.chat.messages.len(), 6);
+        assert_eq!(went_on.organization(), None);
         // One sent to it straight after an earlier handoff picks it.
         let mut later = AgentPanel::default();
         let run = [said(true), handed, said(false), said(true), said(false)];
