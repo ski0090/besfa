@@ -1044,6 +1044,24 @@ struct Run {
     /// When the run first started, in seconds, which names its worktrees
     /// so a resume finds them again.
     started: u64,
+    /// What the project folder held beyond its commit when the run began.
+    /// Once an agent leaves more there, worktrees made from the commit
+    /// would miss it, so the agents go one at a time in the folder.
+    untouched: u64,
+    /// Whether an agent left changes there, so the rest of the run goes
+    /// one at a time.
+    one_at_a_time: bool,
+}
+
+/// What the project folder holds beyond its commit, as a number that
+/// changes when that does. ponytail: of an untracked file only its name
+/// counts, not what is in it.
+fn uncommitted(project: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    git(project, &["status", "--porcelain", "-uall"]).hash(&mut hasher);
+    git(project, &["diff", "HEAD"]).hash(&mut hasher);
+    hasher.finish()
 }
 
 /// An agent at work.
@@ -1085,16 +1103,43 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// Agent `id`'s worktree for the run `started` in `project`, made from
-/// the project's commit. One a stopped run left is taken up again, with
-/// what its agent committed there. ponytail: git runs on the UI thread;
-/// move it off if a big checkout makes the editor stall.
-fn add_worktree(project: &Path, started: u64, id: u32) -> Result<Worktree, String> {
-    let name = project
+/// Where agent `id`'s worktree for the run `started` in `project` goes,
+/// and its branch: next to the repository's own folder, so never inside
+/// it when the project is a folder of a bigger one.
+fn worktree_place(project: &Path, started: u64, id: u32) -> Result<(PathBuf, String), String> {
+    let top = PathBuf::from(git(project, &["rev-parse", "--show-toplevel"])?);
+    let name = top
         .file_name()
         .map_or_else(|| "project".into(), |name| name.to_string_lossy());
-    let path = project.with_file_name(format!("{name}-org-{started}-{id}"));
-    let branch = format!("besfa-org/{started}-{id}");
+    let path = top.with_file_name(format!("{name}-org-{started}-{id}"));
+    Ok((path, format!("besfa-org/{started}-{id}")))
+}
+
+/// Whether a stopped run left agent `id` a worktree or a branch to go on
+/// with.
+fn worktree_kept(project: &Path, started: u64, id: u32) -> bool {
+    worktree_place(project, started, id).is_ok_and(|(path, branch)| {
+        path.exists()
+            || git(
+                project,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{branch}"),
+                ],
+            )
+            .is_ok()
+    })
+}
+
+/// Agent `id`'s worktree for the run `started` in `project`, made from
+/// the project's commit, its submodules filled from the project's own
+/// checkouts of them. One a stopped run left is taken up again, with what
+/// its agent committed there. ponytail: git runs on the UI thread; move
+/// it off if a big checkout makes the editor stall.
+fn add_worktree(project: &Path, started: u64, id: u32) -> Result<Worktree, String> {
+    let (path, branch) = worktree_place(project, started, id)?;
     let mut base = git(project, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     if base == "HEAD" {
         // Detached: its commit.
@@ -1113,11 +1158,16 @@ fn add_worktree(project: &Path, started: u64, id: u32) -> Result<Worktree, Strin
         let _ = git(project, &["worktree", "prune"]);
         let at = path.to_string_lossy();
         let kept = format!("refs/heads/{branch}");
-        if git(project, &["rev-parse", "--verify", "--quiet", &kept]).is_ok() {
-            git(project, &["worktree", "add", &at, &branch])?;
+        // A kept branch the project already has all of is only in the
+        // way of what merged since: start it again from here.
+        let fresh = git(project, &["rev-parse", "--verify", "--quiet", &kept]).is_err()
+            || git(project, &["merge-base", "--is-ancestor", &kept, "HEAD"]).is_ok();
+        if fresh {
+            git(project, &["worktree", "add", "-B", &branch, &at, "HEAD"])?;
         } else {
-            git(project, &["worktree", "add", "-b", &branch, &at, "HEAD"])?;
+            git(project, &["worktree", "add", &at, &branch])?;
         }
+        fill_submodules(project, &path)?;
     }
     Ok(Worktree {
         dir: path.join(prefix),
@@ -1127,28 +1177,84 @@ fn add_worktree(project: &Path, started: u64, id: u32) -> Result<Worktree, Strin
     })
 }
 
+/// Checks out `worktree`'s submodules, which `git worktree add` leaves
+/// empty, from the project's own checkouts of them rather than their
+/// remotes. A CCGS game links its `.claude` folders into one.
+fn fill_submodules(project: &Path, worktree: &Path) -> Result<(), String> {
+    let Ok(paths) = git(
+        worktree,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "--get-regexp",
+            r"^submodule\..*\.path$",
+        ],
+    ) else {
+        // None.
+        return Ok(());
+    };
+    let top = PathBuf::from(git(project, &["rev-parse", "--show-toplevel"])?);
+    let mut args = vec!["-c".to_string(), "protocol.file.allow=always".into()];
+    for line in paths.lines() {
+        let Some((key, path)) = line.split_once(' ') else {
+            continue;
+        };
+        let name = key
+            .trim_start_matches("submodule.")
+            .trim_end_matches(".path");
+        let local = top.join(path);
+        if local.join(".git").exists() {
+            args.extend([
+                "-c".into(),
+                format!(
+                    "submodule.{name}.url={}",
+                    local.to_string_lossy().replace('\\', "/")
+                ),
+            ]);
+        }
+    }
+    args.extend(["submodule", "update", "--init", "--recursive"].map(String::from));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    git(worktree, &args).map(|_| ())
+}
+
 /// Commits what `name`'s agent left in `worktree`, merges it into the
 /// project's branch, and removes the worktree and its branch. A merge
-/// that fails leaves the branch, so the work is not lost. Ok carries a
-/// note when the work merged but the worktree could not go.
+/// that fails leaves the branch, so the work is not lost, and one the
+/// user is in the middle of is left alone. Ok carries a note when the
+/// work merged but the worktree could not go.
 fn merge_back(project: &Path, worktree: &Worktree, name: &str) -> Result<Option<String>, String> {
+    let keep = |why: String| {
+        format!(
+            "Could not merge {} into {}: {why}\nThe branch keeps the work; merge it by hand.",
+            worktree.branch, worktree.base
+        )
+    };
+    let merging =
+        |dir: &Path| git(dir, &["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).is_ok();
+    if merging(project) {
+        return Err(keep("the project is in the middle of a merge.".into()));
+    }
     git(&worktree.path, &["add", "-A"])?;
     if git(&worktree.path, &["diff", "--cached", "--quiet"]).is_err() {
         let message = format!("Keep what {name} left uncommitted");
         git(&worktree.path, &["commit", "-m", &message])?;
     }
+    // What it did, even on a branch it switched to.
+    let work = git(&worktree.path, &["rev-parse", "HEAD"])?;
     let at = worktree.path.to_string_lossy();
     let message = format!("Merge what {name} did beside the other agents");
-    if let Err(error) = git(
-        project,
-        &["merge", "--no-edit", "-m", &message, &worktree.branch],
-    ) {
-        let _ = git(project, &["merge", "--abort"]);
+    if let Err(error) = git(project, &["merge", "--no-edit", "-m", &message, &work]) {
+        // Only a merge this one started; one git refused never began.
+        if merging(project) {
+            let _ = git(project, &["merge", "--abort"]);
+        }
+        // The branch holds it, even if the agent switched away. Git
+        // refuses while the worktree has it out, at that commit already.
+        let _ = git(project, &["branch", "-f", &worktree.branch, &work]);
         let _ = git(project, &["worktree", "remove", "--force", &at]);
-        return Err(format!(
-            "Could not merge {} into {}: {error}\nThe branch keeps the work; merge it by hand.",
-            worktree.branch, worktree.base
-        ));
+        return Err(keep(error));
     }
     let removed = git(project, &["worktree", "remove", "--force", &at])
         .and_then(|_| git(project, &["branch", "-d", &worktree.branch]));
@@ -1627,7 +1733,8 @@ impl OrgPanel {
                 node.state = NodeState::Done;
             }
         }
-        let git = git(directory, &["rev-parse", "--is-inside-work-tree"]).is_ok();
+        // A repository without a commit has nothing to make worktrees from.
+        let git = git(directory, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok();
         // Only one order goes through every link when each agent takes
         // from the one before: a chain, no one beside another.
         let parallel = git
@@ -1660,6 +1767,8 @@ impl OrgPanel {
             git,
             parallel,
             started,
+            untouched: uncommitted(directory),
+            one_at_a_time: false,
         });
         Ok(())
     }
@@ -1724,11 +1833,23 @@ impl OrgPanel {
         ctx: &egui::Context,
         (chat, asks): (&mut Vec<Message>, &mut Vec<Ask>),
     ) -> Option<bool> {
-        let run = self.run.as_ref()?;
+        let run = self.run.as_mut()?;
         if !run.stopped && !run.halted {
             let ready = self.org.ready(&run.order);
             let in_project = run.running.iter().any(|running| running.worktree.is_none());
-            let (now, beside) = starting(&ready, in_project, run.running.len(), run.git);
+            let mut git = run.git && !run.one_at_a_time;
+            if starting(&ready, in_project, run.running.len(), git).1
+                && uncommitted(&run.directory) != run.untouched
+            {
+                run.one_at_a_time = true;
+                git = false;
+                chat.push(Message {
+                    speaker: Some((run.organization.clone(), [0x8A; 3])),
+                    text: t("An agent left changes in the project folder without committing them, so the agents go one at a time there.").into(),
+                    ..Default::default()
+                });
+            }
+            let (now, beside) = starting(&ready, in_project, run.running.len(), git);
             let now = now.to_vec();
             for &id in &now {
                 self.start_agent(id, beside, ctx, chat);
@@ -1876,7 +1997,8 @@ impl OrgPanel {
             // Its CLI could not be reached; the reason is the one arg.
             Err(args.concat())
         } else {
-            beside
+            // A stopped run's worktree goes on, even for one alone.
+            (beside || (run.git && worktree_kept(&run.directory, run.started, id)))
                 .then(|| add_worktree(&run.directory, run.started, id))
                 .transpose()
                 .and_then(|worktree| {
@@ -2954,6 +3076,8 @@ mod tests {
             git: false,
             parallel: false,
             started: 0,
+            untouched: 0,
+            one_at_a_time: false,
         });
         let ctx = egui::Context::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -3105,6 +3229,8 @@ mod tests {
             git: false,
             parallel: false,
             started: 0,
+            untouched: 0,
+            one_at_a_time: false,
         });
         let ctx = egui::Context::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -3264,8 +3390,11 @@ mod tests {
         assert_eq!(again.path, tree.path);
         assert!(again.dir.join("jump.rs").is_file());
 
+        assert!(worktree_kept(&project, 5, 1));
+        assert!(!worktree_kept(&project, 5, 2));
         // What it left uncommitted comes along too.
         assert_eq!(merge_back(&project, &tree, "Gameplay Programmer"), Ok(None));
+        assert!(!worktree_kept(&project, 5, 1));
         assert!(project.join("jump.rs").is_file());
         assert!(!tree.path.exists());
         assert!(
@@ -3309,97 +3438,180 @@ mod tests {
             "fn main() { one() }"
         );
         assert_eq!(git(&project, &["status", "--porcelain"]).unwrap(), "");
+        // Continue takes the kept branch up again, with its work.
+        assert!(worktree_kept(&project, 6, 2));
+        let two = add_worktree(&project, 6, 2).unwrap();
+        assert!(
+            fs::read_to_string(two.dir.join("main.rs"))
+                .unwrap()
+                .contains("two()")
+        );
+
+        // The user's own merge in the middle is left alone.
+        let first = git(&project, &["rev-list", "--max-parents=0", "HEAD"]).unwrap();
+        git(&project, &["checkout", "-q", "-b", "mine", &first]).unwrap();
+        fs::write(project.join("main.rs"), "fn main() { mine() }\n").unwrap();
+        git(&project, &["commit", "-q", "-am", "Mine"]).unwrap();
+        assert!(git(&project, &["merge", "main"]).is_err());
+        let error = merge_back(&project, &two, "Two").unwrap_err();
+        assert!(error.contains("middle of a merge"), "{error}");
+        assert!(
+            git(
+                &project,
+                &["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]
+            )
+            .is_ok()
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn runs_agents_side_by_side_in_worktrees_and_merges_their_work() {
-        let (root, project) = repository("side");
-        let (mut org, [design, code, test]) = studio();
-        org.link(design, code);
-        org.link(design, test);
-        let mut panel = OrgPanel::new(root.join("besfa/organizations"));
-        panel.org = org;
-        for node in &mut panel.org.nodes {
-            node.state = NodeState::Waiting;
-        }
-        // Each writes a file where it works and tells where that was.
-        let write = |file: &str| -> Invocation {
-            let line = format!("echo {file}>{file}& cd");
-            ("cmd".into(), vec!["/c".into(), line], vec![])
-        };
-        panel.run = Some(Run {
-            organization: "Organization".into(),
-            task: "Add a jump.".into(),
-            files: Vec::new(),
-            chat: 1,
-            order: vec![design, code, test],
-            invocations: vec![write("design.md"), write("code.rs"), write("test.rs")],
-            round: 1,
-            running: Vec::new(),
-            answers: vec![None, None, None],
-            stopped: false,
-            halted: false,
-            directory: project.clone(),
-            watched: ("none".into(), None),
-            merge: false,
-            git: true,
-            parallel: true,
-            started: 9,
-        });
-        let ctx = egui::Context::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let (mut chat, mut finished) = (Vec::new(), None);
-        while finished.is_none() && std::time::Instant::now() < deadline {
-            finished = panel.poll(&ctx, (&mut chat, &mut Vec::new()));
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert_eq!(finished, Some(false));
-        let node = |id| panel.org.node(id).unwrap();
-        assert!(
-            [design, code, test]
-                .iter()
-                .all(|&id| node(id).state == NodeState::Done)
-        );
-        // The designer alone in the project; the other two, started
-        // together, beside each other in worktrees.
-        let game = project.display().to_string();
-        assert!(
-            node(design).output.trim().eq_ignore_ascii_case(&game),
-            "{}",
-            node(design).output
-        );
-        assert!(
-            node(code).output.contains("game-org-9-"),
-            "{}",
-            node(code).output
-        );
-        assert!(
-            node(test).output.contains("game-org-9-"),
-            "{}",
-            node(test).output
-        );
-        for file in ["code.rs", "test.rs"] {
-            assert!(project.join(file).is_file(), "{file} was merged");
-        }
-        let said: Vec<&str> = chat
-            .iter()
-            .map(|message| message.speaker.as_ref().unwrap().0.as_str())
-            .collect();
-        assert_eq!(said, ["Game Designer", "Gameplay Programmer", "Qa Tester"]);
-        // Nothing of theirs is left.
-        assert_eq!(
-            git(&project, &["worktree", "list"])
-                .unwrap()
-                .lines()
-                .count(),
-            1
-        );
-        assert_eq!(
-            git(&project, &["branch", "--list", "besfa-org/*"]).unwrap(),
-            ""
-        );
+    fn fills_a_worktrees_submodules_from_the_projects_own() {
+        let (root, project) = repository("submodule");
+        let (_, library) = repository("submodule-lib");
+        fs::write(library.join("agent.md"), "# Agent\n").unwrap();
+        git(&library, &["add", "-A"]).unwrap();
+        git(&library, &["commit", "-q", "-m", "Agent"]).unwrap();
+        let from = library.to_string_lossy().replace('\\', "/");
+        git(
+            &project,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                &from,
+                ".ccg",
+            ],
+        )
+        .unwrap();
+        git(&project, &["commit", "-q", "-m", "CCGS"]).unwrap();
+        // Its remote is gone; the project's own checkout fills it.
+        fs::remove_dir_all(&library).unwrap();
+        let tree = add_worktree(&project, 7, 1).unwrap();
+        assert!(tree.dir.join(".ccg/agent.md").is_file());
+        assert_eq!(merge_back(&project, &tree, "Agent"), Ok(None));
+        assert!(!tree.path.exists());
         let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(library.parent().unwrap());
+    }
+
+    #[test]
+    fn runs_agents_side_by_side_in_worktrees_and_merges_their_work() {
+        // Whether the designer commits its work: one that leaves it in the
+        // project folder has the others go one at a time there.
+        for commits in [true, false] {
+            let (root, project) = repository(if commits { "side" } else { "side-left" });
+            let (mut org, [design, code, test]) = studio();
+            org.link(design, code);
+            org.link(design, test);
+            let mut panel = OrgPanel::new(root.join("besfa/organizations"));
+            panel.org = org;
+            for node in &mut panel.org.nodes {
+                node.state = NodeState::Waiting;
+            }
+            // Each writes a file where it works and tells where that was.
+            let write = |file: &str, commit: bool| -> Invocation {
+                let commit = if commit {
+                    "& git add -A& git commit -q -m d"
+                } else {
+                    ""
+                };
+                let line = format!("echo {file}>{file}{commit}& cd");
+                ("cmd".into(), vec!["/c".into(), line], vec![])
+            };
+            panel.run = Some(Run {
+                organization: "Organization".into(),
+                task: "Add a jump.".into(),
+                files: Vec::new(),
+                chat: 1,
+                order: vec![design, code, test],
+                invocations: vec![
+                    write("design.md", commits),
+                    write("code.rs", false),
+                    write("test.rs", false),
+                ],
+                round: 1,
+                running: Vec::new(),
+                answers: vec![None, None, None],
+                stopped: false,
+                halted: false,
+                directory: project.clone(),
+                watched: ("none".into(), None),
+                merge: false,
+                git: true,
+                parallel: true,
+                started: 9,
+                untouched: uncommitted(&project),
+                one_at_a_time: false,
+            });
+            let ctx = egui::Context::default();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let (mut chat, mut finished) = (Vec::new(), None);
+            while finished.is_none() && std::time::Instant::now() < deadline {
+                finished = panel.poll(&ctx, (&mut chat, &mut Vec::new()));
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_eq!(finished, Some(false));
+            let node = |id| panel.org.node(id).unwrap();
+            assert!(
+                [design, code, test]
+                    .iter()
+                    .all(|&id| node(id).state == NodeState::Done)
+            );
+            // The designer alone in the project; the other two, started
+            // together, beside each other in worktrees.
+            let game = project.display().to_string();
+            // The last line is `cd`'s; git may warn before it.
+            let in_project = |id| {
+                let output = &node(id).output;
+                output
+                    .trim()
+                    .lines()
+                    .last()
+                    .unwrap_or_default()
+                    .eq_ignore_ascii_case(&game)
+            };
+            assert!(in_project(design), "{}", node(design).output);
+            for id in [code, test] {
+                assert_eq!(in_project(id), !commits, "{}", node(id).output);
+            }
+            for file in ["design.md", "code.rs", "test.rs"] {
+                assert!(project.join(file).is_file(), "{file}");
+            }
+            let said: Vec<&str> = chat
+                .iter()
+                .map(|message| message.speaker.as_ref().unwrap().0.as_str())
+                .collect();
+            if commits {
+                assert_eq!(said, ["Game Designer", "Gameplay Programmer", "Qa Tester"]);
+            } else {
+                // The organization says why.
+                assert_eq!(
+                    said,
+                    [
+                        "Game Designer",
+                        "Organization",
+                        "Gameplay Programmer",
+                        "Qa Tester"
+                    ]
+                );
+            }
+            // Nothing of theirs is left.
+            assert_eq!(
+                git(&project, &["worktree", "list"])
+                    .unwrap()
+                    .lines()
+                    .count(),
+                1
+            );
+            assert_eq!(
+                git(&project, &["branch", "--list", "besfa-org/*"]).unwrap(),
+                ""
+            );
+            let _ = fs::remove_dir_all(&root);
+        }
     }
 
     #[test]
@@ -3427,6 +3639,8 @@ mod tests {
             git: false,
             parallel: false,
             started: 0,
+            untouched: 0,
+            one_at_a_time: false,
         });
         panel.stop();
         assert_eq!(
@@ -3473,6 +3687,8 @@ mod tests {
             git: false,
             parallel: false,
             started: 0,
+            untouched: 0,
+            one_at_a_time: false,
         });
         panel.allow("Bash(cargo *)");
         let run = panel.run.take().unwrap();
