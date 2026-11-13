@@ -959,24 +959,27 @@ fn marked(line: &str, marker: &str) -> Option<String> {
 }
 
 /// The organization a chat agent handed its task to, read like a status
-/// line from the last `ORGANIZATION:` line of its answer, and the answer
-/// without that line: the brief it wrote for the team.
+/// line from the last line of its answer, `ORGANIZATION: <name>`, and the
+/// answer without that line: the brief it wrote for the team. Only the
+/// last line counts, a closing code fence or rule after it let go, so a
+/// marker the agent quotes on the way hands nothing over.
 pub fn handoff(output: &str) -> Option<(String, String)> {
-    const MARKER: &str = "ORGANIZATION:";
-    let lines: Vec<&str> = output.lines().collect();
-    let at = (0..lines.len())
-        .rev()
-        .find(|&at| marked(lines[at], MARKER).is_some())?;
-    // From the line as written, so an `_` inside the name stays.
-    let line = lines[at];
-    let after = line.to_ascii_uppercase().find(MARKER)? + MARKER.len();
-    let name = line[after..].trim_matches(|c: char| c.is_whitespace() || "*`_\"'.".contains(c));
+    let mut lines: Vec<&str> = output.lines().collect();
+    let at = lines.iter().rposition(|line| {
+        line.chars()
+            .any(|c| !c.is_whitespace() && !"*`_-#~".contains(c))
+    })?;
+    marked(lines[at], "ORGANIZATION:")?;
+    // From the line as written, so an `_` inside the name stays, and after
+    // its first colon, as Markdown may come before it (`**ORGANIZATION**:`).
+    // Names hold no colon.
+    let (_, name) = lines[at].split_once(':')?;
+    let name = name.trim_matches(|c: char| c.is_whitespace() || "*`_\"'.<>".contains(c));
     if name.is_empty() {
         return None;
     }
-    let mut brief = lines;
-    brief.remove(at);
-    Some((name.into(), brief.join("\n").trim().into()))
+    lines.remove(at);
+    Some((name.into(), lines.join("\n").trim().into()))
 }
 
 /// A task going through the organization, one agent at a time. ponytail:
@@ -1262,11 +1265,11 @@ impl OrgPanel {
                 .collect();
             // The count, since each agent is a run of its own to pay for.
             if !agents.is_empty() {
-                let count = agents.len();
-                lineup.push_str(&format!(
-                    "- {name} ({count} agents): {}\n",
-                    agents.join("; ")
-                ));
+                let count = match agents.len() {
+                    1 => "1 agent".to_string(),
+                    count => format!("{count} agents"),
+                };
+                lineup.push_str(&format!("- {name} ({count}): {}\n", agents.join("; ")));
             }
         }
         lineup
@@ -2819,16 +2822,28 @@ mod tests {
         let brief = "Design, code and test a double jump.";
         assert_eq!(handoff(said), Some(("Studio".into(), brief.into())));
         assert_eq!(handoff("organization: `Art_Team`").unwrap().0, "Art_Team");
-        // The last one counts, and the brief keeps the lines around it.
-        let twice = "ORGANIZATION: Studio\nNo, better:\nORGANIZATION: QA team\nThanks.";
+        for marked in [
+            "**ORGANIZATION**: Studio",
+            "`ORGANIZATION`: Studio",
+            "__ORGANIZATION__: Studio",
+            // As the note's template has it.
+            "ORGANIZATION: <Studio>",
+            "Brief.\n```\nORGANIZATION: Studio\n```\n",
+        ] {
+            assert_eq!(handoff(marked).unwrap().0, "Studio", "{marked:?}");
+        }
+        // The last line counts; the brief keeps the lines before it.
+        let twice = "ORGANIZATION: Studio\nNo, better:\nORGANIZATION: QA team\n";
         let (name, brief) = handoff(twice).unwrap();
         assert_eq!(name, "QA team");
-        assert_eq!(brief, "ORGANIZATION: Studio\nNo, better:\nThanks.");
+        assert_eq!(brief, "ORGANIZATION: Studio\nNo, better:");
         for none in [
             "I added the jump myself.",
             "The designer said:\n> ORGANIZATION: Studio",
             "ORGANIZATION:  **",
             "End with ORGANIZATION: <name> to hand it over.",
+            // Quoted on the way, after the work was done.
+            "Here is how:\n```\nORGANIZATION: Studio\n```\nI did it myself.",
             "",
         ] {
             assert_eq!(handoff(none), None, "{none:?}");
@@ -2860,7 +2875,7 @@ mod tests {
         let lineup = panel.lineup();
         let lines: Vec<&str> = lineup.lines().collect();
         assert_eq!(lines.len(), 2, "{lineup}");
-        assert_eq!(lines[0], "- Art (1 agents): Painter (Paints the UI.)");
+        assert_eq!(lines[0], "- Art (1 agent): Painter (Paints the UI.)");
         // In run order, each with what it does.
         assert!(
             lines[1].starts_with("- Studio (3 agents): Gameplay Programmer ("),

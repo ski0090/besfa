@@ -1018,7 +1018,7 @@ fn handoff_note(lineup: &str) -> String {
         return String::new();
     }
     format!(
-        "\n\n---\nFrom the Besfa editor: this project also has organizations, teams of agents the editor runs on a task one after another, each in its role and each taking the reports of those before it:\n{lineup}\nDo the task yourself when one agent can do it well, which is most tasks, edits to code you can make and check yourself included. Hand it to an organization only when it needs several of one organization's roles working together, such as design, code and testing, since every agent in it runs and a run costs that many times what you do. To hand it over, do none of the work yourself: answer with a brief for the team that stands on its own, saying what to do, what the user said that matters and what done looks like, and end with a last line `ORGANIZATION: <name>` naming one of the organizations above. The editor then runs that organization on your brief in this chat."
+        "\n\n---\nFrom the Besfa editor: this project also has organizations, teams of agents the editor runs on a task, each in its role and each taking the reports of the agents linked before it:\n{lineup}\nDo the task yourself when one agent can do it well. Hand it to an organization only when it needs several of one organization's roles working together, such as design, code and testing, since every agent in it runs and a run costs that many times what you do. To hand it over, do none of the work yourself: answer with a brief for the team that stands on its own, saying what to do, what the user said that matters and what done looks like, and end with a last line `ORGANIZATION: <name>` naming one of the organizations above. The editor then runs that organization on your brief in this chat."
     )
 }
 
@@ -1092,8 +1092,10 @@ pub struct AgentPanel {
     watched: Option<(PathBuf, Option<SystemTime>)>,
     /// Whether the run prints Claude's stream-json events, not plain text.
     streamed: bool,
-    /// Whether the run was told it may hand its task to an organization.
-    offered: bool,
+    /// What the run was sent, the chat so far and the user's prompt, when
+    /// it was told it may hand its task to an organization; the team gets
+    /// it too, as a task sent to it straight does.
+    offered: Option<String>,
     /// The organization the last run handed its task to, and the task, for
     /// the editor to start.
     handoff: Option<(String, String)>,
@@ -1247,8 +1249,9 @@ impl AgentPanel {
         ctx: &egui::Context,
     ) {
         let note = handoff_note(lineup);
-        self.offered = !note.is_empty();
-        let input = self.ask(prompt) + &note;
+        let input = self.ask(prompt);
+        self.offered = (!note.is_empty()).then(|| input.clone());
+        let input = input + &note;
         self.chat.messages.push(Message::default());
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let env: Vec<(&str, &str)> = env
@@ -1323,8 +1326,13 @@ impl AgentPanel {
         {
             chat = saved.clone();
         }
+        // A run the chat's agent handed over leaves the user's own pick, so
+        // what they send next goes where it went before.
+        let handed = (chat.messages.iter()).any(|m| m.child.as_deref() == Some(organization));
         self.show_chat(chat);
-        self.organization = Some(organization.into());
+        if !handed {
+            self.organization = Some(organization.into());
+        }
     }
 
     /// Whether Continue was clicked since the last call.
@@ -1428,12 +1436,10 @@ impl AgentPanel {
                         self.reply("Done.");
                     }
                     let said = self.chat.messages.last().map(|m| m.text.as_str());
-                    if std::mem::take(&mut self.offered)
+                    if let Some(mut task) = self.offered.take()
                         && code == 0
                         && let Some((organization, brief)) = said.and_then(organization::handoff)
                     {
-                        let asked = self.chat.messages.iter().rev().find(|m| m.user);
-                        let mut task = asked.map_or_else(String::new, |m| m.text.clone());
                         if !brief.is_empty() {
                             task.push_str(&format!(
                                 "\n\nThe agent the user asked handed this task to your team, adding:\n{brief}"
@@ -2693,8 +2699,13 @@ thoughts {:?}",
         answer(&mut panel, "cmd", hands, "Add a double jump.", lineup);
         let (name, task, files) = panel.take_handoff().unwrap();
         assert_eq!(name, "studio");
-        // The user's words, then the agent's brief.
-        assert!(task.starts_with("Add a double jump.\n\n"), "{task}");
+        // The chat so far and the user's words, as a task sent to the team
+        // straight would be, then the agent's brief; not the note.
+        assert!(task.starts_with("Earlier in this conversation:"), "{task}");
+        let (_, now) = task.rsplit_once("Now the user says:\n\n").unwrap();
+        assert!(now.starts_with("Add a double jump.\n\n"), "{task}");
+        // The earlier echo above holds a note; this turn's is left out.
+        assert!(!now.contains("From the Besfa editor"), "{task}");
         assert!(
             task.ends_with("adding:\nDesign, code and test it."),
             "{task}"
@@ -2899,6 +2910,14 @@ thoughts {:?}",
         assert_eq!(panel.chat.title(), "Add a jump.");
         assert_eq!(panel.organization(), Some("Studio"));
         assert_eq!(panel.chat.messages[1].text, "Stopped.");
+        // One the chat's agent handed over leaves the model the user picked.
+        let handed = Message {
+            child: Some("Studio".into()),
+            ..Default::default()
+        };
+        let mut other = AgentPanel::default();
+        other.restore((6, &[handed]), &[], "Studio");
+        assert_eq!(other.organization(), None);
 
         let mut harness = tab(None);
         harness.state_mut().org = org;
