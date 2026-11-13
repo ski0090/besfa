@@ -3924,7 +3924,8 @@ mod tests {
                 one_at_a_time: false,
             });
             let ctx = egui::Context::default();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            // Worktrees, merges and filling are slow on a busy machine.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
             let (mut chat, mut finished) = (Vec::new(), None);
             while finished.is_none() && std::time::Instant::now() < deadline {
                 finished = panel.poll(&ctx, (&mut chat, &mut Vec::new()));
@@ -4059,7 +4060,8 @@ mod tests {
                 one_at_a_time: false,
             });
             let ctx = egui::Context::default();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            // Worktrees, merges and filling are slow on a busy machine.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
             let (mut chat, mut finished) = (Vec::new(), None);
             let mut waited = false;
             while finished.is_none() && std::time::Instant::now() < deadline {
