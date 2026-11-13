@@ -396,7 +396,7 @@ fn korean(en: &str) -> Option<&'static str> {
         "Auto" => "자동",
         "Accept edits" => "편집만 허용",
         "Ask every time" => "매번 묻기",
-        "Claude decides on its own: it lets safe edits and commands through and asks in the chat about the rest. The rules below always run without asking." => "Claude가 스스로 판단합니다. 안전한 편집과 명령은 그냥 실행하고, 나머지는 채팅에서 묻습니다. 아래 규칙에 있는 것은 언제나 묻지 않고 실행합니다.",
+        "Claude decides on its own which edits and commands to run without asking, and may refuse the rest or ask about them in the chat. What it judges safe can include commands you would want to check, so keep branch protection on in GitHub." => "Claude가 어떤 편집과 명령을 묻지 않고 실행할지 스스로 판단하고, 나머지는 거절하거나 채팅에서 물을 수 있습니다. 안전하다고 판단하는 것에 직접 확인하고 싶은 명령이 들어갈 수 있으니, GitHub의 브랜치 보호는 켜 두세요.",
         "Claude edits the project's files without asking, and asks in the chat before commands and other tools the rules below do not allow." => "Claude가 프로젝트 파일은 묻지 않고 고치고, 아래 규칙에 없는 명령과 다른 도구는 실행하기 전에 채팅에서 묻습니다.",
         "Claude asks in the chat before every edit, command and tool the rules below do not allow." => "아래 규칙에 없는 편집, 명령, 도구는 모두 실행하기 전에 채팅에서 묻습니다.",
         "Only Claude follows this choice. Codex and Gemini edit files without asking and do nothing more." => "이 선택은 Claude에만 적용됩니다. Codex와 Gemini는 파일을 묻지 않고 고치고, 그 밖의 일은 하지 않습니다.",

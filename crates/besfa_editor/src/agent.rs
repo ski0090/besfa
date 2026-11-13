@@ -957,7 +957,7 @@ pub fn settings_tab(
                 ui.radio_value(&mut access.permission, Permission::Manual, t("Ask every time"));
             });
             let note_text = match access.permission {
-                Permission::Auto => t("Claude decides on its own: it lets safe edits and commands through and asks in the chat about the rest. The rules below always run without asking."),
+                Permission::Auto => t("Claude decides on its own which edits and commands to run without asking, and may refuse the rest or ask about them in the chat. What it judges safe can include commands you would want to check, so keep branch protection on in GitHub."),
                 Permission::AcceptEdits => t("Claude edits the project's files without asking, and asks in the chat before commands and other tools the rules below do not allow."),
                 Permission::Manual => t("Claude asks in the chat before every edit, command and tool the rules below do not allow."),
             };
@@ -2476,8 +2476,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("besfa-real-ask-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
+        // Auto may run the command without asking; this tests the asking.
         let none = ProjectAccess {
             servers: Default::default(),
+            permission: Permission::AcceptEdits,
             ..Default::default()
         };
         let invocation = invocation(Provider::Claude, &Route::Cli, "haiku", &[], &none);
@@ -2984,6 +2986,7 @@ thoughts {:?}",
         let model = std::env::var("BESFA_HANDOFF_MODEL").unwrap_or("sonnet".into());
         let none = ProjectAccess {
             servers: Default::default(),
+            permission: Permission::AcceptEdits,
             ..Default::default()
         };
         let lineup = "- Studio (3 agents): Game Designer (Designs mechanics and how they feel.); Gameplay Programmer (Implements gameplay in Rust.); Qa Tester (Writes and runs tests, reports bugs.)\n";
