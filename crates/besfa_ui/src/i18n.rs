@@ -412,8 +412,8 @@ fn korean(en: &str) -> Option<&'static str> {
         "The agents go one at a time in the project folder while Cargo.toml or Cargo.lock has uncommitted changes: worktrees made from the last commit would build the dependencies from scratch." => {
             "Cargo.toml이나 Cargo.lock에 커밋하지 않은 변경이 있는 동안 에이전트들이 프로젝트 폴더에서 한 명씩 돕니다. 마지막 커밋으로 만든 워크트리에서는 의존성을 처음부터 빌드하게 됩니다."
         }
-        "Filling its target folder from what the project built." => {
-            "프로젝트가 빌드해 둔 것으로 target 폴더를 채우는 중입니다."
+        "Getting its worktree and target folder ready." => {
+            "워크트리와 target 폴더를 준비하는 중입니다."
         }
         "Its builds start from scratch:" => "빌드를 처음부터 합니다:",
         "Roles" => "역할",
