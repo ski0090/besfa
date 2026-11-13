@@ -356,8 +356,8 @@ fn korean(en: &str) -> Option<&'static str> {
         "Organization runs review and merge their pull requests" => {
             "조직 실행이 연 풀 리퀘스트를 리뷰하고 머지하게 하기"
         }
-        "An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass, or right away without any. It is told never to push a refused merge through with --admin, but only a branch rule that also applies to administrators enforces that. A rule in the project's CLAUDE.md or .claude/agent-memory that says never to merge can still stop them." => {
-            "풀 리퀘스트를 연 에이전트가 변경 내용을 리뷰하고, 잘못된 곳을 고치고, 검사가 통과하면(검사가 없으면 바로) 머지합니다. 거부된 머지를 --admin으로 밀어붙이지 말라고 지시하지만, 실제로 막는 것은 관리자에게도 적용되는 브랜치 규칙뿐입니다. 프로젝트의 CLAUDE.md나 .claude/agent-memory에 머지하지 말라고 적혀 있으면 여전히 멈출 수 있습니다."
+        "An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass, or right away without any, then closes the issue it finished. It is told never to push a refused merge through with --admin, but only a branch rule that also applies to administrators enforces that. A rule in the project's CLAUDE.md or .claude/agent-memory that says never to merge can still stop them." => {
+            "풀 리퀘스트를 연 에이전트가 변경 내용을 리뷰하고, 잘못된 곳을 고치고, 검사가 통과하면(검사가 없으면 바로) 머지한 뒤, 끝낸 이슈를 닫습니다. 거부된 머지를 --admin으로 밀어붙이지 말라고 지시하지만, 실제로 막는 것은 관리자에게도 적용되는 브랜치 규칙뿐입니다. 프로젝트의 CLAUDE.md나 .claude/agent-memory에 머지하지 말라고 적혀 있으면 여전히 멈출 수 있습니다."
         }
         "It then runs git and gh without asking, and gh reaches every repository your GitHub login can. Deny rules in the project's .claude/settings.json still win, but only over commands they match as written, so block force pushes with branch protection on GitHub." => {
             "그러면 Claude가 git과 gh를 묻지 않고 실행하고, gh는 GitHub 로그인으로 접근할 수 있는 모든 저장소를 다룹니다. 프로젝트 .claude/settings.json의 거부 규칙은 여전히 우선하지만 적힌 그대로 맞는 명령에만 적용되므로, 강제 푸시는 GitHub의 브랜치 보호로 막으세요."
@@ -403,6 +403,9 @@ fn korean(en: &str) -> Option<&'static str> {
             "이 프로젝트의 설정 > 에이전트 설정에 저장됩니다."
         }
         "Round {} of {}: {} agents go again." => "라운드 {}/{}: 에이전트 {}개가 다시 돕니다.",
+        "The project folder has uncommitted changes since the run began, so the agents go one at a time there." => {
+            "실행을 시작한 뒤 프로젝트 폴더에 커밋하지 않은 변경이 생겨서, 에이전트들이 그 폴더에서 한 명씩 돕니다."
+        }
         "Roles" => "역할",
         "Claude Code Game Studios' agents. Double-click one to add it." => {
             "Claude Code Game Studios의 에이전트입니다. 더블 클릭하면 추가됩니다."
@@ -483,6 +486,8 @@ fn korean(en: &str) -> Option<&'static str> {
         "Thoughts" => "생각",
         "Continue" => "이어서",
         "Nothing to continue." => "이어서 할 작업이 없습니다.",
+        "Child session" => "자식 세션",
+        "paused" => "멈춤",
         "Runs the agents of {} that are not done yet, handing on what the others answered." => {
             "{}에서 아직 끝나지 않은 에이전트를 실행하고, 끝난 에이전트의 답을 넘깁니다."
         }

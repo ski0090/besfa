@@ -243,6 +243,10 @@ pub struct Editor {
     /// Which tab the Agent window shows, and its Organization tab.
     agent_view: AgentView,
     organization: OrgPanel,
+    /// The chat agent that handed its task to the running organization
+    /// changed the scene: the two are one task, so the scene is reloaded
+    /// once the organization is done too.
+    handoff_changed_scene: bool,
     /// The window may close: nothing is unsaved, or the user chose.
     closing: bool,
     leave: bool,
@@ -319,6 +323,7 @@ impl Editor {
             agent_panel,
             agent_view: AgentView::Chat,
             organization,
+            handoff_changed_scene: false,
             closing: false,
             leave: false,
         };
@@ -2004,8 +2009,9 @@ impl Editor {
                 &self.agent.project(&directory),
             );
             let scene = self.project.file(SCENE_FILE);
+            let lineup = self.organization.lineup();
             self.agent_panel
-                .start(invocation, &prompt, &directory, scene, ctx);
+                .start(invocation, &prompt, &directory, scene, &lineup, ctx);
         }
     }
 
@@ -2038,9 +2044,41 @@ impl Editor {
     /// edits made while it ran.
     fn poll_agent(&mut self, ctx: &egui::Context) {
         let asking = self.agent_panel.asking();
-        let finished = self.agent_panel.poll().or_else(|| {
-            self.organization
-                .poll(ctx, self.agent_panel.chat_and_asks())
+        let mut finished = self.agent_panel.poll();
+        // Here, not in the Agent tab, so it starts with the window closed.
+        if let Some((name, task, files)) = self.agent_panel.take_handoff() {
+            // Organization names ignore case, as their files do.
+            let lower = name.to_lowercase();
+            let name = (self.organization.names().iter())
+                .find(|other| other.to_lowercase() == lower)
+                .cloned()
+                .unwrap_or(name);
+            let directory = self.project.file("");
+            let scene = self.project.file(SCENE_FILE);
+            let started = self.organization.start(
+                &name,
+                task,
+                &files,
+                self.agent_panel.chat_id(),
+                &self.agent,
+                &self.agents,
+                &directory,
+                scene,
+            );
+            match started {
+                Ok(()) => {
+                    self.log(format!("The agent handed the task to {name}."));
+                    self.agent_panel.handed_off(&name);
+                    self.handoff_changed_scene = finished.take() == Some(true);
+                }
+                Err(error) => self.agent_panel.say(&error),
+            }
+        }
+        let finished = finished.or_else(|| {
+            let changed = self
+                .organization
+                .poll(ctx, self.agent_panel.chat_and_asks())?;
+            Some(changed | std::mem::take(&mut self.handoff_changed_scene))
         });
         let busy = self.agent_panel.running() || self.organization.running();
         if self.agent_panel.asking() > asking {
@@ -2468,6 +2506,50 @@ mod tests {
         assert_eq!(server_exits(&editor), 2, "{:?}", editor.logs);
         assert!(editor.game.is_some() && !editor.playing);
         drop(editor);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// The organization a chat agent names is looked up ignoring case, and
+    /// one that cannot take the task says why in the chat and runs nothing.
+    #[test]
+    fn a_chat_agent_hands_its_task_only_to_an_organization_that_can_take_it() {
+        let dir = std::env::temp_dir().join(format!("besfa_handoff_{}", std::process::id()));
+        fs::create_dir_all(dir.join(ORGANIZATIONS_DIR)).unwrap();
+        // Saved before it had agents.
+        fs::write(dir.join(ORGANIZATIONS_DIR).join("Studio.besfa"), "()").unwrap();
+        let ctx = egui::Context::default();
+        let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
+        let mut editor = Editor::new(Project::new(dir.to_string_lossy()), None, &waiting, &ctx);
+        let mut hand_to = |name: &str| {
+            let says = format!("echo Design it.& echo ORGANIZATION: {name}");
+            editor.agent_panel.start(
+                ("cmd".into(), vec!["/c".into(), says], vec![]),
+                "Add a jump.",
+                &dir,
+                dir.join("none"),
+                "- Studio (1 agents): Game Designer\n",
+                &ctx,
+            );
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while editor.agent_panel.running() {
+                assert!(Instant::now() < deadline);
+                editor.poll_agent(&ctx);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let chat = editor.agent_panel.chat_and_asks().0;
+            chat.last().unwrap().text.clone()
+        };
+        assert_eq!(hand_to("Nope"), "There is no organization named \"Nope\".");
+        assert_eq!(
+            hand_to("studio"),
+            "The organization has no agents yet. Add them in the Organization tab."
+        );
+        assert!(!editor.organization.running());
+        let handed = |line: &String| line.starts_with("The agent handed the task");
+        assert!(!editor.logs.iter().any(handed), "{:?}", editor.logs);
+        let chats = AgentPanel::chats_file(&editor.project.file(""));
+        drop(editor);
+        let _ = fs::remove_file(chats);
         let _ = fs::remove_dir_all(dir);
     }
 

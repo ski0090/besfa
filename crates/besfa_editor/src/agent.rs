@@ -13,7 +13,7 @@ use std::{
     time::SystemTime,
 };
 
-use eframe::egui::{self, Color32, Key, RichText, Ui};
+use eframe::egui::{self, Color32, Key, RichText, Ui, collapsing_header::CollapsingState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use windows::{
@@ -386,6 +386,11 @@ impl Ask {
             tool: request["tool_name"].as_str()?.into(),
             input: request["input"].clone(),
         })
+    }
+
+    /// The request it came in, which its answer names.
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     /// What it would do: the command it runs, the file or address it
@@ -858,7 +863,7 @@ pub fn settings_tab(
                     t("Organization runs review and merge their pull requests"),
                 );
             });
-            note(ui, t("An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass, or right away without any. It is told never to push a refused merge through with --admin, but only a branch rule that also applies to administrators enforces that. A rule in the project's CLAUDE.md or .claude/agent-memory that says never to merge can still stop them."));
+            note(ui, t("An agent that opens a pull request reviews its diff, fixes what is wrong and merges it once its checks pass, or right away without any, then closes the issue it finished. It is told never to push a refused merge through with --admin, but only a branch rule that also applies to administrators enforces that. A rule in the project's CLAUDE.md or .claude/agent-memory that says never to merge can still stop them."));
             let gh = match agents.gh {
                 Cli::Checking => t("Checking `{}`.").replace("{}", "gh"),
                 Cli::Missing => t("`{}` is not installed.").replace("{}", "gh"),
@@ -997,6 +1002,29 @@ pub struct Message {
     pub thoughts: String,
     /// The organization agent that said it, and its color as RGB.
     pub speaker: Option<(String, [u8; 3])>,
+    /// The organization the chat's agent handed its task to. Its agents
+    /// answer in the messages after this one, shown as a child session.
+    pub child: Option<String>,
+}
+
+/// Where the organization run answering in the shown chat stands, until it
+/// is done.
+#[derive(Clone, Copy, PartialEq)]
+enum Live {
+    Working,
+    Paused,
+}
+
+/// What a chat agent is told about `lineup`, the project's organizations,
+/// so it can hand a task that needs a team to one of them. Empty when there
+/// is none to hand to.
+fn handoff_note(lineup: &str) -> String {
+    if lineup.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\n---\nFrom the Besfa editor: this project also has organizations, teams of agents the editor runs on a task, each in its role and each taking the reports of the agents linked before it:\n{lineup}\nDo the task yourself when one agent can do it well. Hand it to an organization only when it needs several of one organization's roles working together, such as design, code and testing, since every agent in it runs and a run costs that many times what you do. To hand it over, do none of the work yourself: answer with a brief for the team that stands on its own, saying what to do, what the user said that matters and what done looks like, and end with a last line `ORGANIZATION: <name>` naming one of the organizations above. The editor then runs that organization on your brief in this chat."
+    )
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -1069,6 +1097,13 @@ pub struct AgentPanel {
     watched: Option<(PathBuf, Option<SystemTime>)>,
     /// Whether the run prints Claude's stream-json events, not plain text.
     streamed: bool,
+    /// What the run was sent, the chat so far and the user's prompt, when
+    /// it was told it may hand its task to an organization; the team gets
+    /// it too, as a task sent to it straight does.
+    offered: Option<String>,
+    /// The organization the last run handed its task to, and the task, for
+    /// the editor to start.
+    handoff: Option<(String, String)>,
     /// What the running agent, this chat's or an organization's, waits on
     /// the user to allow, oldest first.
     asks: Vec<Ask>,
@@ -1158,7 +1193,8 @@ impl AgentPanel {
         fs::rename(&part, file).map_err(|error| error.to_string())
     }
 
-    /// A panel with a chat and an earlier one, for the manual's screenshot.
+    /// A panel with earlier chats and one whose agent handed its task to an
+    /// organization, for the manual's screenshot.
     #[cfg(test)]
     pub fn demo() -> Self {
         let chat = |turns: &[(bool, &str)]| Chat {
@@ -1178,6 +1214,10 @@ impl AgentPanel {
             chat(&[(true, "Add a spawn point for the zombie")]),
         ];
         panel.chat = chat(&[(true, "Add a double jump to the player.")]);
+        panel.say(
+            "This needs design, code and a test pass, so it goes to Studio.\n\nAdd a double jump to the player: decide its height and cost, implement it, and test it.",
+        );
+        panel.handed_off("Studio");
         let agent = |name: &str, color: [u8; 3], thoughts: &str, text: &str| Message {
             text: text.into(),
             thoughts: thoughts.into(),
@@ -1198,21 +1238,25 @@ impl AgentPanel {
                 "",
             ),
         ]);
-        panel.organization = Some("Studio".into());
         panel
     }
 
-    /// Runs `invocation` on `prompt` in `directory`. `poll` tells once it
-    /// exits whether it changed `watch`.
+    /// Runs `invocation` on `prompt` in `directory`, telling it it may hand
+    /// the task to one of the organizations in `lineup`. `poll` tells once
+    /// it exits whether it changed `watch`.
     pub fn start(
         &mut self,
         (program, args, env): (String, Vec<String>, Vec<(String, String)>),
         prompt: &str,
         directory: &Path,
         watch: PathBuf,
+        lineup: &str,
         ctx: &egui::Context,
     ) {
+        let note = handoff_note(lineup);
         let input = self.ask(prompt);
+        self.offered = (!note.is_empty()).then(|| input.clone());
+        let input = input + &note;
         self.chat.messages.push(Message::default());
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let env: Vec<(&str, &str)> = env
@@ -1266,6 +1310,13 @@ impl AgentPanel {
         files: &[PathBuf],
         organization: &str,
     ) {
+        // A run the chat's agent handed over leaves the user's own pick, so
+        // what they send next goes where it went before. Its marker follows
+        // the prompt that started the run, the last one in the run's own copy
+        // of the chat, since nobody can send while it runs; the saved copy
+        // may hold later prompts, and the name may since have changed.
+        let started = messages.iter().rposition(|m| m.user).map_or(0, |at| at + 1);
+        let handed = messages[started..].iter().any(|m| m.child.is_some());
         let mut messages = messages.to_vec();
         // An agent the editor closed on said nothing yet.
         for message in &mut messages {
@@ -1288,12 +1339,33 @@ impl AgentPanel {
             chat = saved.clone();
         }
         self.show_chat(chat);
-        self.organization = Some(organization.into());
+        if !handed {
+            self.organization = Some(organization.into());
+        }
     }
 
     /// Whether Continue was clicked since the last call.
     pub fn take_continue(&mut self) -> bool {
         std::mem::take(&mut self.continuing)
+    }
+
+    /// The organization the run that just ended handed its task to, the
+    /// task for it, and every file attached in the chat.
+    pub fn take_handoff(&mut self) -> Option<(String, String, Vec<PathBuf>)> {
+        let (organization, task) = self.handoff.take()?;
+        Some((organization, task, self.chat.files.clone()))
+    }
+
+    /// Marks where `organization`'s agents, handed the task, start
+    /// answering in the chat. ponytail: the agent that handed it over does
+    /// not hear back; run it again on the team's reports if users want it
+    /// to sum them up.
+    pub fn handed_off(&mut self, organization: &str) {
+        self.chat.messages.push(Message {
+            text: format!("Handed the task to {organization}."),
+            child: Some(organization.into()),
+            ..Default::default()
+        });
     }
 
     /// Adds a message from the editor, such as why the organization could
@@ -1372,6 +1444,22 @@ impl AgentPanel {
                         // the chat the next prompt resends.
                         self.reply("Done.");
                     }
+                    let said = self.chat.messages.last().map(|m| m.text.as_str());
+                    if let Some(mut task) = self.offered.take()
+                        && code == 0
+                        && let Some((organization, brief)) = said.and_then(organization::handoff)
+                    {
+                        if !brief.is_empty() {
+                            task.push_str(&format!(
+                                "\n\nThe agent the user asked handed this task to your team, adding:\n{brief}"
+                            ));
+                            // The child session below names the organization.
+                            if let Some(message) = self.chat.messages.last_mut() {
+                                message.text.clone_from(&brief);
+                            }
+                        }
+                        self.handoff = Some((organization, task));
+                    }
                     self.run = None;
                     let (file, before) = self.watched.take()?;
                     return Some(modified(&file) != before);
@@ -1444,7 +1532,16 @@ impl AgentPanel {
                 ui.label(RichText::new(self.chat.title()).strong());
             });
             ui.separator();
-            self.messages(ui, busy);
+            let paused = org
+                .paused()
+                .is_some_and(|paused| self.chat.id != 0 && paused.chat().0 == self.chat.id);
+            // A run keeps the chat it answers in shown until it is done.
+            let live = if org.running() {
+                Some(Live::Working)
+            } else {
+                paused.then_some(Live::Paused)
+            };
+            self.messages(ui, busy, live);
         });
         send
     }
@@ -1484,63 +1581,66 @@ impl AgentPanel {
         }
     }
 
-    fn messages(&mut self, ui: &mut Ui, busy: bool) {
+    /// The chat's messages, where `live` says how the organization run
+    /// answering in it stands, if it is not done.
+    fn messages(&mut self, ui: &mut Ui, busy: bool, live: Option<Live>) {
         let mut markdown = std::mem::take(&mut self.markdown);
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 ui.add_space(4.0);
-                if self.chat.messages.is_empty() {
+                let messages = &self.chat.messages;
+                if messages.is_empty() {
                     ui.colored_label(panels::MUTED, t("Ask the agent to change the project."));
                 }
-                let last = self.chat.messages.len().wrapping_sub(1);
-                for (index, message) in self.chat.messages.iter().enumerate() {
-                    let working = message.text.is_empty() && index == last && busy;
-                    if message.user {
-                        egui::Frame::new()
-                            .fill(ui.visuals().extreme_bg_color)
-                            .corner_radius(8.0)
-                            .inner_margin(10.0)
-                            .show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.label(&message.text);
-                            });
-                    } else if let Some((name, [r, g, b])) = &message.speaker {
-                        let color = &Color32::from_rgb(*r, *g, *b);
-                        // Like a team chat: the agent's initial, its name,
-                        // then what it said.
-                        ui.horizontal_top(|ui| {
-                            let (rect, _) = ui
-                                .allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, 6.0, *color);
-                            ui.painter().text(
-                                rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                name.chars().next().unwrap_or('?'),
-                                egui::FontId::proportional(15.0),
-                                Color32::WHITE,
-                            );
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(name).strong().color(*color));
-                                    if working {
-                                        ui.spinner();
+                let mut index = 0;
+                while index < messages.len() {
+                    let Some(organization) = &messages[index].child else {
+                        self.message(ui, &mut markdown, index, busy);
+                        ui.add_space(8.0);
+                        index += 1;
+                        continue;
+                    };
+                    // Its agents, and the rounds it announces, answer under
+                    // it until someone else speaks.
+                    let agents = messages[index + 1..]
+                        .iter()
+                        .take_while(|message| message.speaker.is_some())
+                        .count();
+                    let end = index + 1 + agents;
+                    let live = live.filter(|_| end == messages.len());
+                    egui::Frame::new()
+                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                        .corner_radius(8.0)
+                        .inner_margin(8.0)
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            let id = egui::Id::new(("child", self.chat.id, index));
+                            CollapsingState::load_with_default_open(ui.ctx(), id, true)
+                                .show_header(ui, |ui| {
+                                    let title = format!("{} · {organization}", t("Child session"));
+                                    ui.label(RichText::new(title).strong());
+                                    match live {
+                                        Some(Live::Working) => {
+                                            ui.spinner();
+                                            ui.colored_label(panels::MUTED, t("working"));
+                                        }
+                                        Some(Live::Paused) => {
+                                            ui.colored_label(panels::WARNING, t("paused"));
+                                        }
+                                        None => {}
+                                    }
+                                })
+                                .body(|ui| {
+                                    for at in index + 1..end {
+                                        self.message(ui, &mut markdown, at, busy);
+                                        ui.add_space(8.0);
                                     }
                                 });
-                                self.thoughts(ui, index, message);
-                                reply(ui, &mut markdown, &message.text);
-                            });
                         });
-                    } else {
-                        self.thoughts(ui, index, message);
-                        if working {
-                            ui.spinner();
-                        } else {
-                            reply(ui, &mut markdown, &message.text);
-                        }
-                    }
                     ui.add_space(8.0);
+                    index = end;
                 }
                 if let Some(answer) = asks(ui, &self.asks) {
                     let (index, allow, always) = answer;
@@ -1549,6 +1649,63 @@ impl AgentPanel {
                 }
             });
         self.markdown = markdown;
+    }
+
+    /// The chat's message at `index`: the user's, an organization agent's
+    /// under its name, or the chat agent's. The last one is still being
+    /// written while `busy`.
+    fn message(
+        &self,
+        ui: &mut Ui,
+        markdown: &mut egui_commonmark::CommonMarkCache,
+        index: usize,
+        busy: bool,
+    ) {
+        let message = &self.chat.messages[index];
+        let working = message.text.is_empty() && index + 1 == self.chat.messages.len() && busy;
+        if message.user {
+            egui::Frame::new()
+                .fill(ui.visuals().extreme_bg_color)
+                .corner_radius(8.0)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(&message.text);
+                });
+        } else if let Some((name, [r, g, b])) = &message.speaker {
+            let color = &Color32::from_rgb(*r, *g, *b);
+            // Like a team chat: the agent's initial, its name, then what it
+            // said.
+            ui.horizontal_top(|ui| {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 6.0, *color);
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    name.chars().next().unwrap_or('?'),
+                    egui::FontId::proportional(15.0),
+                    Color32::WHITE,
+                );
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(name).strong().color(*color));
+                        if working {
+                            ui.spinner();
+                        }
+                    });
+                    self.thoughts(ui, index, message);
+                    reply(ui, markdown, &message.text);
+                });
+            });
+        } else {
+            self.thoughts(ui, index, message);
+            if working {
+                ui.spinner();
+            } else {
+                reply(ui, markdown, &message.text);
+            }
+        }
     }
 
     /// `message`'s thoughts, folded until clicked.
@@ -2106,7 +2263,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut panel = AgentPanel::default();
         let prompt = "Use the Bash tool to run exactly: python -c \"open('a.txt','w').write('x')\" and then, as a separate Bash call, exactly: python -c \"open('b.txt','w').write('x')\" Then say ok.";
-        panel.start(invocation, prompt, &dir, dir.join("none"), &ctx);
+        panel.start(invocation, prompt, &dir, dir.join("none"), "", &ctx);
         let mut asked = Vec::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
         while panel.poll().is_none() && std::time::Instant::now() < deadline {
@@ -2506,12 +2663,184 @@ thoughts {:?}",
         let mut panel = AgentPanel::default();
         let quiet = ("cmd".into(), vec!["/c".into(), "exit 0".into()], vec![]);
         let ctx = egui::Context::default();
-        panel.start(quiet, "Hi", Path::new("."), "none".into(), &ctx);
+        panel.start(quiet, "Hi", Path::new("."), "none".into(), "", &ctx);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while panel.poll().is_none() && std::time::Instant::now() < deadline {
             thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(panel.chat.messages[1].text, "Done.");
+    }
+
+    /// Runs `program` with `args` on `prompt` as the chat's agent, told of
+    /// `lineup`, until it exits.
+    fn answer(panel: &mut AgentPanel, program: &str, args: &str, prompt: &str, lineup: &str) {
+        let args = args.split(' ').map(str::to_string).collect();
+        let ctx = egui::Context::default();
+        panel.start(
+            (program.into(), args, vec![]),
+            prompt,
+            Path::new("."),
+            "none".into(),
+            lineup,
+            &ctx,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while panel.poll().is_none() {
+            assert!(std::time::Instant::now() < deadline);
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn hands_a_task_to_the_organization_its_answer_names() {
+        let lineup = "- Studio: Game Designer; Qa Tester\n";
+        let mut panel = AgentPanel::default();
+        // What the agent is sent, echoed back: told of the organizations,
+        // which alone hands nothing over.
+        answer(&mut panel, "findstr", "/r .", "Add a jump.", lineup);
+        let echoed = &panel.chat.messages[1].text;
+        assert!(echoed.starts_with("Add a jump."), "{echoed}");
+        assert!(echoed.contains("- Studio: Game Designer; Qa Tester"));
+        assert!(echoed.contains("`ORGANIZATION: <name>`"));
+        assert_eq!(panel.take_handoff(), None);
+
+        let hands = "/c echo Design, code and test it.& echo ORGANIZATION: studio";
+        answer(&mut panel, "cmd", hands, "Add a double jump.", lineup);
+        let (name, task, files) = panel.take_handoff().unwrap();
+        assert_eq!(name, "studio");
+        // The chat so far and the user's words, as a task sent to the team
+        // straight would be, then the agent's brief; not the note.
+        assert!(task.starts_with("Earlier in this conversation:"), "{task}");
+        let (_, now) = task.rsplit_once("Now the user says:\n\n").unwrap();
+        assert!(now.starts_with("Add a double jump.\n\n"), "{task}");
+        // The earlier echo above holds a note; this turn's is left out.
+        assert!(!now.contains("From the Besfa editor"), "{task}");
+        assert!(
+            task.ends_with("adding:\nDesign, code and test it."),
+            "{task}"
+        );
+        assert!(files.is_empty());
+        assert_eq!(panel.take_handoff(), None);
+        // The chat shows the brief; the child session names the team.
+        let shown = &panel.chat.messages.last().unwrap().text;
+        assert_eq!(shown.trim(), "Design, code and test it.");
+
+        // Not when it was not told it may, or when it failed.
+        answer(&mut panel, "cmd", hands, "Add a jump.", "");
+        assert_eq!(panel.take_handoff(), None);
+        let fails = "/c echo ORGANIZATION: Studio& exit 1";
+        answer(&mut panel, "cmd", fails, "Add a jump.", lineup);
+        assert_eq!(panel.take_handoff(), None);
+    }
+
+    /// Needs a logged-in `claude` and spends a little of its usage, on the
+    /// model in `BESFA_HANDOFF_MODEL` or sonnet:
+    /// `cargo test -p besfa_editor real_claude_hands -- --ignored`.
+    /// Haiku kept the one-agent tasks too, but did the team's task on this
+    /// small game itself.
+    #[test]
+    #[ignore]
+    fn real_claude_hands_off_only_what_needs_a_team() {
+        let dir = std::env::temp_dir().join(format!("besfa-real-handoff-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        // A game small enough to read at a glance, so the task decides.
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("src/main.rs"),
+            "mod player;\n\nfn main() {\n    let mut player = player::Player::default();\n    player.jump();\n    println!(\"{}\", player.velocity_y);\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("src/player.rs"),
+            "pub const JUMP_SPEED: f32 = 5.0;\n\n#[derive(Default)]\npub struct Player {\n    pub velocity_y: f32,\n    pub grounded: bool,\n}\n\nimpl Player {\n    pub fn jump(&mut self) {\n        if self.grounded {\n            self.velocity_y = JUMP_SPEED;\n            self.grounded = false;\n        }\n    }\n}\n",
+        )
+        .unwrap();
+        let model = std::env::var("BESFA_HANDOFF_MODEL").unwrap_or("sonnet".into());
+        let none = ProjectAccess {
+            servers: Default::default(),
+            ..Default::default()
+        };
+        let lineup = "- Studio (3 agents): Game Designer (Designs mechanics and how they feel.); Gameplay Programmer (Implements gameplay in Rust.); Qa Tester (Writes and runs tests, reports bugs.)\n";
+        let ask = |prompt: &str| {
+            let mut panel = AgentPanel::default();
+            let invocation = invocation(Provider::Claude, &Route::Cli, &model, &[], &none);
+            let ctx = egui::Context::default();
+            panel.start(invocation, prompt, &dir, dir.join("none"), lineup, &ctx);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            while panel.poll().is_none() {
+                // It may look around first; nobody is there to allow more.
+                for ask in std::mem::take(&mut panel.asks) {
+                    eprintln!("denied: {}", ask.what());
+                    assert!(panel.send(&ask.answer(false, false)));
+                }
+                let message = &panel.chat.messages[1];
+                let late = std::time::Instant::now() > deadline;
+                assert!(!late, "{}\n---\n{}", message.thoughts, message.text);
+                thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let message = panel.chat.messages[1].clone();
+            eprintln!("{prompt}\n{}\n---\n{}\n", message.thoughts, message.text);
+            (panel.take_handoff(), message.text)
+        };
+        // One agent's work, however much it is about the game.
+        let (handoff, said) = ask("Make the player's jump 20% higher.");
+        assert_eq!(handoff, None, "{said}");
+        let (handoff, said) = ask("Why can't the player jump again in the air?");
+        assert_eq!(handoff, None, "{said}");
+        let (handoff, said) = ask(
+            "Add a double jump to the player of this game: design how it should feel, implement it, and write and run tests for it.",
+        );
+        let (name, task, _) = handoff.unwrap_or_else(|| panic!("{said}"));
+        assert_eq!(name, "Studio", "{said}");
+        assert!(task.len() > "Add a double jump".len(), "{task}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn shows_the_organization_handed_the_task_as_a_child_session() {
+        let besfa = std::env::temp_dir().join(format!("besfa-child-{}", std::process::id()));
+        fs::create_dir_all(besfa.join("organizations")).unwrap();
+        fs::write(besfa.join("organizations/Studio.besfa"), "()").unwrap();
+        fs::write(
+            besfa.join("organization-run.ron"),
+            r#"(organization: "Studio", chat: 9)"#,
+        )
+        .unwrap();
+        let mut harness = tab(None);
+        harness.state_mut().org = OrgPanel::new(besfa.join("organizations"));
+        let panel = &mut harness.state_mut().panel;
+        panel.ask("Add a double jump.");
+        panel.say("Design, code and test it.");
+        panel.handed_off("Studio");
+        panel.chat.messages.push(Message {
+            text: "Jumps cost stamina.".into(),
+            speaker: Some(("Game Designer".into(), [0x4F, 0x86, 0x5A])),
+            ..Default::default()
+        });
+        panel.chat.id = 9;
+        harness.run();
+        assert!(harness.query_by_label("Child session · Studio").is_some());
+        assert!(harness.query_by_label("Jumps cost stamina.").is_some());
+        // Its run stopped before the tester: Continue goes on with it.
+        assert!(harness.query_by_label("paused").is_some());
+        assert!(harness.query_by_label("Continue").is_some());
+
+        // The next prompt carries what the team did.
+        let input = harness.state().panel.chat.input("Now a triple jump.");
+        assert!(input.contains("You: Handed the task to Studio."), "{input}");
+        assert!(input.contains("Game Designer: Jumps cost stamina."));
+
+        // Once someone else speaks, the session above is no longer live.
+        harness.state_mut().panel.ask("Thanks.");
+        harness.run();
+        assert!(harness.query_by_label("Child session · Studio").is_some());
+        assert!(harness.query_by_label("paused").is_none());
+        fs::remove_dir_all(&besfa).unwrap();
     }
 
     #[test]
@@ -2590,6 +2919,38 @@ thoughts {:?}",
         assert_eq!(panel.chat.title(), "Add a jump.");
         assert_eq!(panel.organization(), Some("Studio"));
         assert_eq!(panel.chat.messages[1].text, "Stopped.");
+        // One the chat's agent handed over leaves the model the user picked.
+        let handed = Message {
+            child: Some("Studio".into()),
+            ..Default::default()
+        };
+        let said = |user: bool| Message {
+            user,
+            text: "Add a jump.".into(),
+            ..Default::default()
+        };
+        let mut other = AgentPanel::default();
+        // Under the name it has since been renamed to, too.
+        let run = [said(true), handed.clone(), said(false)];
+        other.restore((6, &run), &[], "Game Team");
+        assert_eq!(other.organization(), None);
+        // Also when the user went on in that chat after it paused, as the
+        // manual's "Stop, then ask it to do it itself" has them do.
+        let mut went_on = AgentPanel::default();
+        let run = [said(true), said(false), handed.clone(), said(false)];
+        went_on.chat = Chat {
+            id: 8,
+            messages: [&run[..], &[said(true), said(false)]].concat(),
+            ..Default::default()
+        };
+        went_on.restore((8, &run), &[], "Studio");
+        assert_eq!(went_on.chat.messages.len(), 6);
+        assert_eq!(went_on.organization(), None);
+        // One sent to it straight after an earlier handoff picks it.
+        let mut later = AgentPanel::default();
+        let run = [said(true), handed, said(false), said(true), said(false)];
+        later.restore((7, &run), &[], "Studio");
+        assert_eq!(later.organization(), Some("Studio"));
 
         let mut harness = tab(None);
         harness.state_mut().org = org;
