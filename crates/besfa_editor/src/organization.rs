@@ -1726,7 +1726,7 @@ impl OrgPanel {
         if let Err(error) = picked {
             return Some(error);
         }
-        // An edit of the tree is one click or drop, not a drag's every frame.
+        // The tree changes on a click, not on every frame.
         let tree_error = (self.tree != tree_before)
             .then(|| write_ron(&self.tree_file, &self.tree))
             .and_then(Result::err);

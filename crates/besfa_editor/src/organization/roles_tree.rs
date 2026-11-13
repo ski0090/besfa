@@ -1,6 +1,6 @@
 //! The Organization tab's left tree: folders holding the CCGS roles and the
-//! user's saved agents. Rows drag between folders, folders can be added,
-//! renamed and removed, and the tree is kept in the project.
+//! user's saved agents. Folders can be added, renamed and removed, an agent
+//! moves to a folder from its settings, and the tree is kept in the project.
 
 use eframe::egui::{self, Id, RichText, Ui};
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ pub struct Folder {
     pub entries: Vec<Entry>,
 }
 
-/// What a click on a saved agent adds to the graph.
+/// What a double click on a saved agent adds to the graph.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
 pub struct Saved {
