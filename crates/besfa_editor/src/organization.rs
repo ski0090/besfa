@@ -1732,6 +1732,10 @@ impl OrgPanel {
             let now = now.to_vec();
             for &id in &now {
                 self.start_agent(id, beside, ctx, chat);
+                // One that could not start keeps the rest from starting.
+                if self.run.as_ref().is_some_and(|run| run.halted) {
+                    break;
+                }
             }
             if !now.is_empty() {
                 // Closing the editor now kills the agents; they run again.
