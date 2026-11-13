@@ -1077,6 +1077,11 @@ pub struct AgentPanel {
     answered: Vec<(Ask, bool, bool)>,
     /// Laid-out code blocks and the like of the replies' Markdown.
     markdown: egui_commonmark::CommonMarkCache,
+    /// Each message's lengths, spinner and height when it was last drawn.
+    /// Those scrolled far out of view are not drawn again.
+    heights: Vec<Option<((usize, usize, bool), f32)>>,
+    /// The width `heights` were measured at.
+    heights_width: f32,
 }
 
 impl AgentPanel {
@@ -1485,11 +1490,26 @@ impl AgentPanel {
     }
 
     fn messages(&mut self, ui: &mut Ui, busy: bool) {
+        // Markdown is parsed again on every draw, and typing redraws the
+        // window, so a message well out of view is not drawn: it takes the
+        // height it was last drawn at. ponytail: the key is the lengths only,
+        // a same-length rewrite out of view keeps its old height until seen.
+        const VIEW_MARGIN: f32 = 200.0;
         let mut markdown = std::mem::take(&mut self.markdown);
+        let mut heights = std::mem::take(&mut self.heights);
+        let width = ui.available_width();
+        if self.heights_width != width {
+            heights.clear();
+            self.heights_width = width;
+        }
+        heights.resize(self.chat.messages.len(), None);
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .stick_to_bottom(true)
-            .show(ui, |ui| {
+            .show_viewport(ui, |ui, view| {
+                // The viewport counts from the top of the content, but the
+                // cursor's position moves with the scroll: count up here.
+                let mut y = 4.0_f32;
                 ui.add_space(4.0);
                 if self.chat.messages.is_empty() {
                     ui.colored_label(panels::MUTED, t("Ask the agent to change the project."));
@@ -1497,6 +1517,18 @@ impl AgentPanel {
                 let last = self.chat.messages.len().wrapping_sub(1);
                 for (index, message) in self.chat.messages.iter().enumerate() {
                     let working = message.text.is_empty() && index == last && busy;
+                    let key = (message.text.len(), message.thoughts.len(), working);
+                    let start = ui.cursor().top();
+                    let known = heights[index]
+                        .filter(|(seen, _)| *seen == key)
+                        .map(|(_, px)| px);
+                    if let Some(px) = known.filter(|px| {
+                        y + px < view.min.y - VIEW_MARGIN || y > view.max.y + VIEW_MARGIN
+                    }) {
+                        ui.add_space(px);
+                        y += px;
+                        continue;
+                    }
                     if message.user {
                         egui::Frame::new()
                             .fill(ui.visuals().extreme_bg_color)
@@ -1541,6 +1573,9 @@ impl AgentPanel {
                         }
                     }
                     ui.add_space(8.0);
+                    let px = ui.cursor().top() - start;
+                    heights[index] = Some((key, px));
+                    y += px;
                 }
                 if let Some(answer) = asks(ui, &self.asks) {
                     let (index, allow, always) = answer;
@@ -1548,6 +1583,7 @@ impl AgentPanel {
                     self.answered.push((ask, allow, always));
                 }
             });
+        self.heights = heights;
         self.markdown = markdown;
     }
 
@@ -2640,6 +2676,31 @@ thoughts {:?}",
         assert!(harness.query_by_label("src/player.rs").is_some());
         assert!(harness.query_by_label_contains("**").is_none());
         assert!(harness.query_by_label_contains("##").is_none());
+    }
+
+    #[test]
+    fn draws_only_the_messages_near_the_view() {
+        let mut harness = tab(None);
+        let panel = &mut harness.state_mut().panel;
+        for index in 0..300 {
+            panel.say(&format!("Message number {index}"));
+        }
+        for _ in 0..4 {
+            harness.run();
+        }
+        let panel = &harness.state().panel;
+        assert_eq!(panel.heights.len(), 300);
+        assert!(panel.heights.iter().all(|height| height.is_some()));
+        assert!(
+            harness
+                .query_by_label_contains("Message number 299")
+                .is_some()
+        );
+        assert!(
+            harness
+                .query_by_label_contains("Message number 0")
+                .is_none()
+        );
     }
 
     #[test]
