@@ -9,7 +9,12 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    time::SystemTime,
+    sync::{
+        Mutex, PoisonError,
+        mpsc::{self, Receiver, TryRecvError},
+    },
+    thread,
+    time::{Duration, SystemTime},
 };
 
 use eframe::egui::{
@@ -1078,6 +1083,67 @@ struct Run {
     /// Whether an agent left changes there, so the rest of the run goes
     /// one at a time.
     one_at_a_time: bool,
+    /// Agents whose worktrees are being made by git, off the UI thread.
+    starting: Vec<(Start, Receiver<Tree>)>,
+    /// Finished agents' work being merged back, one at a time off the UI
+    /// thread, and those waiting their turn.
+    merges: Vec<Merge>,
+    queued_merges: Vec<Queued>,
+    /// Whether the project folder changed since the run began, being
+    /// checked off the UI thread before agents go side by side.
+    checking: Option<Receiver<u64>>,
+    /// Whether that check was made for the agents about to start.
+    checked: bool,
+    /// What the project folder held when the run began, being checked off
+    /// the UI thread.
+    baseline: Option<Receiver<u64>>,
+}
+
+/// An agent about to start: its message in the chat and its CLI.
+struct Start {
+    id: u32,
+    message: usize,
+    program: String,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+}
+
+/// An agent's finished work being merged into the project, off the UI
+/// thread; its result is the note or the error for its node.
+struct Merge {
+    id: u32,
+    message: usize,
+    result: Receiver<Result<Option<String>, String>>,
+}
+
+/// An agent's worktree, or why it could not be made; `None` when the
+/// agent works in the project folder.
+type Tree = Result<Option<Worktree>, String>;
+
+/// A finished agent's work waiting to be merged.
+struct Queued {
+    id: u32,
+    message: usize,
+    worktree: Worktree,
+    name: String,
+}
+
+/// Runs `work` on its own thread; its result comes back on the receiver.
+fn in_background<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Receiver<T> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+    receiver
+}
+
+/// Whether git work is still on its way, so no agent starts or run ends.
+fn busy(run: &Run) -> bool {
+    !run.starting.is_empty()
+        || !run.merges.is_empty()
+        || !run.queued_merges.is_empty()
+        || run.checking.is_some()
+        || run.baseline.is_some()
 }
 
 /// What the project folder holds beyond its commit, as a number that
@@ -1170,8 +1236,7 @@ fn worktree_kept(project: &Path, started: u64, id: u32) -> bool {
 /// Agent `id`'s worktree for the run `started` in `project`, made from
 /// the project's commit, its submodules filled from the project's own
 /// checkouts of them. One a stopped run left is taken up again, with what
-/// its agent committed there. ponytail: git runs on the UI thread; move
-/// it off if a big checkout makes the editor stall.
+/// its agent committed there. Run off the UI thread by `start_agent`.
 fn add_worktree(project: &Path, started: u64, id: u32) -> Result<Worktree, String> {
     let (path, branch) = worktree_place(project, started, id)?;
     let mut base = git(project, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -1841,6 +1906,12 @@ impl OrgPanel {
         };
         // A new run takes the place of a paused one.
         self.paused = None;
+        // From when it first started: a resume must still see what
+        // the agents left since.
+        let baseline = (run.untouched == 0).then(|| {
+            let directory = directory.to_path_buf();
+            in_background(move || uncommitted(&directory))
+        });
         self.run = Some(Run {
             organization: run.organization,
             task: run.task,
@@ -1859,13 +1930,14 @@ impl OrgPanel {
             git,
             parallel,
             started,
-            // From when it first started: a resume must still see what
-            // the agents left since.
-            untouched: match run.untouched {
-                0 => uncommitted(directory),
-                untouched => untouched,
-            },
+            untouched: run.untouched,
             one_at_a_time: false,
+            starting: Vec::new(),
+            merges: Vec::new(),
+            checking: None,
+            checked: false,
+            baseline,
+            queued_merges: Vec::new(),
         });
         Ok(())
     }
@@ -1930,38 +2002,45 @@ impl OrgPanel {
         ctx: &egui::Context,
         (chat, asks): (&mut Vec<Message>, &mut Vec<Ask>),
     ) -> Option<bool> {
+        self.run.as_ref()?;
+        let merged = self.finish_merges(chat);
+        self.start_merge();
+        self.finish_background(chat);
+        self.finish_starts(ctx, chat);
         let run = self.run.as_mut()?;
-        if !run.stopped && !run.halted {
+        if busy(run) {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        if !run.stopped && !run.halted && !busy(run) {
             let ready = self.org.ready(&run.order);
             let in_project = run.running.iter().any(|running| running.worktree.is_none());
-            let mut git = run.git && !run.one_at_a_time;
-            if starting(&ready, in_project, run.running.len(), git).1
-                && uncommitted(&run.directory) != run.untouched
-            {
-                run.one_at_a_time = true;
-                git = false;
-                chat.push(Message {
-                    speaker: Some((run.organization.clone(), [0x8A; 3])),
-                    text: t("The project folder has uncommitted changes since the run began, so the agents go one at a time there.").into(),
-                    ..Default::default()
-                });
-            }
-            let (now, beside) = starting(&ready, in_project, run.running.len(), git);
-            let now = now.to_vec();
-            for &id in &now {
-                self.start_agent(id, beside, ctx, chat);
-                // One that could not start keeps the rest from starting.
-                if self.run.as_ref().is_some_and(|run| run.halted) {
-                    break;
+            let git = run.git && !run.one_at_a_time;
+            let (_, beside) = starting(&ready, in_project, run.running.len(), git);
+            if beside && !run.one_at_a_time && !run.checked {
+                // Whether the folder changed is git's work: checked first.
+                let directory = run.directory.clone();
+                run.checking = Some(in_background(move || uncommitted(&directory)));
+            } else {
+                let (now, beside) = starting(&ready, in_project, run.running.len(), git);
+                let now = now.to_vec();
+                for &id in &now {
+                    self.start_agent(id, beside, ctx, chat);
+                    // One that could not start keeps the rest from starting.
+                    if self.run.as_ref().is_some_and(|run| run.halted) {
+                        break;
+                    }
                 }
-            }
-            if !now.is_empty() {
-                // Closing the editor now kills the agents; they run again.
-                self.record(chat);
+                if !now.is_empty() {
+                    if let Some(run) = self.run.as_mut() {
+                        run.checked = false;
+                    }
+                    // Closing the editor now kills the agents; they run again.
+                    self.record(chat);
+                }
             }
         }
         let run = self.run.as_mut()?;
-        if run.running.is_empty() {
+        if run.running.is_empty() && !busy(run) {
             if !run.stopped && !run.halted && self.next_round(chat) {
                 self.record(chat);
                 ctx.request_repaint();
@@ -1969,7 +2048,7 @@ impl OrgPanel {
             }
             return self.finish(chat);
         }
-        let mut changed = false;
+        let mut changed = merged;
         let mut index = 0;
         while index < run.running.len() {
             let outputs = run.running[index].process.poll();
@@ -2038,16 +2117,14 @@ impl OrgPanel {
                         node.output = text;
                     }
                     node.state = NodeState::Done;
-                    if let Some(worktree) = &running.worktree {
-                        match merge_back(&run.directory, worktree, &node.name) {
-                            Ok(None) => {}
-                            Ok(Some(note)) => push_line(&mut node.output, &note),
-                            Err(error) => {
-                                push_line(&mut node.output, &error);
-                                node.state = NodeState::Failed;
-                                run.halted = true;
-                            }
-                        }
+                    if let Some(worktree) = running.worktree {
+                        // Git merges it off the UI thread, one at a time.
+                        run.queued_merges.push(Queued {
+                            id,
+                            message,
+                            worktree,
+                            name: node.name.clone(),
+                        });
                     }
                 }
                 changed = true;
@@ -2084,26 +2161,71 @@ impl OrgPanel {
             ..Default::default()
         });
         let message = chat.len() - 1;
-        let (program, args, env) = &run.invocations[place];
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let env: Vec<(&str, &str)> = env
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.as_str()))
-            .collect();
+        let (program, args, env) = run.invocations[place].clone();
+        let start = Start {
+            id,
+            message,
+            program,
+            args,
+            env,
+        };
+        // Git makes the worktree, which can take a while: off the UI thread.
+        // A stopped run's worktree goes on, even for one alone.
+        let (directory, started, git) = (run.directory.clone(), run.started, run.git);
+        if start.program.is_empty() || !(beside || git) {
+            return self.launch(start, Ok(None), ctx, chat);
+        }
+        let tree = in_background(move || {
+            // Agents of one repository share its submodule folders, so their
+            // worktrees are made one at a time, as they were on the UI thread.
+            static TREES: Mutex<()> = Mutex::new(());
+            let _turn = TREES.lock().unwrap_or_else(PoisonError::into_inner);
+            if beside || worktree_kept(&directory, started, id) {
+                add_worktree(&directory, started, id).map(Some)
+            } else {
+                Ok(None)
+            }
+        });
+        self.org.node_mut(id).expect("ordered nodes exist").state = NodeState::Running;
+        if let Some(run) = self.run.as_mut() {
+            run.starting.push((start, tree));
+        }
+    }
+
+    /// Starts an agent whose worktree is made (or not), its CLI in it.
+    /// One that cannot start fails, and halts the run.
+    fn launch(
+        &mut self,
+        start: Start,
+        tree: Result<Option<Worktree>, String>,
+        ctx: &egui::Context,
+        chat: &mut [Message],
+    ) {
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        let Start {
+            id,
+            message,
+            program,
+            args,
+            env,
+        } = start;
         let started = if program.is_empty() {
             // Its CLI could not be reached; the reason is the one arg.
             Err(args.concat())
         } else {
-            // A stopped run's worktree goes on, even for one alone.
-            (beside || (run.git && worktree_kept(&run.directory, run.started, id)))
-                .then(|| add_worktree(&run.directory, run.started, id))
-                .transpose()
-                .and_then(|worktree| {
-                    let directory = worktree.as_ref().map_or(&run.directory, |tree| &tree.dir);
-                    CliProcess::start(directory, program, &args, &env, ctx)
-                        .map(|process| (process, worktree))
-                        .map_err(|error| format!("Could not start {program}: {error}"))
-                })
+            tree.and_then(|worktree| {
+                let directory = worktree.as_ref().map_or(&run.directory, |tree| &tree.dir);
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                let env: Vec<(&str, &str)> = env
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_str()))
+                    .collect();
+                CliProcess::start(directory, &program, &args, &env, ctx)
+                    .map(|process| (process, worktree))
+                    .map_err(|error| format!("Could not start {program}: {error}"))
+            })
         };
         match started {
             Ok((mut process, worktree)) => {
@@ -2115,7 +2237,7 @@ impl OrgPanel {
                     run.parallel,
                     worktree.as_ref(),
                 );
-                agent::send_prompt(&mut process, program, input);
+                agent::send_prompt(&mut process, &program, input);
                 run.running.push(Running {
                     id,
                     process,
@@ -2129,8 +2251,151 @@ impl OrgPanel {
                 let node = self.org.node_mut(id).expect("ordered nodes exist");
                 node.output = error;
                 node.state = NodeState::Failed;
-                show(node, &mut chat[message]);
+                if let Some(message) = chat.get_mut(message) {
+                    show(node, message);
+                }
                 run.halted = true;
+            }
+        }
+    }
+
+    /// Starts the agents whose worktrees git has made, unless the run
+    /// stopped or halted since: those wait for the run's end.
+    fn finish_starts(&mut self, ctx: &egui::Context, chat: &mut [Message]) {
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        let mut ready = Vec::new();
+        let mut waiting = Vec::new();
+        for (start, tree) in std::mem::take(&mut run.starting) {
+            match tree.try_recv() {
+                Ok(tree) => ready.push((start, tree)),
+                Err(TryRecvError::Empty) => waiting.push((start, tree)),
+                Err(TryRecvError::Disconnected) => {
+                    ready.push((start, Err("Could not make the agent's worktree.".into())))
+                }
+            }
+        }
+        run.starting = waiting;
+        for (start, tree) in ready {
+            if self
+                .run
+                .as_ref()
+                .is_none_or(|run| run.stopped || run.halted)
+            {
+                // Its worktree, if git made one, stays for Continue; it may
+                // hold the agent's uncommitted work, so it is not removed.
+                if let Some(node) = self.org.node_mut(start.id) {
+                    node.state = NodeState::Waiting;
+                    if let Ok(Some(worktree)) = &tree {
+                        push_line(
+                            &mut node.output,
+                            &format!(
+                                "Its work stays in {} on {}, for Continue.",
+                                worktree.path.display(),
+                                worktree.branch
+                            ),
+                        );
+                    }
+                }
+                continue;
+            }
+            self.launch(start, tree, ctx, chat);
+        }
+    }
+
+    /// Starts merging the next queued agent's work, unless one is merging.
+    fn start_merge(&mut self) {
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        if !run.merges.is_empty() || run.queued_merges.is_empty() {
+            return;
+        }
+        let Queued {
+            id,
+            message,
+            worktree,
+            name,
+        } = run.queued_merges.remove(0);
+        let directory = run.directory.clone();
+        run.merges.push(Merge {
+            id,
+            message,
+            result: in_background(move || merge_back(&directory, &worktree, &name)),
+        });
+    }
+
+    /// Shows the merges that git finished, and halts the run on one that
+    /// failed. Returns whether any came in.
+    fn finish_merges(&mut self, chat: &mut [Message]) -> bool {
+        let Some(run) = self.run.as_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        let mut index = 0;
+        while index < run.merges.len() {
+            let result = match run.merges[index].result.try_recv() {
+                Ok(result) => result,
+                Err(TryRecvError::Empty) => {
+                    index += 1;
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => Err("The merge stopped early.".to_string()),
+            };
+            let merge = run.merges.remove(index);
+            if let Some(node) = self.org.node_mut(merge.id) {
+                match result {
+                    Ok(None) => {}
+                    Ok(Some(note)) => push_line(&mut node.output, &note),
+                    Err(error) => {
+                        push_line(&mut node.output, &error);
+                        node.state = NodeState::Failed;
+                        run.halted = true;
+                    }
+                }
+                if let Some(message) = chat.get_mut(merge.message) {
+                    show(node, message);
+                }
+            }
+            changed = true;
+        }
+        changed
+    }
+
+    /// Takes in what git found in the background: the project folder's
+    /// state when the run began, and whether it changed since, which sends
+    /// the rest of the run one at a time.
+    fn finish_background(&mut self, chat: &mut Vec<Message>) {
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        if let Some(result) = run.baseline.as_ref().map(Receiver::try_recv) {
+            match result {
+                Ok(untouched) => {
+                    run.untouched = untouched;
+                    run.baseline = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                // Unknown: it counts as changed, so the agents go one at a time.
+                Err(TryRecvError::Disconnected) => run.baseline = None,
+            }
+        }
+        if let Some(result) = run.checking.as_ref().map(Receiver::try_recv) {
+            let now = match result {
+                Ok(now) => now,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => 0,
+            };
+            run.checking = None;
+            run.checked = true;
+            if now != run.untouched {
+                run.one_at_a_time = true;
+                chat.push(Message {
+                    speaker: Some((run.organization.clone(), [0x8A; 3])),
+                    text: t("The project folder has uncommitted changes since the run began, so the agents go one at a time there.").into(),
+                    ..Default::default()
+                });
             }
         }
     }
@@ -2272,9 +2537,11 @@ impl OrgPanel {
         ui.add_space(4.0);
         ui.label(RichText::new(t("Roles")).strong());
         ui.label(
-            RichText::new(t("Claude Code Game Studios' agents. Double-click one to add it."))
-                .small()
-                .color(panels::MUTED),
+            RichText::new(t(
+                "Claude Code Game Studios' agents. Double-click one to add it.",
+            ))
+            .small()
+            .color(panels::MUTED),
         );
         ui.add_space(4.0);
         let running = self.running();
@@ -3175,6 +3442,12 @@ mod tests {
             started: 0,
             untouched: 0,
             one_at_a_time: false,
+            starting: Vec::new(),
+            merges: Vec::new(),
+            checking: None,
+            checked: false,
+            baseline: None,
+            queued_merges: Vec::new(),
         });
         let ctx = egui::Context::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -3398,6 +3671,12 @@ mod tests {
             started: 0,
             untouched: 0,
             one_at_a_time: false,
+            starting: Vec::new(),
+            merges: Vec::new(),
+            checking: None,
+            checked: false,
+            baseline: None,
+            queued_merges: Vec::new(),
         });
         let ctx = egui::Context::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -3713,6 +3992,12 @@ mod tests {
                 started: 9,
                 untouched: uncommitted(&project),
                 one_at_a_time: false,
+                starting: Vec::new(),
+                merges: Vec::new(),
+                checking: None,
+                checked: false,
+                baseline: None,
+                queued_merges: Vec::new(),
             });
             let ctx = egui::Context::default();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -3726,7 +4011,12 @@ mod tests {
             assert!(
                 [design, code, test]
                     .iter()
-                    .all(|&id| node(id).state == NodeState::Done)
+                    .all(|&id| node(id).state == NodeState::Done),
+                "{:?}",
+                [design, code, test]
+                    .iter()
+                    .map(|&id| (node(id).state, node(id).output.clone()))
+                    .collect::<Vec<_>>()
             );
             // The designer alone in the project; the other two, started
             // together, beside each other in worktrees.
@@ -3809,6 +4099,12 @@ mod tests {
             started: 0,
             untouched: 0,
             one_at_a_time: false,
+            starting: Vec::new(),
+            merges: Vec::new(),
+            checking: None,
+            checked: false,
+            baseline: None,
+            queued_merges: Vec::new(),
         });
         panel.stop();
         assert_eq!(
@@ -3857,6 +4153,12 @@ mod tests {
             started: 0,
             untouched: 0,
             one_at_a_time: false,
+            starting: Vec::new(),
+            merges: Vec::new(),
+            checking: None,
+            checked: false,
+            baseline: None,
+            queued_merges: Vec::new(),
         });
         panel.allow("Bash(cargo *)");
         let run = panel.run.take().unwrap();
