@@ -79,7 +79,7 @@ Claude가 허용되지 않은 명령이나 도구를 쓰려 하면, 채팅 아�
 
 위쪽은 [에이전트 연결](#에이전트-연결)과 같은 화면이고, 아래에서 **이 프로젝트에서** Claude가 쓸 수 있는 것을 고릅니다.
 
-- **GitHub**: **Let Claude commit, push and open pull requests**(Claude가 커밋하고 푸시하고 풀 리퀘스트를 열게 하기)를 켜면 Claude가 `git`과 `gh`를 묻지 않고 실행합니다. 처음에는 꺼져 있습니다. `git -C <다른 폴더>`처럼 다른 저장소를 가리키는 명령도 허용 범위에 들어갑니다.
+- **GitHub**: **Let Claude commit, push and open pull requests**(Claude가 커밋하고 푸시하고 풀 리퀘스트를 열게 하기)를 켜면 Claude가 `git`과 `gh`를 묻지 않고 실행합니다. 처음에는 꺼져 있습니다. 권한이 **Auto**면 이 체크를 꺼도 Claude가 스스로 판단해 `git`과 `gh`를 실행할 수 있으니, 막아야 하면 권한을 **Accept edits**나 **Ask every time**으로 고르세요. `git -C <다른 폴더>`처럼 다른 저장소를 가리키는 명령도 허용 범위에 들어갑니다.
   - 풀 리퀘스트를 열게 하려면 터미널에서 `gh auth login`으로 GitHub CLI에 로그인해 두세요. 체크 상자 아래에 `gh`의 설치·로그인 상태가 나옵니다.
   - `gh`는 이 프로젝트뿐 아니라 GitHub 로그인으로 접근할 수 있는 모든 저장소를 다룹니다.
   - 프로젝트의 `.claude/settings.json`에 있는 거부 규칙은 여전히 우선하지만, 적힌 그대로 맞는 명령에만 적용됩니다. 예를 들어 `git push --force`를 막는 규칙은 `git push -f`를 막지 못하므로, 강제 푸시는 GitHub의 브랜치 보호로 막으세요.
