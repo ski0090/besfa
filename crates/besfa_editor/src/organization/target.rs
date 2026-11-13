@@ -109,12 +109,20 @@ pub(super) fn own_names(top: &Path) -> BTreeSet<String> {
                 .lines()
                 .filter_map(|line| {
                     let (key, value) = line.split_once('=')?;
-                    (key.trim() == "name")
-                        .then(|| value.trim().trim_matches(['"', '\'']).replace('-', "_"))
+                    (key.trim() == "name").then(|| quoted(value).replace('-', "_"))
                 })
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// The string a TOML value starts with, without a comment after it.
+fn quoted(value: &str) -> &str {
+    let value = value.trim();
+    match value.chars().next() {
+        Some(quote @ ('"' | '\'')) => value[1..].split(quote).next().unwrap_or_default(),
+        _ => value.split('#').next().unwrap_or_default().trim(),
+    }
 }
 
 /// `name` without the `-<hash>` cargo puts after a package or crate name.
@@ -154,11 +162,18 @@ pub(super) fn seed(from: Option<&Path>, to: &Path, own: &BTreeSet<String>) -> Re
     let Some(from) = from else {
         return ignored(to).map_err(|error| error.to_string());
     };
-    // Whole or not at all: a folder cut short would read as filled.
-    let part = to.with_file_name("target.part");
-    let _ = fs::remove_dir_all(&part);
+    // Whole or not at all: a folder cut short would read as filled. Each
+    // filling has its own, so one started again meanwhile, from a project
+    // reopened say, leaves this one alone; whichever ends first is kept.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let part = to.with_file_name(format!("target.part-{unique}"));
     let filled = ignored(&part).and_then(|()| fill(&from.join("debug"), &part.join("debug"), own));
-    let done = filled.and_then(|()| fs::rename(&part, to));
+    let done = filled.and_then(|()| match fs::rename(&part, to) {
+        Err(_) if to.exists() => fs::remove_dir_all(&part),
+        renamed => renamed,
+    });
     done.map_err(|error| {
         let _ = fs::remove_dir_all(&part);
         let _ = ignored(to);
@@ -302,6 +317,10 @@ mod tests {
 
     #[test]
     fn tells_the_repositorys_own_builds_from_its_dependencies() {
+        // As a manifest writes them, comments and all.
+        assert_eq!(quoted(" \"my-game\" # the game"), "my-game");
+        assert_eq!(quoted(" 'tool'"), "tool");
+        assert_eq!(quoted(" bare # x"), "bare");
         let own: BTreeSet<String> = ["my_game".to_string(), "tool".into()].into();
         for file in [
             "libmy_game-0123456789abcdef.rlib",
@@ -396,7 +415,12 @@ mod tests {
             assert!(!debug.join(left).exists(), "{left}");
         }
         assert_eq!(fs::read_to_string(to.join(".gitignore")).unwrap(), "*\n");
-        assert!(!root.join("worktree/target.part").exists());
+        // Nothing half-made is left beside it.
+        let left: Vec<_> = fs::read_dir(root.join("worktree"))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(left.len(), 1, "{left:?}");
         // A stopped run's folder keeps what its agent built.
         let built = debug.join(format!("deps/new{hash}.d"));
         fs::write(&built, "").unwrap();

@@ -800,8 +800,13 @@ impl Organization {
             // Other features make other builds of the dependencies, which
             // the worktree's folder does not have.
             let manifest = fs::read_to_string(worktree.dir.join("Cargo.toml")).unwrap_or_default();
+            let filled = if worktree.unfilled.is_some() {
+                "it could not be filled from what the project built, so the first build compiles every dependency"
+            } else {
+                "it was filled from what the project already built, so only this repository's packages compile"
+            };
             input.push_str(&format!(
-                " Cargo builds here in {}, which CARGO_TARGET_DIR names: it was filled from what the project already built, so only this repository's packages compile. Keep it, and build, run and test with `--features {}` as the editor does; other features build every dependency again from scratch.",
+                " Cargo builds here in {}, which CARGO_TARGET_DIR names: {filled}. Keep it, and build, run and test with `--features {}` as the editor does; other features build every dependency again from scratch.",
                 worktree.target.display(),
                 besfa_protocol::run_features(&manifest),
             ));
@@ -1190,11 +1195,29 @@ fn uncommitted(project: &Path) -> u64 {
     hasher.finish()
 }
 
-/// Whether `project`'s Cargo.toml or Cargo.lock has uncommitted changes,
-/// which a worktree made from the commit would not have.
+/// Says `text` in `chat` as `organization`, unless the run said it already.
+fn tell(
+    told: &mut Vec<&'static str>,
+    chat: &mut Vec<Message>,
+    organization: &str,
+    text: &'static str,
+) {
+    if !told.contains(&text) {
+        told.push(text);
+        chat.push(Message {
+            speaker: Some((organization.into(), [0x8A; 3])),
+            text: text.into(),
+            ..Default::default()
+        });
+    }
+}
+
+/// Whether `project`'s Cargo.toml or Cargo.lock has changes the commit
+/// lacks, an untracked Cargo.lock too, which a worktree made from the
+/// commit would not have.
 fn manifests_changed(project: &Path) -> bool {
-    let manifests = ["diff", "--quiet", "HEAD", "--", "Cargo.toml", "Cargo.lock"];
-    git(project, &manifests).is_err()
+    let manifests = ["status", "--porcelain", "--", "Cargo.toml", "Cargo.lock"];
+    git(project, &manifests).is_ok_and(|changed| !changed.is_empty())
 }
 
 /// An agent at work.
@@ -1513,8 +1536,9 @@ pub struct OrgPanel {
     /// The target folder the project builds in, looked up when the run
     /// began, which worktrees fill theirs from.
     build: Option<PathBuf>,
-    /// The run said why its agents went one at a time for now.
-    held_back: bool,
+    /// What the run said about why its agents wait or go one at a time,
+    /// each said once.
+    told: Vec<&'static str>,
     /// Why the last link or name was refused.
     refused: Option<&'static str>,
     /// Laid-out code blocks and the like of the last result's Markdown.
@@ -1572,7 +1596,7 @@ impl OrgPanel {
             paused,
             game: GameBuild::Missing,
             build: None,
-            held_back: false,
+            told: Vec::new(),
             refused: None,
             markdown: Default::default(),
         }
@@ -1966,7 +1990,7 @@ impl OrgPanel {
         };
         // A new run takes the place of a paused one.
         self.paused = None;
-        self.held_back = false;
+        self.told.clear();
         self.build = Some(target::project_target(directory));
         // From when it first started: a resume must still see what
         // the agents left since.
@@ -2087,17 +2111,29 @@ impl OrgPanel {
             let mut git = run.git && !run.one_at_a_time;
             if starting(&ready, in_project, run.running.len(), git).1 {
                 match self.game {
-                    GameBuild::Building => waiting = true,
+                    GameBuild::Building => {
+                        waiting = true;
+                        // What the folder held is looked at again once built.
+                        run.checked = false;
+                        tell(
+                            &mut self.told,
+                            chat,
+                            &run.organization,
+                            t(
+                                "The agents that would work side by side wait for the editor to finish building the game: their worktrees' target folders are filled from its build.",
+                            ),
+                        );
+                    }
                     GameBuild::Missing => {
                         git = false;
-                        if !self.held_back {
-                            self.held_back = true;
-                            chat.push(Message {
-                                speaker: Some((run.organization.clone(), [0x8A; 3])),
-                                text: t("The agents go one at a time in the project folder until the editor has built the game: in worktrees each would build its dependencies from scratch.").into(),
-                                ..Default::default()
-                            });
-                        }
+                        tell(
+                            &mut self.told,
+                            chat,
+                            &run.organization,
+                            t(
+                                "The agents go one at a time in the project folder until the editor has built the game: in worktrees each would build its dependencies from scratch.",
+                            ),
+                        );
                     }
                     GameBuild::Built => {}
                 }
@@ -2347,7 +2383,10 @@ impl OrgPanel {
                     .map(|(name, value)| (name.as_str(), value.as_str()))
                     .collect();
                 if let Some(target) = &target {
+                    // Both: a configured `build.build-dir` keeps the builds
+                    // in it, out of the target folder.
                     env.push(("CARGO_TARGET_DIR", target));
+                    env.push(("CARGO_BUILD_BUILD_DIR", target));
                 }
                 CliProcess::start(directory, &program, &args, &env, ctx)
                     .map(|process| (process, worktree))
@@ -2531,13 +2570,15 @@ impl OrgPanel {
                     text: t("The project folder has uncommitted changes since the run began, so the agents go one at a time there.").into(),
                     ..Default::default()
                 });
-            } else if manifests && !self.held_back {
-                self.held_back = true;
-                chat.push(Message {
-                    speaker: Some((run.organization.clone(), [0x8A; 3])),
-                    text: t("The agents go one at a time in the project folder while Cargo.toml or Cargo.lock has uncommitted changes: worktrees made from the last commit would build the dependencies from scratch.").into(),
-                    ..Default::default()
-                });
+            } else if manifests {
+                tell(
+                    &mut self.told,
+                    chat,
+                    &run.organization,
+                    t(
+                        "The agents go one at a time in the project folder while Cargo.toml or Cargo.lock has uncommitted changes: worktrees made from the last commit would build the dependencies from scratch.",
+                    ),
+                );
             }
         }
     }
@@ -3593,7 +3634,9 @@ mod tests {
             queued_merges: Vec::new(),
         });
         let ctx = egui::Context::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        // Agents of a git project start through the one worktree lock other
+        // tests' worktrees hold too: slow on a busy machine.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut finished = None;
         let mut chat = Vec::new();
         while finished.is_none() && std::time::Instant::now() < deadline {
@@ -3823,7 +3866,9 @@ mod tests {
             queued_merges: Vec::new(),
         });
         let ctx = egui::Context::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        // Agents of a git project start through the one worktree lock other
+        // tests' worktrees hold too: slow on a busy machine.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut chat: Vec<Message> = Vec::new();
         let poll = |panel: &mut OrgPanel,
                     chat: &mut Vec<Message>,
@@ -4310,7 +4355,9 @@ mod tests {
                         assert_eq!(panel.poll(&ctx, (&mut chat, &mut Vec::new())), None);
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
-                    assert_eq!(chat.len(), 1);
+                    // The organization says once why they wait.
+                    assert_eq!(chat.len(), 2);
+                    assert!(chat[1].text.contains("wait"), "{}", chat[1].text);
                     waited = true;
                     panel.set_game(GameBuild::Built);
                 }
@@ -4329,10 +4376,18 @@ mod tests {
                 .map(|message| message.speaker.as_ref().unwrap().0.as_str())
                 .collect();
             if game == GameBuild::Building {
-                // Built after all: side by side, with nothing to say.
+                // Built after all: side by side.
                 assert!(waited);
                 assert!(!in_project(code) && !in_project(test));
-                assert_eq!(said, ["Game Designer", "Gameplay Programmer", "Qa Tester"]);
+                assert_eq!(
+                    said,
+                    [
+                        "Game Designer",
+                        "Organization",
+                        "Gameplay Programmer",
+                        "Qa Tester"
+                    ]
+                );
             } else {
                 // Said once, as the two after the designer were held back.
                 assert!(in_project(code) && in_project(test));

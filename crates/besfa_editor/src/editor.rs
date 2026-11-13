@@ -2045,14 +2045,13 @@ impl Editor {
     fn poll_agent(&mut self, ctx: &egui::Context) {
         // A game that said its protocol was built from the project folder,
         // so its target folder holds what agents' worktrees are filled from.
-        // One on its way, as after a code change, soon will.
-        let game = if self.game.is_some() && self.protocol.is_some() {
+        // One on its way, as after a code change or a plugin update, soon
+        // will; until then the old one may still run, and does not count.
+        let game = if self.starting || self.relaunch.is_some() || self.waiting_for_prebuild {
+            GameBuild::Building
+        } else if self.game.is_some() && self.protocol.is_some() {
             GameBuild::Built
-        } else if self.game.is_some()
-            || self.starting
-            || self.relaunch.is_some()
-            || self.waiting_for_prebuild
-        {
+        } else if self.game.is_some() {
             GameBuild::Building
         } else {
             GameBuild::Missing
