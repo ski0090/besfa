@@ -9,7 +9,10 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, TryRecvError},
+    sync::{
+        Mutex, PoisonError,
+        mpsc::{self, Receiver, TryRecvError},
+    },
     thread,
     time::{Duration, SystemTime},
 };
@@ -2173,6 +2176,10 @@ impl OrgPanel {
             return self.launch(start, Ok(None), ctx, chat);
         }
         let tree = in_background(move || {
+            // Agents of one repository share its submodule folders, so their
+            // worktrees are made one at a time, as they were on the UI thread.
+            static TREES: Mutex<()> = Mutex::new(());
+            let _turn = TREES.lock().unwrap_or_else(PoisonError::into_inner);
             if beside || worktree_kept(&directory, started, id) {
                 add_worktree(&directory, started, id).map(Some)
             } else {
@@ -2244,7 +2251,9 @@ impl OrgPanel {
                 let node = self.org.node_mut(id).expect("ordered nodes exist");
                 node.output = error;
                 node.state = NodeState::Failed;
-                show(node, &mut chat[message]);
+                if let Some(message) = chat.get_mut(message) {
+                    show(node, message);
+                }
                 run.halted = true;
             }
         }
@@ -2274,8 +2283,20 @@ impl OrgPanel {
                 .as_ref()
                 .is_none_or(|run| run.stopped || run.halted)
             {
+                // Its worktree, if git made one, stays for Continue; it may
+                // hold the agent's uncommitted work, so it is not removed.
                 if let Some(node) = self.org.node_mut(start.id) {
                     node.state = NodeState::Waiting;
+                    if let Ok(Some(worktree)) = &tree {
+                        push_line(
+                            &mut node.output,
+                            &format!(
+                                "Its work stays in {} on {}, for Continue.",
+                                worktree.path.display(),
+                                worktree.branch
+                            ),
+                        );
+                    }
                 }
                 continue;
             }
