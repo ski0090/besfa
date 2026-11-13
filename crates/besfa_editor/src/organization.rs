@@ -993,19 +993,46 @@ fn says_more(output: &str) -> bool {
     output
         .lines()
         .rev()
-        .filter_map(|line| {
-            let bare: String = line.chars().filter(|c| !"*`_".contains(*c)).collect();
-            let bare = bare.trim_start_matches(|c: char| c.is_whitespace() || "#-".contains(c));
-            let status = bare.get(..7)?;
-            status
-                .eq_ignore_ascii_case("STATUS:")
-                .then(|| bare[7..].trim_start().to_string())
-        })
-        .next()
+        .find_map(|line| marked(line, "STATUS:"))
         .is_some_and(|word| {
             let word: String = word.chars().take_while(char::is_ascii_alphabetic).collect();
             word.eq_ignore_ascii_case("MORE")
         })
+}
+
+/// What follows `marker` on `line`, if the line starts with it. Markdown
+/// and spaces around it are let go, and case too; a quoted line (`> ...`)
+/// is someone else's.
+fn marked(line: &str, marker: &str) -> Option<String> {
+    let bare: String = line.chars().filter(|c| !"*`_".contains(*c)).collect();
+    let bare = bare.trim_start_matches(|c: char| c.is_whitespace() || "#-".contains(c));
+    let head = bare.get(..marker.len())?;
+    head.eq_ignore_ascii_case(marker)
+        .then(|| bare[marker.len()..].trim().to_string())
+}
+
+/// The organization a chat agent handed its task to, read like a status
+/// line from the last line of its answer, `ORGANIZATION: <name>`, and the
+/// answer without that line: the brief it wrote for the team. Only the
+/// last line counts, a closing code fence or rule after it let go, so a
+/// marker the agent quotes on the way hands nothing over.
+pub fn handoff(output: &str) -> Option<(String, String)> {
+    let mut lines: Vec<&str> = output.lines().collect();
+    let at = lines.iter().rposition(|line| {
+        line.chars()
+            .any(|c| !c.is_whitespace() && !"*`_-#~".contains(c))
+    })?;
+    marked(lines[at], "ORGANIZATION:")?;
+    // From the line as written, so an `_` inside the name stays, and after
+    // its first colon, as Markdown may come before it (`**ORGANIZATION**:`).
+    // Names hold no colon.
+    let (_, name) = lines[at].split_once(':')?;
+    let name = name.trim_matches(|c: char| c.is_whitespace() || "*`_\"'.<>".contains(c));
+    if name.is_empty() {
+        return None;
+    }
+    lines.remove(at);
+    Some((name.into(), lines.join("\n").trim().into()))
 }
 
 /// A task going through the organization. The agents whose earlier agents
@@ -1521,6 +1548,52 @@ impl OrgPanel {
     /// Every organization's name, for the chat to pick from.
     pub fn names(&self) -> &[String] {
         &self.names
+    }
+
+    /// Each organization that has agents, with them in run order and what
+    /// each does, one organization a line, for a chat agent to choose from.
+    /// Empty when no organization has agents.
+    pub fn lineup(&self) -> String {
+        let mut lineup = String::new();
+        for name in &self.names {
+            let read;
+            let org = if *name == self.name {
+                &self.org
+            } else {
+                read = Organization::read(&self.file(name));
+                &read
+            };
+            let agents: Vec<String> = org
+                .order()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|&id| org.node(id))
+                .map(|node| {
+                    let does: String = node
+                        .instructions
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(100)
+                        .collect();
+                    if does.trim().is_empty() {
+                        node.name.clone()
+                    } else {
+                        format!("{} ({})", node.name, does.trim())
+                    }
+                })
+                .collect();
+            // The count, since each agent is a run of its own to pay for.
+            if !agents.is_empty() {
+                let count = match agents.len() {
+                    1 => "1 agent".to_string(),
+                    count => format!("{count} agents"),
+                };
+                lineup.push_str(&format!("- {name} ({count}): {}\n", agents.join("; ")));
+            }
+        }
+        lineup
     }
 
     fn file(&self, name: &str) -> PathBuf {
@@ -3181,6 +3254,76 @@ mod tests {
         // Done: nothing left to continue.
         assert!(panel.paused().is_none());
         assert!(!besfa.join(RUN_FILE).exists());
+        fs::remove_dir_all(&besfa).unwrap();
+    }
+
+    #[test]
+    fn reads_which_organization_a_chat_agent_hands_its_task_to() {
+        let said = "Design, code and test a double jump.\r\n\r\n**ORGANIZATION:** Studio.\r\n";
+        let brief = "Design, code and test a double jump.";
+        assert_eq!(handoff(said), Some(("Studio".into(), brief.into())));
+        assert_eq!(handoff("organization: `Art_Team`").unwrap().0, "Art_Team");
+        for marked in [
+            "**ORGANIZATION**: Studio",
+            "`ORGANIZATION`: Studio",
+            "__ORGANIZATION__: Studio",
+            // As the note's template has it.
+            "ORGANIZATION: <Studio>",
+            "Brief.\n```\nORGANIZATION: Studio\n```\n",
+        ] {
+            assert_eq!(handoff(marked).unwrap().0, "Studio", "{marked:?}");
+        }
+        // The last line counts; the brief keeps the lines before it.
+        let twice = "ORGANIZATION: Studio\nNo, better:\nORGANIZATION: QA team\n";
+        let (name, brief) = handoff(twice).unwrap();
+        assert_eq!(name, "QA team");
+        assert_eq!(brief, "ORGANIZATION: Studio\nNo, better:");
+        for none in [
+            "I added the jump myself.",
+            "The designer said:\n> ORGANIZATION: Studio",
+            "ORGANIZATION:  **",
+            "End with ORGANIZATION: <name> to hand it over.",
+            // Quoted on the way, after the work was done.
+            "Here is how:\n```\nORGANIZATION: Studio\n```\nI did it myself.",
+            "",
+        ] {
+            assert_eq!(handoff(none), None, "{none:?}");
+        }
+    }
+
+    #[test]
+    fn lists_each_organization_with_agents_for_a_chat_agent_to_pick() {
+        let besfa = std::env::temp_dir().join(format!("besfa-lineup-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&besfa);
+        let dir = besfa.join("organizations");
+        fs::create_dir_all(&dir).unwrap();
+        let (mut org, [design, code, _]) = studio();
+        org.link(code, design);
+        org.write(&dir.join("Studio.besfa")).unwrap();
+        let mut art = Organization::default();
+        let artist = art.add("", Pos2::ZERO);
+        art.node_mut(artist).unwrap().name = "Painter".into();
+        art.write(&dir.join("Art.besfa")).unwrap();
+        // One with no agents has nothing to hand a task to.
+        Organization::default()
+            .write(&dir.join("Empty.besfa"))
+            .unwrap();
+        let mut panel = OrgPanel::new(dir);
+        assert_eq!(panel.names, ["Art", "Empty", "Studio"]);
+        // The shown one as it is now, saved or not.
+        panel.org.node_mut(artist).unwrap().instructions = "Paints the UI.\nIn oils.".into();
+
+        let lineup = panel.lineup();
+        let lines: Vec<&str> = lineup.lines().collect();
+        assert_eq!(lines.len(), 2, "{lineup}");
+        assert_eq!(lines[0], "- Art (1 agent): Painter (Paints the UI.)");
+        // In run order, each with what it does.
+        assert!(
+            lines[1].starts_with("- Studio (3 agents): Gameplay Programmer ("),
+            "{lineup}"
+        );
+        assert!(lines[1].contains("; Game Designer ("), "{lineup}");
+        assert!(lines[1].contains("; Qa Tester ("), "{lineup}");
         fs::remove_dir_all(&besfa).unwrap();
     }
 
