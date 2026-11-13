@@ -62,9 +62,12 @@ pub fn generate(project: &Path, args: &Value) -> Result<String, String> {
     }
     let relative = Path::new(file);
     if relative.is_absolute()
-        || relative
-            .components()
-            .any(|part| matches!(part, Component::ParentDir | Component::Prefix(_)))
+        || relative.components().any(|part| {
+            matches!(
+                part,
+                Component::ParentDir | Component::Prefix(_) | Component::RootDir
+            )
+        })
     {
         return Err(format!("`file` must stay inside the project: {file}"));
     }
@@ -175,7 +178,14 @@ mod tests {
     #[test]
     fn refuses_paths_outside_the_project_before_any_request() {
         let project = std::env::temp_dir();
-        for file in ["../x.png", "C:/x.png", "C:x.png", "a/../../x.png"] {
+        for file in [
+            "../x.png",
+            "C:/x.png",
+            "C:x.png",
+            "a/../../x.png",
+            "/x.png",
+            "\\x.png",
+        ] {
             let error = generate(&project, &json!({"prompt": "p", "file": file})).unwrap_err();
             assert!(error.contains("inside the project"), "{file}: {error}");
         }
