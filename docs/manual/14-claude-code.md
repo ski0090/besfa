@@ -41,6 +41,17 @@ Claude Code는 `besfa mcp`로 게임을 **창 없이** 편집 상태로 띄우�
 
 `besfa mcp`는 한 번에 게임 하나만 띄웁니다. Claude Code를 닫으면 띄운 게임도 함께 꺼집니다.
 
+## 이미지 만들기
+
+Claude는 그림을 그리지 못하므로, `besfa mcp`가 OpenAI의 이미지 API로 그림을 그려 프로젝트에 PNG로 저장합니다. UI 아이콘, 버튼, 패널 조각에 씁니다. 예: "`assets/ui/coin.png`에 금화 아이콘을 투명 배경으로 그려 줘".
+
+- **준비**: OpenAI API 키를 사용자나 시스템 환경 변수 `OPENAI_API_KEY`로 설정하고, Claude Code나 에디터를 다시 시작합니다. ChatGPT 구독은 필요 없고, API는 [OpenAI 플랫폼](https://platform.openai.com)에서 쓴 만큼 따로 결제합니다. 키는 `curl`(Windows에 들어 있음)에 표준 입력으로만 넘어가고 파일이나 명령줄에 남지 않습니다.
+- **비용**: 그릴 때마다 OpenAI 계정에 요금이 붙습니다. 낮은 품질의 1024x1024 한 장이 몇 센트이고, 품질과 크기를 올리면 더 듭니다. 결과에 쓴 토큰 수가 나옵니다. OpenAI 플랫폼의 **Usage limits**에서 월 한도를 걸어 두세요.
+- **고를 수 있는 것**: 크기(`1024x1024`, `1536x1024`, `1024x1536`), 품질(`low`부터 `high`), 배경(`transparent`, `opaque`). 기본 모델은 투명 배경을 그리는 `gpt-image-2.6-flare`입니다. `gpt-image-2`는 투명 배경을 거절합니다.
+- **모델 업데이트**: OpenAI가 새 이미지 모델을 내면 Claude에게 "쓸 수 있는 이미지 모델을 보여 줘"라고 하세요(`image_models` 도구, 무료). 고른 모델 이름을 말하면 그 모델로 그립니다. Besfa를 업데이트하지 않아도 됩니다. 기본 모델 자체는 Besfa를 [업데이트](13-updating.md)할 때 바뀝니다.
+- 파일은 프로젝트 안의 `.png`여야 하고, 폴더가 없으면 만들며, 같은 이름의 파일은 덮어씁니다.
+- [조직](15-agent-window.md#organization-탭)에서 쓸 때는 Claude 에이전트에게 맡깁니다. Codex와 Gemini는 `besfa` 서버를 읽지 않습니다.
+
 ## 빌드와 테스트
 
 Claude Code(또는 터미널)가 게임을 빌드하거나 테스트할 때는 `cargo` 대신 아래 명령을 쓰게 하세요. 에디터의 Run과 같은 설정으로 빌드하므로, 이미 받아 둔 Bevy 빌드를 다시 쓰고 몇 분씩 다시 빌드하지 않습니다.

@@ -711,6 +711,7 @@ dependencies = [
 name = "besfa_mcp"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "besfa_protocol",
  "serde_json",
  "windows-sys 0.61.2",

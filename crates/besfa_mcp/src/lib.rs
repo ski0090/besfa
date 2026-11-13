@@ -3,8 +3,9 @@
 //! agent can read and change the scene without driving the editor's UI.
 //!
 //! Tools: `start` a game, `send` it a command, list its `entities` or one
-//! entity's components, and `stop` it. The game is stopped when the client
-//! closes stdin.
+//! entity's components, and `stop` it; `generate_image` draws a PNG with
+//! OpenAI's image API, whose models `image_models` lists. The game is
+//! stopped when the client closes stdin.
 //!
 //! `besfa mcp` serves it, and so does this crate's own binary.
 
@@ -15,6 +16,8 @@ use std::process::{Child, ChildStdin, Command as Process, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
+
+mod image;
 
 /// The features the editor runs a game with, for `besfa new`'s check.
 pub use besfa_protocol::run_features;
@@ -221,6 +224,12 @@ fn tools() -> Value {
             "inputSchema": {"type": "object", "properties": {}},
         },
     ])
+    .as_array()
+    .unwrap()
+    .iter()
+    .cloned()
+    .chain(image::tools())
+    .collect()
 }
 
 /// Runs the tool `name`; the text is what the model reads either way.
@@ -233,11 +242,7 @@ fn call(game: &mut Option<Game>, name: &str, args: &Value) -> Result<String, Str
             }
             // The folder the server runs in, a game project's own when its
             // .mcp.json starts `besfa mcp`.
-            let project = match args["project"].as_str() {
-                Some(project) => PathBuf::from(project),
-                None => std::env::current_dir()
-                    .map_err(|error| format!("No project given or current: {error}"))?,
-            };
+            let project = project(args)?;
             let game_args: Vec<&str> = args["args"]
                 .as_array()
                 .into_iter()
@@ -293,6 +298,8 @@ fn call(game: &mut Option<Game>, name: &str, args: &Value) -> Result<String, Str
                 }
             }
         }
+        "generate_image" => image::generate(&project(args)?, args),
+        "image_models" => image::models(),
         "stop" => Ok(match game.take() {
             Some(_) => "Stopped.".into(),
             None => "No game was running.".into(),
@@ -385,6 +392,16 @@ fn since(command: &Command) -> u32 {
             4
         }
         _ => 0,
+    }
+}
+
+/// The project `args` names, or the folder the server runs in.
+fn project(args: &Value) -> Result<PathBuf, String> {
+    match args["project"].as_str() {
+        Some(project) => Ok(PathBuf::from(project)),
+        None => {
+            std::env::current_dir().map_err(|error| format!("No project given or current: {error}"))
+        }
     }
 }
 
@@ -854,7 +871,17 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["start", "send", "entities", "stop"]);
+        assert_eq!(
+            names,
+            [
+                "start",
+                "send",
+                "entities",
+                "stop",
+                "generate_image",
+                "image_models"
+            ]
+        );
 
         assert!(handle(&mut game, &request("nope", json!({}))).is_err());
     }
