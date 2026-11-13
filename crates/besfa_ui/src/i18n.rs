@@ -391,6 +391,8 @@ fn korean(en: &str) -> Option<&'static str> {
         "Operations" => "운영",
         "The links make a loop." => "링크가 순환합니다.",
         "Commands" => "명령",
+        "Shell" => "셸",
+        "The shell Claude runs commands in: PowerShell is this PC's. Bash turns PowerShell off. A CCGS role runs its shell commands only if its role file's `tools:` lists Bash, so pick Bash for a project that uses such roles." => "Claude가 명령을 실행하는 셸입니다. PowerShell은 이 PC의 셸입니다. Bash를 고르면 PowerShell이 꺼집니다. CCGS 역할은 역할 파일의 `tools:`에 Bash가 있을 때만 셸 명령을 실행하므로, 그런 역할을 쓰는 프로젝트는 Bash를 고르세요.",
         "Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. Claude asks in the chat before running others, and Always allow adds them here. A line like PowerShell(cargo *) is a rule for another of its tools. An agent playing a CCGS role runs them only if its role file lists Bash." => {
             "Claude가 묻지 않고 실행할 명령입니다. 채팅과 조직 실행 모두에 적용되고, 한 줄에 하나씩 적으며 *는 어떤 인자든 뜻합니다. 에이전트가 일을 끝내려면 cargo *처럼 게임을 빌드하고 테스트하는 명령이 필요합니다. 그 밖의 명령은 Claude가 실행하기 전에 채팅에서 묻고, 항상 허용하면 여기에 더해집니다. PowerShell(cargo *)처럼 적은 줄은 Claude의 다른 도구에 대한 규칙입니다. CCGS 역할을 맡은 에이전트는 역할 파일에 Bash가 있을 때만 실행합니다."
         }

@@ -206,9 +206,9 @@ pub fn invocation(
         Route::Cli => Vec::new(),
         Route::Key(key) => vec![(provider.key_env().into(), key.clone())],
     };
-    if provider == Provider::Claude && cfg!(windows) {
-        // Bash off and PowerShell on: this PC's shell. Claude turns
-        // PowerShell off along with Bash unless the variable is set.
+    if provider == Provider::Claude && access.shell == Shell::PowerShell {
+        // Bash off and PowerShell on. Claude turns PowerShell off along
+        // with Bash unless the variable is set.
         args.extend(["--disallowedTools".into(), "Bash".into()]);
         env.push(("CLAUDE_CODE_USE_POWERSHELL_TOOL".into(), "1".into()));
     }
@@ -272,9 +272,40 @@ pub struct ProjectAccess {
     /// Whether Organization runs review and merge the pull requests they
     /// open, with `github` on. Only their prompt changes: `gh *` allows it.
     pub merge: bool,
-    /// Commands it may run, one per line, as Claude's Bash rules take them:
+    /// Commands it may run, one per line, as the shell's rules take them:
     /// `cargo *` is cargo with any arguments.
     pub commands: String,
+    /// The shell tool Claude runs commands in. A project's CCGS roles that
+    /// list Bash in their `tools:` need Bash.
+    pub shell: Shell,
+}
+
+/// The shell tool Claude runs commands in.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shell {
+    PowerShell,
+    Bash,
+}
+
+impl Default for Shell {
+    /// PowerShell on Windows, where Bash is not the shell; Bash elsewhere.
+    fn default() -> Self {
+        if cfg!(windows) {
+            Shell::PowerShell
+        } else {
+            Shell::Bash
+        }
+    }
+}
+
+impl Shell {
+    /// The name of Claude's tool for this shell, as its rules write it.
+    fn tool(self) -> &'static str {
+        match self {
+            Shell::PowerShell => "PowerShell",
+            Shell::Bash => "Bash",
+        }
+    }
 }
 
 impl Default for ProjectAccess {
@@ -286,6 +317,7 @@ impl Default for ProjectAccess {
             github: false,
             merge: false,
             commands: String::new(),
+            shell: Shell::default(),
         }
     }
 }
@@ -313,7 +345,7 @@ impl ProjectAccess {
                 format!("mcp__{name}")
             })
             .collect();
-        let shell = shell_tool();
+        let shell = self.shell.tool();
         if self.github {
             rules.extend([format!("{shell}(git *)"), format!("{shell}(gh *)")]);
         }
@@ -497,12 +529,6 @@ pub fn send_prompt(process: &mut CliProcess, program: &str, input: String) {
 /// Whether `line` is Claude's result, after which it reads nothing more.
 pub fn ended(line: &str) -> bool {
     serde_json::from_str::<Value>(line).is_ok_and(|event| event["type"] == "result")
-}
-
-/// The tool Claude runs commands in: PowerShell on Windows, where
-/// `invocation` turns Bash off, so the saved commands match its calls.
-fn shell_tool() -> &'static str {
-    if cfg!(windows) { "PowerShell" } else { "Bash" }
 }
 
 /// `project` as one key however it is written: Windows ignores case, takes
@@ -891,6 +917,17 @@ pub fn settings_tab(
             };
             ui.label(RichText::new(gh).color(color).small());
         });
+        if cfg!(windows) {
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.strong(t("Shell"));
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut access.shell, Shell::PowerShell, "PowerShell");
+                    ui.radio_value(&mut access.shell, Shell::Bash, "Bash");
+                });
+                note(ui, t("The shell Claude runs commands in: PowerShell is this PC's. Bash turns PowerShell off. A CCGS role runs its shell commands only if its role file's `tools:` lists Bash, so pick Bash for a project that uses such roles."));
+            });
+        }
         ui.group(|ui| {
             ui.set_width(ui.available_width());
             ui.strong(t("Commands"));
@@ -901,7 +938,7 @@ pub fn settings_tab(
                     .desired_rows(3)
                     .desired_width(f32::INFINITY),
             );
-            note(ui, t("Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. Claude asks in the chat before running others, and Always allow adds them here. A line like PowerShell(cargo *) is a rule for another of its tools. An agent playing a CCGS role runs them only if its role file lists Bash."));
+            note(ui, t("Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. Claude asks in the chat before running others, and Always allow adds them here. They are rules for the shell above; a line like PowerShell(cargo *) is kept as written for that tool, and a line like Bash(cargo *) is never used while PowerShell is picked. An agent playing a CCGS role runs them only if its role file lists Bash."));
         });
         ui.group(|ui| {
             ui.set_width(ui.available_width());
@@ -2201,6 +2238,32 @@ mod tests {
     }
 
     #[test]
+    fn bash_shell_leaves_bash_on_and_uses_bash_rules() {
+        let access = ProjectAccess {
+            commands: "cargo *\n".into(),
+            shell: Shell::Bash,
+            ..Default::default()
+        };
+        let (_, args, env) = invocation(Provider::Claude, &Route::Cli, "", &[], &access);
+        assert!(!args.iter().any(|arg| arg == "--disallowedTools"), "{args:?}");
+        assert!(env.is_empty(), "{env:?}");
+        assert!(args.contains(&"Bash(cargo *)".to_string()), "{args:?}");
+
+        let powershell = ProjectAccess {
+            shell: Shell::PowerShell,
+            ..access
+        };
+        let (_, args, env) = invocation(Provider::Claude, &Route::Cli, "", &[], &powershell);
+        let disallow = args.iter().position(|arg| arg == "--disallowedTools");
+        assert_eq!(disallow.map(|at| args[at + 1].as_str()), Some("Bash"));
+        assert_eq!(
+            env,
+            [("CLAUDE_CODE_USE_POWERSHELL_TOOL".to_string(), "1".to_string())]
+        );
+        assert!(args.contains(&"PowerShell(cargo *)".to_string()), "{args:?}");
+    }
+
+    #[test]
     fn allows_claude_what_the_project_allows() {
         let allowed = |access: &ProjectAccess| {
             let (_, args, _) = invocation(Provider::Claude, &Route::Cli, "opus", &[], access);
@@ -2220,10 +2283,11 @@ mod tests {
             commands:
                 " cargo *\r\n\npwsh -File tools/drive.ps1 *\nBash(just *)\nPowerShell(cargo *)\n"
                     .into(),
+            shell: Shell::default(),
         };
-        // Plain lines are for this PC's shell tool; a written rule stays as
+        // Plain lines are for the chosen shell tool; a written rule stays as
         // it is.
-        let shell = shell_tool();
+        let shell = access.shell.tool();
         assert_eq!(
             allowed(&access),
             [
