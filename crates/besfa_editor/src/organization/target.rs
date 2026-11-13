@@ -433,11 +433,7 @@ mod tests {
         let bare = root.join("bare/target");
         let why = seed(Some(&root.join("never-built")), &bare, &own).unwrap_err();
         assert!(why.contains("no build"), "{why}");
-        assert_eq!(
-            fs::read_to_string(bare.join(".gitignore")).unwrap(),
-            "*
-"
-        );
+        assert_eq!(fs::read_to_string(bare.join(".gitignore")).unwrap(), "*\n");
         // With nothing to fill from, an empty folder git still ignores.
         let empty = root.join("none/target");
         seed(None, &empty, &own).unwrap();
