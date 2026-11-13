@@ -391,8 +391,18 @@ fn korean(en: &str) -> Option<&'static str> {
         "Operations" => "운영",
         "The links make a loop." => "링크가 순환합니다.",
         "Commands" => "명령",
-        "Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. Claude asks in the chat before running others, and Always allow adds them here. A line like PowerShell(cargo *) is a rule for another of its tools. An agent playing a CCGS role runs them only if its role file lists Bash." => {
-            "Claude가 묻지 않고 실행할 명령입니다. 채팅과 조직 실행 모두에 적용되고, 한 줄에 하나씩 적으며 *는 어떤 인자든 뜻합니다. 에이전트가 일을 끝내려면 cargo *처럼 게임을 빌드하고 테스트하는 명령이 필요합니다. 그 밖의 명령은 Claude가 실행하기 전에 채팅에서 묻고, 항상 허용하면 여기에 더해집니다. PowerShell(cargo *)처럼 적은 줄은 Claude의 다른 도구에 대한 규칙입니다. CCGS 역할을 맡은 에이전트는 역할 파일에 Bash가 있을 때만 실행합니다."
+        "Shell" => "셸",
+        "Permissions" => "권한",
+        "Auto" => "자동",
+        "Accept edits" => "편집만 허용",
+        "Ask every time" => "매번 묻기",
+        "Claude decides on its own which edits and commands to run without asking, and may refuse the rest or ask about them in the chat. What it judges safe can include commands you would want to check, so keep branch protection on in GitHub." => "Claude가 어떤 편집과 명령을 묻지 않고 실행할지 스스로 판단하고, 나머지는 거절하거나 채팅에서 물을 수 있습니다. 안전하다고 판단하는 것에 직접 확인하고 싶은 명령이 들어갈 수 있으니, GitHub의 브랜치 보호는 켜 두세요.",
+        "Claude edits the project's files without asking, and asks in the chat before commands and other tools the rules below do not allow." => "Claude가 프로젝트 파일은 묻지 않고 고치고, 아래 규칙에 없는 명령과 다른 도구는 실행하기 전에 채팅에서 묻습니다.",
+        "Claude asks in the chat before every edit, command and tool the rules below do not allow." => "아래 규칙에 없는 편집, 명령, 도구는 모두 실행하기 전에 채팅에서 묻습니다.",
+        "Only Claude follows this choice. Codex and Gemini edit files without asking and do nothing more." => "이 선택은 Claude에만 적용됩니다. Codex와 Gemini는 파일을 묻지 않고 고치고, 그 밖의 일은 하지 않습니다.",
+        "The shell Claude runs commands in: PowerShell is this PC's. Bash turns PowerShell off. A CCGS role runs its shell commands only if its role file's `tools:` lists Bash, so pick Bash for a project that uses such roles." => "Claude가 명령을 실행하는 셸입니다. PowerShell은 이 PC의 셸입니다. Bash를 고르면 PowerShell이 꺼집니다. CCGS 역할은 역할 파일의 `tools:`에 Bash가 있을 때만 셸 명령을 실행하므로, 그런 역할을 쓰는 프로젝트는 Bash를 고르세요.",
+        "Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. Claude asks in the chat before running others, and Always allow adds them here. They are rules for the shell above; a line like PowerShell(cargo *) is kept as written for that tool, and a line like Bash(cargo *) is never used while PowerShell is picked. An agent playing a CCGS role runs them only if its role file lists Bash." => {
+            "Claude가 묻지 않고 실행할 명령입니다. 채팅과 조직 실행 모두에 적용되고, 한 줄에 하나씩 적으며 *는 어떤 인자든 뜻합니다. 에이전트가 일을 끝내려면 cargo *처럼 게임을 빌드하고 테스트하는 명령이 필요합니다. 그 밖의 명령은 Claude가 실행하기 전에 채팅에서 묻고, 항상 허용하면 여기에 더해집니다. 이 줄들은 위의 셸 규칙입니다. PowerShell(cargo *)처럼 적은 줄은 그 도구에 그대로 적용되고, 셸을 PowerShell로 고르면 Bash(cargo *)는 쓰이지 않습니다. CCGS 역할을 맡은 에이전트는 역할 파일에 Bash가 있을 때만 실행합니다."
         }
         "The agent asks to use {}:" => "에이전트가 {} 사용을 허용해 달라고 합니다:",
         "Allow" => "허용",

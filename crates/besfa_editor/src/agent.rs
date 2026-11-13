@@ -82,18 +82,16 @@ impl Provider {
         }
     }
 
-    /// Headless, with the prompt on stdin. Each may edit files in the
-    /// project without asking. Codex and Gemini may do nothing more, since
-    /// nobody can answer their permission prompts. Claude may also do what
-    /// `invocation` allows from the project's `ProjectAccess`, and asks
-    /// about the rest on stdout as JSON events, with the prompt and the
-    /// answers going in on stdin (see `Ask`).
+    /// Headless, with the prompt on stdin. Codex and Gemini may edit files
+    /// in the project without asking and do nothing more, since nobody can
+    /// answer their permission prompts. Claude decides by the project's
+    /// `Permission`, may also do what `invocation` allows from its
+    /// `ProjectAccess`, and asks about the rest on stdout as JSON events,
+    /// with the prompt and the answers going in on stdin (see `Ask`).
     fn args(self) -> &'static [&'static str] {
         match self {
             Provider::Claude => &[
                 "-p",
-                "--permission-mode",
-                "acceptEdits",
                 "--input-format",
                 "stream-json",
                 "--output-format",
@@ -202,6 +200,19 @@ pub fn invocation(
 ) -> (String, Vec<String>, Vec<(String, String)>) {
     let mut args: Vec<String> = provider.args().iter().map(|arg| arg.to_string()).collect();
     let rules = access.rules();
+    let mut env = match route {
+        Route::Cli => Vec::new(),
+        Route::Key(key) => vec![(provider.key_env().into(), key.clone())],
+    };
+    if provider == Provider::Claude {
+        args.extend(["--permission-mode".into(), access.permission.mode().into()]);
+    }
+    if provider == Provider::Claude && access.shell == Shell::PowerShell {
+        // Bash off and PowerShell on. Claude turns PowerShell off along
+        // with Bash unless the variable is set.
+        args.extend(["--disallowedTools".into(), "Bash".into()]);
+        env.push(("CLAUDE_CODE_USE_POWERSHELL_TOOL".into(), "1".into()));
+    }
     if provider == Provider::Claude && !rules.is_empty() {
         // The list takes every value up to the next flag.
         args.push("--allowedTools".into());
@@ -233,10 +244,6 @@ pub fn invocation(
             args.push(format!("--image={}", file.display()));
         }
     }
-    let env = match route {
-        Route::Cli => Vec::new(),
-        Route::Key(key) => vec![(provider.key_env().into(), key.clone())],
-    };
     (provider.command().into(), args, env)
 }
 
@@ -266,9 +273,65 @@ pub struct ProjectAccess {
     /// Whether Organization runs review and merge the pull requests they
     /// open, with `github` on. Only their prompt changes: `gh *` allows it.
     pub merge: bool,
-    /// Commands it may run, one per line, as Claude's Bash rules take them:
+    /// Commands it may run, one per line, as the shell's rules take them:
     /// `cargo *` is cargo with any arguments.
     pub commands: String,
+    /// The shell tool Claude runs commands in. A project's CCGS roles that
+    /// list Bash in their `tools:` need Bash.
+    pub shell: Shell,
+    /// How Claude decides about what the rules above do not allow.
+    pub permission: Permission,
+}
+
+/// How Claude decides about a tool call its allow rules do not cover.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Permission {
+    /// Claude's classifier lets safe calls through and asks about the rest.
+    #[default]
+    Auto,
+    /// Edits files without asking; asks about commands and other tools.
+    AcceptEdits,
+    /// Asks before every edit, command and tool.
+    Manual,
+}
+
+impl Permission {
+    /// Claude's `--permission-mode` for it.
+    fn mode(self) -> &'static str {
+        match self {
+            Permission::Auto => "auto",
+            Permission::AcceptEdits => "acceptEdits",
+            Permission::Manual => "manual",
+        }
+    }
+}
+
+/// The shell tool Claude runs commands in.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shell {
+    PowerShell,
+    Bash,
+}
+
+impl Default for Shell {
+    /// PowerShell on Windows, where Bash is not the shell; Bash elsewhere.
+    fn default() -> Self {
+        if cfg!(windows) {
+            Shell::PowerShell
+        } else {
+            Shell::Bash
+        }
+    }
+}
+
+impl Shell {
+    /// The name of Claude's tool for this shell, as its rules write it.
+    fn tool(self) -> &'static str {
+        match self {
+            Shell::PowerShell => "PowerShell",
+            Shell::Bash => "Bash",
+        }
+    }
 }
 
 impl Default for ProjectAccess {
@@ -280,6 +343,8 @@ impl Default for ProjectAccess {
             github: false,
             merge: false,
             commands: String::new(),
+            shell: Shell::default(),
+            permission: Permission::default(),
         }
     }
 }
@@ -307,8 +372,9 @@ impl ProjectAccess {
                 format!("mcp__{name}")
             })
             .collect();
+        let shell = self.shell.tool();
         if self.github {
-            rules.extend(["Bash(git *)".into(), "Bash(gh *)".into()]);
+            rules.extend([format!("{shell}(git *)"), format!("{shell}(gh *)")]);
         }
         rules.extend(
             self.commands
@@ -326,7 +392,7 @@ impl ProjectAccess {
                     if rule {
                         command.into()
                     } else {
-                        format!("Bash({command})")
+                        format!("{shell}({command})")
                     }
                 }),
         );
@@ -880,6 +946,37 @@ pub fn settings_tab(
         });
         ui.group(|ui| {
             ui.set_width(ui.available_width());
+            ui.strong(t("Permissions"));
+            ui.horizontal_wrapped(|ui| {
+                ui.radio_value(&mut access.permission, Permission::Auto, t("Auto"));
+                ui.radio_value(
+                    &mut access.permission,
+                    Permission::AcceptEdits,
+                    t("Accept edits"),
+                );
+                ui.radio_value(&mut access.permission, Permission::Manual, t("Ask every time"));
+            });
+            let note_text = match access.permission {
+                Permission::Auto => t("Claude decides on its own which edits and commands to run without asking, and may refuse the rest or ask about them in the chat. What it judges safe can include commands you would want to check, so keep branch protection on in GitHub."),
+                Permission::AcceptEdits => t("Claude edits the project's files without asking, and asks in the chat before commands and other tools the rules below do not allow."),
+                Permission::Manual => t("Claude asks in the chat before every edit, command and tool the rules below do not allow."),
+            };
+            note(ui, note_text);
+            note(ui, t("Only Claude follows this choice. Codex and Gemini edit files without asking and do nothing more."));
+        });
+        if cfg!(windows) {
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.strong(t("Shell"));
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut access.shell, Shell::PowerShell, "PowerShell");
+                    ui.radio_value(&mut access.shell, Shell::Bash, "Bash");
+                });
+                note(ui, t("The shell Claude runs commands in: PowerShell is this PC's. Bash turns PowerShell off. A CCGS role runs its shell commands only if its role file's `tools:` lists Bash, so pick Bash for a project that uses such roles."));
+            });
+        }
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
             ui.strong(t("Commands"));
             ui.add(
                 egui::TextEdit::multiline(&mut access.commands)
@@ -888,7 +985,7 @@ pub fn settings_tab(
                     .desired_rows(3)
                     .desired_width(f32::INFINITY),
             );
-            note(ui, t("Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. Claude asks in the chat before running others, and Always allow adds them here. A line like PowerShell(cargo *) is a rule for another of its tools. An agent playing a CCGS role runs them only if its role file lists Bash."));
+            note(ui, t("Commands Claude may run without asking, in the chat and in Organization runs, one per line; * stands for any arguments. Agents need the ones that build and test the game, like cargo *, to finish their work. Claude asks in the chat before running others, and Always allow adds them here. They are rules for the shell above; a line like PowerShell(cargo *) is kept as written for that tool, and a line like Bash(cargo *) is never used while PowerShell is picked. An agent playing a CCGS role runs them only if its role file lists Bash."));
         });
         ui.group(|ui| {
             ui.set_width(ui.available_width());
@@ -2149,28 +2246,34 @@ mod tests {
         let besfa = ProjectAccess::default();
         let (program, args, env) = invocation(Provider::Claude, &Route::Cli, "opus", &[], &besfa);
         assert_eq!(program, "claude");
-        assert_eq!(
-            args,
-            [
-                "-p",
-                "--permission-mode",
-                "acceptEdits",
-                "--input-format",
-                "stream-json",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--permission-prompt-tool",
-                "stdio",
-                "--append-system-prompt",
-                AGENT_WINDOW,
-                "--allowedTools",
-                "mcp__besfa",
-                "--model",
-                "opus"
-            ]
-        );
-        assert!(env.is_empty());
+        // Auto is the default permission mode.
+        let mut expected = vec![
+            "-p",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--permission-prompt-tool",
+            "stdio",
+            "--append-system-prompt",
+            AGENT_WINDOW,
+            "--permission-mode",
+            "auto",
+        ];
+        if cfg!(windows) {
+            expected.extend(["--disallowedTools", "Bash"]);
+        }
+        expected.extend(["--allowedTools", "mcp__besfa", "--model", "opus"]);
+        assert_eq!(args, expected);
+        if cfg!(windows) {
+            assert_eq!(
+                env,
+                [("CLAUDE_CODE_USE_POWERSHELL_TOOL".to_string(), "1".to_string())]
+            );
+        } else {
+            assert!(env.is_empty());
+        }
 
         let (program, args, env) =
             invocation(Provider::OpenAi, &Route::Key("sk".into()), "", &[], &besfa);
@@ -2180,6 +2283,59 @@ mod tests {
 
         let (_, args, _) = invocation(Provider::Gemini, &Route::Cli, "", &[], &besfa);
         assert_eq!(args, ["--prompt", "", "--approval-mode", "auto_edit"]);
+    }
+
+    #[test]
+    fn passes_the_projects_permission_mode_to_claude_only() {
+        let mode = |permission: Permission, provider: Provider| {
+            let access = ProjectAccess {
+                permission,
+                ..Default::default()
+            };
+            let (_, args, _) = invocation(provider, &Route::Cli, "", &[], &access);
+            args.iter()
+                .position(|arg| arg == "--permission-mode")
+                .map(|at| args[at + 1].clone())
+        };
+        assert_eq!(mode(Permission::Auto, Provider::Claude).as_deref(), Some("auto"));
+        assert_eq!(
+            mode(Permission::AcceptEdits, Provider::Claude).as_deref(),
+            Some("acceptEdits")
+        );
+        assert_eq!(mode(Permission::Manual, Provider::Claude).as_deref(), Some("manual"));
+        assert_eq!(mode(Permission::Auto, Provider::OpenAi), None);
+        assert_eq!(mode(Permission::Auto, Provider::Gemini), None);
+
+        // A project saved before the choice existed gets the default.
+        let old: ProjectAccess = ron::from_str("(github:true)").unwrap();
+        assert_eq!(old.permission, Permission::Auto);
+        assert!(old.github);
+    }
+
+    #[test]
+    fn bash_shell_leaves_bash_on_and_uses_bash_rules() {
+        let access = ProjectAccess {
+            commands: "cargo *\n".into(),
+            shell: Shell::Bash,
+            ..Default::default()
+        };
+        let (_, args, env) = invocation(Provider::Claude, &Route::Cli, "", &[], &access);
+        assert!(!args.iter().any(|arg| arg == "--disallowedTools"), "{args:?}");
+        assert!(env.is_empty(), "{env:?}");
+        assert!(args.contains(&"Bash(cargo *)".to_string()), "{args:?}");
+
+        let powershell = ProjectAccess {
+            shell: Shell::PowerShell,
+            ..access
+        };
+        let (_, args, env) = invocation(Provider::Claude, &Route::Cli, "", &[], &powershell);
+        let disallow = args.iter().position(|arg| arg == "--disallowedTools");
+        assert_eq!(disallow.map(|at| args[at + 1].as_str()), Some("Bash"));
+        assert_eq!(
+            env,
+            [("CLAUDE_CODE_USE_POWERSHELL_TOOL".to_string(), "1".to_string())]
+        );
+        assert!(args.contains(&"PowerShell(cargo *)".to_string()), "{args:?}");
     }
 
     #[test]
@@ -2202,18 +2358,23 @@ mod tests {
             commands:
                 " cargo *\r\n\npwsh -File tools/drive.ps1 *\nBash(just *)\nPowerShell(cargo *)\n"
                     .into(),
+            shell: Shell::default(),
+            permission: Permission::default(),
         };
+        // Plain lines are for the chosen shell tool; a written rule stays as
+        // it is.
+        let shell = access.shell.tool();
         assert_eq!(
             allowed(&access),
             [
-                "mcp__besfa",
-                "mcp__my_server",
-                "Bash(git *)",
-                "Bash(gh *)",
-                "Bash(cargo *)",
-                "Bash(pwsh -File tools/drive.ps1 *)",
-                "Bash(just *)",
-                "PowerShell(cargo *)"
+                "mcp__besfa".to_string(),
+                "mcp__my_server".into(),
+                format!("{shell}(git *)"),
+                format!("{shell}(gh *)"),
+                format!("{shell}(cargo *)"),
+                format!("{shell}(pwsh -File tools/drive.ps1 *)"),
+                "Bash(just *)".into(),
+                "PowerShell(cargo *)".into(),
             ]
         );
 
@@ -2315,8 +2476,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("besfa-real-ask-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
+        // Auto may run the command without asking; this tests the asking.
         let none = ProjectAccess {
             servers: Default::default(),
+            permission: Permission::AcceptEdits,
             ..Default::default()
         };
         let invocation = invocation(Provider::Claude, &Route::Cli, "haiku", &[], &none);
@@ -2823,6 +2986,7 @@ thoughts {:?}",
         let model = std::env::var("BESFA_HANDOFF_MODEL").unwrap_or("sonnet".into());
         let none = ProjectAccess {
             servers: Default::default(),
+            permission: Permission::AcceptEdits,
             ..Default::default()
         };
         let lineup = "- Studio (3 agents): Game Designer (Designs mechanics and how they feel.); Gameplay Programmer (Implements gameplay in Rust.); Qa Tester (Writes and runs tests, reports bugs.)\n";
