@@ -1058,9 +1058,12 @@ struct Run {
 /// counts, not what is in it.
 fn uncommitted(project: &Path) -> u64 {
     use std::hash::{Hash, Hasher};
+    // The editor writes where the run is there, as it goes.
+    let run_file = format!(":(exclude)besfa/{RUN_FILE}");
+    let paths = ["--", ".", run_file.as_str()];
     let mut hasher = std::hash::DefaultHasher::new();
-    git(project, &["status", "--porcelain", "-uall"]).hash(&mut hasher);
-    git(project, &["diff", "HEAD"]).hash(&mut hasher);
+    git(project, &[&["status", "--porcelain", "-uall"][..], &paths].concat()).hash(&mut hasher);
+    git(project, &[&["diff", "HEAD"][..], &paths].concat()).hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1167,8 +1170,9 @@ fn add_worktree(project: &Path, started: u64, id: u32) -> Result<Worktree, Strin
         } else {
             git(project, &["worktree", "add", &at, &branch])?;
         }
-        fill_submodules(project, &path)?;
     }
+    // Again on a reused one, in case filling it failed before.
+    fill_submodules(project, &path)?;
     Ok(Worktree {
         dir: path.join(prefix),
         path,
@@ -1178,8 +1182,9 @@ fn add_worktree(project: &Path, started: u64, id: u32) -> Result<Worktree, Strin
 }
 
 /// Checks out `worktree`'s submodules, which `git worktree add` leaves
-/// empty, from the project's own checkouts of them rather than their
-/// remotes. A CCGS game links its `.claude` folders into one.
+/// empty, from the project's own checkouts of them, never their remotes:
+/// one the project has not checked out stays empty there too. A CCGS
+/// game links its `.claude` folders into one.
 fn fill_submodules(project: &Path, worktree: &Path) -> Result<(), String> {
     let Ok(paths) = git(
         worktree,
@@ -1196,6 +1201,7 @@ fn fill_submodules(project: &Path, worktree: &Path) -> Result<(), String> {
     };
     let top = PathBuf::from(git(project, &["rev-parse", "--show-toplevel"])?);
     let mut args = vec!["-c".to_string(), "protocol.file.allow=always".into()];
+    let mut local_paths = Vec::new();
     for line in paths.lines() {
         let Some((key, path)) = line.split_once(' ') else {
             continue;
@@ -1212,9 +1218,14 @@ fn fill_submodules(project: &Path, worktree: &Path) -> Result<(), String> {
                     local.to_string_lossy().replace('\\', "/")
                 ),
             ]);
+            local_paths.push(path.to_string());
         }
     }
-    args.extend(["submodule", "update", "--init", "--recursive"].map(String::from));
+    if local_paths.is_empty() {
+        return Ok(());
+    }
+    args.extend(["submodule", "update", "--init", "--recursive", "--"].map(String::from));
+    args.extend(local_paths);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     git(worktree, &args).map(|_| ())
 }
@@ -1302,6 +1313,9 @@ pub struct Paused {
     messages: Vec<Message>,
     /// When it first started, in seconds; 0 in files from before.
     started: u64,
+    /// What the project folder held beyond its commit when it first
+    /// started (see `uncommitted`); 0 in files from before.
+    untouched: u64,
 }
 
 impl Paused {
@@ -1475,6 +1489,7 @@ impl OrgPanel {
             chat: run.chat,
             messages: chat.to_vec(),
             started: run.started,
+            untouched: run.untouched,
         })
     }
 
@@ -1767,7 +1782,12 @@ impl OrgPanel {
             git,
             parallel,
             started,
-            untouched: uncommitted(directory),
+            // From when it first started: a resume must still see what
+            // the agents left since.
+            untouched: match run.untouched {
+                0 => uncommitted(directory),
+                untouched => untouched,
+            },
             one_at_a_time: false,
         });
         Ok(())
@@ -3506,7 +3526,8 @@ mod tests {
             let (mut org, [design, code, test]) = studio();
             org.link(design, code);
             org.link(design, test);
-            let mut panel = OrgPanel::new(root.join("besfa/organizations"));
+            // In the repository, as in a game: the run file lands there.
+            let mut panel = OrgPanel::new(project.join(ORGANIZATIONS_DIR));
             panel.org = org;
             for node in &mut panel.org.nodes {
                 node.state = NodeState::Waiting;
