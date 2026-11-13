@@ -483,6 +483,8 @@ fn korean(en: &str) -> Option<&'static str> {
         "Thoughts" => "생각",
         "Continue" => "이어서",
         "Nothing to continue." => "이어서 할 작업이 없습니다.",
+        "Child session" => "자식 세션",
+        "paused" => "멈춤",
         "Runs the agents of {} that are not done yet, handing on what the others answered." => {
             "{}에서 아직 끝나지 않은 에이전트를 실행하고, 끝난 에이전트의 답을 넘깁니다."
         }
