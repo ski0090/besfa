@@ -206,8 +206,11 @@ fn fill(from: &Path, to: &Path, own: &BTreeSet<String>) -> io::Result<()> {
         fs::create_dir_all(to.join(folder))?;
     }
     let Ok(deps) = fs::read_dir(from.join("deps")) else {
-        // Nothing built yet.
-        return Ok(());
+        // Nothing to fill from: the worktree builds everything, and says so.
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "the project's target folder has no build yet",
+        ));
     };
     for entry in deps.flatten() {
         let name = entry.file_name();
@@ -426,6 +429,15 @@ mod tests {
         fs::write(&built, "").unwrap();
         seed(Some(&from), &to, &own).unwrap();
         assert!(built.exists());
+        // A project target with no build fills nothing, and says so.
+        let bare = root.join("bare/target");
+        let why = seed(Some(&root.join("never-built")), &bare, &own).unwrap_err();
+        assert!(why.contains("no build"), "{why}");
+        assert_eq!(
+            fs::read_to_string(bare.join(".gitignore")).unwrap(),
+            "*
+"
+        );
         // With nothing to fill from, an empty folder git still ignores.
         let empty = root.join("none/target");
         seed(None, &empty, &own).unwrap();

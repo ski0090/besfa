@@ -3634,8 +3634,9 @@ mod tests {
             queued_merges: Vec::new(),
         });
         let ctx = egui::Context::default();
-        // Agents of a git project start through the one worktree lock other
-        // tests' worktrees hold too: slow on a busy machine.
+        // After the resume the run is in this repository's git, so its agents
+        // start through the worktree lock other tests' worktrees take too;
+        // in busy full runs this ran past 20 s.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut finished = None;
         let mut chat = Vec::new();
@@ -3643,7 +3644,17 @@ mod tests {
             finished = panel.poll(&ctx, (&mut chat, &mut Vec::new()));
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(finished, Some(false));
+        assert_eq!(
+            finished,
+            Some(false),
+            "{:?}",
+            panel
+                .org
+                .nodes
+                .iter()
+                .map(|node| (node.state, node.output.clone()))
+                .collect::<Vec<_>>()
+        );
         assert!(!panel.running());
         let node = |id| panel.org.node(id).unwrap();
         assert_eq!(node(design).state, NodeState::Done);
@@ -3702,7 +3713,17 @@ mod tests {
             finished = panel.poll(&ctx, (&mut chat, &mut Vec::new()));
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(finished, Some(false));
+        assert_eq!(
+            finished,
+            Some(false),
+            "{:?}",
+            panel
+                .org
+                .nodes
+                .iter()
+                .map(|node| (node.state, node.output.clone()))
+                .collect::<Vec<_>>()
+        );
         assert_eq!(chat.len(), 4);
         assert_eq!(chat[3].speaker.as_ref().unwrap().0, "Qa Tester");
         assert!(chat[3].text.contains("## Gameplay Programmer\n"));
@@ -3866,8 +3887,9 @@ mod tests {
             queued_merges: Vec::new(),
         });
         let ctx = egui::Context::default();
-        // Agents of a git project start through the one worktree lock other
-        // tests' worktrees hold too: slow on a busy machine.
+        // After the resume the run is in this repository's git, so its agents
+        // start through the worktree lock other tests' worktrees take too;
+        // in busy full runs this ran past 20 s.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut chat: Vec<Message> = Vec::new();
         let poll = |panel: &mut OrgPanel,
