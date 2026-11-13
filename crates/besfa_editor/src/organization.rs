@@ -1759,7 +1759,7 @@ impl OrgPanel {
         ui.add_space(4.0);
         ui.label(RichText::new(t("Roles")).strong());
         ui.label(
-            RichText::new(t("Claude Code Game Studios' agents. Click one to add it."))
+            RichText::new(t("Claude Code Game Studios' agents. Double-click one to add it."))
                 .small()
                 .color(panels::MUTED),
         );
@@ -1775,7 +1775,9 @@ impl OrgPanel {
             }
             if ui
                 .button(t("+ Folder"))
-                .on_hover_text(t("Right-click a row to rename or delete it. Drag rows to move them."))
+                .on_hover_text(t(
+                    "Right-click a row to rename or delete it. An agent moves to another folder in its settings.",
+                ))
                 .clicked()
             {
                 self.tree.new_folder(&[]);
@@ -2346,6 +2348,9 @@ impl OrgPanel {
                     );
                 }
             });
+            ui.add_space(4.0);
+            ui.label(RichText::new(t("Roles tree")).small().color(panels::MUTED));
+            self.tree.folder_picker(ui, id, node);
             ui.add_space(6.0);
             ui.label(RichText::new(t("Last result")).small().color(panels::MUTED));
             egui::ScrollArea::vertical()
@@ -3017,6 +3022,7 @@ mod tests {
         let file = dir.join("Organization.besfa");
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1200.0, 700.0))
+            .with_step_dt(1.0 / 60.0)
             .build_ui_state(
                 |ui, panel: &mut OrgPanel| drop(panel.ui(ui)),
                 OrgPanel::new(dir.clone()),
@@ -3028,7 +3034,15 @@ mod tests {
         // Written once the click is over.
         assert_eq!(Organization::read(&file).nodes.len(), 4);
 
+        // egui counts a click soon after two others as a triple click, which
+        // is no double click; let the one above go by first.
+        harness.run_steps(40);
+        // One click adds nothing; the second of a double click does.
         harness.get_by_label("Producer").click();
+        harness.step();
+        assert_eq!(harness.state().org.nodes.len(), 4);
+        harness.get_by_label("Producer").click();
+        harness.step();
         harness.run();
         assert_eq!(harness.state().org.nodes.len(), 5);
         assert_eq!(harness.state().selected.len(), 1);
@@ -3047,8 +3061,7 @@ mod tests {
     }
 
     #[test]
-    fn dragging_a_row_into_a_folder_moves_it_and_the_tree_is_kept() {
-        use egui::{Event, PointerButton};
+    fn a_saved_agent_shows_by_name_and_the_tree_is_kept() {
         use egui_kittest::{Harness, kittest::Queryable};
         let base = std::env::temp_dir().join(format!("besfa-tree-ui-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
@@ -3059,40 +3072,19 @@ mod tests {
         });
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1200.0, 700.0))
-            .with_step_dt(1.0 / 60.0)
             .build_ui_state(|ui, panel: &mut OrgPanel| drop(panel.ui(ui)), panel);
         harness.run();
-        // A saved agent shows by name, in its folder.
         harness.get_by_label("UI Designer");
-        let from = harness.get_by_label("Producer").rect().center();
-        let to = harness.get_by_label("▸ Design").rect().center();
-        let button = |pressed| Event::PointerButton {
-            pos: if pressed { from } else { to },
-            button: PointerButton::Primary,
-            pressed,
-            modifiers: Default::default(),
-        };
-        harness.event(Event::PointerMoved(from));
-        harness.run_steps(2);
-        harness.event(button(true));
-        harness.run_steps(2);
-        for step in 1..=5 {
-            harness.event(Event::PointerMoved(from + (to - from) * (step as f32 / 5.0)));
-            harness.run_steps(2);
-        }
-        harness.event(button(false));
-        harness.run_steps(3);
-        let tree = &harness.state().tree;
-        let in_folder = |folder: usize| match &tree.entries[folder] {
-            roles_tree::Entry::Folder(folder) => folder.entries.clone(),
-            _ => Vec::new(),
-        };
-        let producer = roles_tree::Entry::Role("producer".into());
-        assert!(!in_folder(0).contains(&producer), "left Leadership");
-        assert_eq!(in_folder(1).last(), Some(&producer), "last in Design");
-        assert!(harness.state().org.nodes.is_empty(), "a drag adds nothing");
-        // Kept in the project for the next start.
-        assert_eq!(&read_ron::<roles_tree::Tree>(&base.join("roles.ron")), &Some(tree.clone()));
+        // Closing a folder is an edit of the tree, which is written.
+        harness.get_by_label("▾ My agents").click();
+        harness.run();
+        harness.get_by_label("▸ My agents");
+        assert!(harness.query_by_label("UI Designer").is_none());
+        let tree = harness.state().tree.clone();
+        assert_eq!(
+            read_ron::<roles_tree::Tree>(&base.join("roles.ron")),
+            Some(tree)
+        );
         fs::remove_dir_all(&base).unwrap();
     }
 
