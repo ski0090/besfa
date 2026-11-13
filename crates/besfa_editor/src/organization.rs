@@ -9,6 +9,8 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::mpsc,
+    thread,
     time::SystemTime,
 };
 
@@ -20,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod roles_tree;
+mod target;
 
 use crate::{
     agent::{self, AgentSettings, Agents, Ask, Message, Provider},
@@ -791,6 +794,14 @@ impl Organization {
                 worktree.branch,
                 worktree.base
             ));
+            // Other features make other builds of the dependencies, which
+            // the worktree's folder does not have.
+            let manifest = fs::read_to_string(worktree.dir.join("Cargo.toml")).unwrap_or_default();
+            input.push_str(&format!(
+                " Cargo builds here in {}, which CARGO_TARGET_DIR names: it was filled from what the project already built, so only this repository's packages compile. Keep it, and build, run and test with `--features {}` as the editor does; other features build every dependency again from scratch.",
+                worktree.target.display(),
+                besfa_protocol::run_features(&manifest),
+            ));
         }
         input
     }
@@ -1101,13 +1112,90 @@ fn uncommitted(project: &Path) -> u64 {
 /// An agent at work.
 struct Running {
     id: u32,
-    process: CliProcess,
+    /// None until its worktree's target folder is filled, when `waiting`
+    /// starts it.
+    process: Option<CliProcess>,
+    waiting: Option<Waiting>,
     /// Its message in the chat.
     message: usize,
     /// Its own checkout, when it works beside other agents.
     worktree: Option<Worktree>,
     /// The ids of what it asked the user, waiting for answers.
     asked: Vec<String>,
+}
+
+/// Where the editor's game stands, which decides whether agents may work in
+/// worktrees, whose target folders are filled from the project's build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GameBuild {
+    /// Not running and not being built: its build failed, or none started.
+    Missing,
+    /// Being built or launched, as after a code change.
+    Building,
+    /// Running, built from the project folder.
+    Built,
+}
+
+/// An agent that starts once its worktree's target folder is filled from
+/// the project's, which takes seconds.
+struct Waiting {
+    /// Why the folder is empty, if it could not be filled.
+    filled: mpsc::Receiver<Result<(), String>>,
+    directory: PathBuf,
+    invocation: Invocation,
+    input: String,
+}
+
+impl Running {
+    /// What its CLI wrote since the last call. One still waiting starts
+    /// once its folder is filled, with why it could not be in `node`'s
+    /// thoughts; one that cannot start, or that the run stopped first,
+    /// exits.
+    fn poll(&mut self, stopped: bool, ctx: &egui::Context, node: &mut Node) -> Vec<Output> {
+        if let Some(process) = &self.process {
+            return process.poll();
+        }
+        let Some(waiting) = &self.waiting else {
+            return vec![Output::Exit(1)];
+        };
+        if stopped {
+            // Filling goes on, and a Continue finds the folder filled.
+            self.waiting = None;
+            return vec![Output::Exit(1)];
+        }
+        let filled = match waiting.filled.try_recv() {
+            Ok(filled) => filled,
+            Err(mpsc::TryRecvError::Empty) => return Vec::new(),
+            Err(mpsc::TryRecvError::Disconnected) => Err("it stopped early.".into()),
+        };
+        if let Err(why) = filled {
+            push_line(
+                &mut node.thoughts,
+                &format!("{} {why}", t("Its builds start from scratch:")),
+            );
+        }
+        let waiting = self.waiting.take().expect("checked above");
+        let (program, args, env) = &waiting.invocation;
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let env: Vec<(&str, &str)> = env
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        match CliProcess::start(&waiting.directory, program, &args, &env, ctx) {
+            Ok(mut process) => {
+                agent::send_prompt(&mut process, program, waiting.input);
+                self.process = Some(process);
+                Vec::new()
+            }
+            Err(error) => {
+                push_line(
+                    &mut node.output,
+                    &format!("Could not start {program}: {error}"),
+                );
+                vec![Output::Exit(1)]
+            }
+        }
+    }
 }
 
 /// An agent's own checkout while it works beside other agents: a git
@@ -1120,6 +1208,9 @@ struct Worktree {
     branch: String,
     /// The project's branch it was made from, and is merged back into.
     base: String,
+    /// Where cargo builds there: its own folder, since every checkout
+    /// gives the game the same build names (see `target`).
+    target: PathBuf,
 }
 
 /// Runs git in `dir`: what it printed, or what it said when it failed.
@@ -1204,8 +1295,10 @@ fn add_worktree(project: &Path, started: u64, id: u32) -> Result<Worktree, Strin
     }
     // Again on a reused one, in case filling it failed before.
     fill_submodules(project, &path)?;
+    let dir = path.join(prefix);
     Ok(Worktree {
-        dir: path.join(prefix),
+        target: dir.join("target"),
+        dir,
         path,
         branch,
         base,
@@ -1399,6 +1492,15 @@ pub struct OrgPanel {
     run: Option<Run>,
     /// The last run, if it stopped before its last agent was done.
     paused: Option<Paused>,
+    /// Where the editor's game stands: only once it runs, built from the
+    /// project folder, does the project's target folder hold what worktrees
+    /// fill theirs from.
+    game: GameBuild,
+    /// The target folder the project builds in, looked up when the run
+    /// began, which worktrees fill theirs from.
+    build: Option<PathBuf>,
+    /// The run said why its agents went one at a time for now.
+    held_back: bool,
     /// Why the last link or name was refused.
     refused: Option<&'static str>,
     /// Laid-out code blocks and the like of the last result's Markdown.
@@ -1454,9 +1556,18 @@ impl OrgPanel {
             wiring: None,
             run: None,
             paused,
+            game: GameBuild::Missing,
+            build: None,
+            held_back: false,
             refused: None,
             markdown: Default::default(),
         }
+    }
+
+    /// Where the editor's game stands: agents work side by side in
+    /// worktrees only while it runs, built from the project folder.
+    pub fn set_game(&mut self, game: GameBuild) {
+        self.game = game;
     }
 
     /// The starter studio halfway through a task, for the manual's
@@ -1841,6 +1952,8 @@ impl OrgPanel {
         };
         // A new run takes the place of a paused one.
         self.paused = None;
+        self.held_back = false;
+        self.build = Some(target::project_target(directory));
         self.run = Some(Run {
             organization: run.organization,
             task: run.task,
@@ -1887,7 +2000,9 @@ impl OrgPanel {
             .find(|running| running.asked.contains(&id))
         {
             running.asked.retain(|asked| *asked != id);
-            running.process.send(line);
+            if let Some(process) = &mut running.process {
+                process.send(line);
+            }
         }
     }
 
@@ -1914,8 +2029,12 @@ impl OrgPanel {
     pub fn stop(&mut self) {
         if let Some(run) = &mut self.run {
             run.stopped = true;
-            for running in &run.running {
-                running.process.stop();
+            for process in run
+                .running
+                .iter()
+                .filter_map(|running| running.process.as_ref())
+            {
+                process.stop();
             }
         }
     }
@@ -1935,7 +2054,42 @@ impl OrgPanel {
             let ready = self.org.ready(&run.order);
             let in_project = run.running.iter().any(|running| running.worktree.is_none());
             let mut git = run.git && !run.one_at_a_time;
-            if starting(&ready, in_project, run.running.len(), git).1
+            // Worktrees build in target folders filled from the project's,
+            // which holds the build only once the editor has built the game
+            // as the last commit has it; otherwise each worktree would build
+            // the game's dependencies from scratch. While the game is being
+            // built, after an agent's code merged say, those that would go
+            // into worktrees wait; with no game, they go one at a time.
+            let mut waiting = false;
+            if starting(&ready, in_project, run.running.len(), git).1 {
+                let manifests = ["diff", "--quiet", "HEAD", "--", "Cargo.toml", "Cargo.lock"];
+                let why = match self.game {
+                    GameBuild::Building => {
+                        waiting = true;
+                        None
+                    }
+                    GameBuild::Missing => Some(t(
+                        "The agents go one at a time in the project folder until the editor has built the game: in worktrees each would build its dependencies from scratch.",
+                    )),
+                    GameBuild::Built if self::git(&run.directory, &manifests).is_err() => Some(t(
+                        "The agents go one at a time in the project folder while Cargo.toml or Cargo.lock has uncommitted changes: worktrees made from the last commit would build the dependencies from scratch.",
+                    )),
+                    GameBuild::Built => None,
+                };
+                if let Some(why) = why {
+                    git = false;
+                    if !self.held_back {
+                        self.held_back = true;
+                        chat.push(Message {
+                            speaker: Some((run.organization.clone(), [0x8A; 3])),
+                            text: why.into(),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            if !waiting
+                && starting(&ready, in_project, run.running.len(), git).1
                 && uncommitted(&run.directory) != run.untouched
             {
                 run.one_at_a_time = true;
@@ -1947,7 +2101,13 @@ impl OrgPanel {
                 });
             }
             let (now, beside) = starting(&ready, in_project, run.running.len(), git);
-            let now = now.to_vec();
+            let now = if waiting { Vec::new() } else { now.to_vec() };
+            if waiting && run.running.is_empty() {
+                // Nothing to poll meanwhile; the game's build output wakes
+                // the editor, but not always often.
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                return None;
+            }
             for &id in &now {
                 self.start_agent(id, beside, ctx, chat);
                 // One that could not start keeps the rest from starting.
@@ -1972,13 +2132,13 @@ impl OrgPanel {
         let mut changed = false;
         let mut index = 0;
         while index < run.running.len() {
-            let outputs = run.running[index].process.poll();
+            let id = run.running[index].id;
+            let node = self.org.node_mut(id).expect("running nodes exist");
+            let outputs = run.running[index].poll(run.stopped, ctx, node);
             if outputs.is_empty() {
                 index += 1;
                 continue;
             }
-            let id = run.running[index].id;
-            let node = self.org.node_mut(id).expect("running nodes exist");
             let mut exit = None;
             for output in outputs {
                 match output {
@@ -1988,8 +2148,10 @@ impl OrgPanel {
                             asks.push(ask);
                         }
                         None => {
-                            if agent::ended(&line) {
-                                run.running[index].process.close();
+                            if agent::ended(&line)
+                                && let Some(process) = &mut run.running[index].process
+                            {
+                                process.close();
                             }
                             node.take(&line);
                         }
@@ -2084,55 +2246,99 @@ impl OrgPanel {
             ..Default::default()
         });
         let message = chat.len() - 1;
-        let (program, args, env) = &run.invocations[place];
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let env: Vec<(&str, &str)> = env
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.as_str()))
-            .collect();
-        let started = if program.is_empty() {
+        let (program, args, env) = run.invocations[place].clone();
+        let worktree = if program.is_empty() {
             // Its CLI could not be reached; the reason is the one arg.
             Err(args.concat())
-        } else {
+        } else if beside || (run.git && worktree_kept(&run.directory, run.started, id)) {
             // A stopped run's worktree goes on, even for one alone.
-            (beside || (run.git && worktree_kept(&run.directory, run.started, id)))
-                .then(|| add_worktree(&run.directory, run.started, id))
-                .transpose()
-                .and_then(|worktree| {
-                    let directory = worktree.as_ref().map_or(&run.directory, |tree| &tree.dir);
-                    CliProcess::start(directory, program, &args, &env, ctx)
-                        .map(|process| (process, worktree))
-                        .map_err(|error| format!("Could not start {program}: {error}"))
-                })
+            add_worktree(&run.directory, run.started, id).map(Some)
+        } else {
+            Ok(None)
         };
-        match started {
-            Ok((mut process, worktree)) => {
-                let input = self.org.input(
-                    id,
-                    &run.task,
-                    run.round,
-                    run.merge,
-                    run.parallel,
-                    worktree.as_ref(),
-                );
-                agent::send_prompt(&mut process, program, input);
-                run.running.push(Running {
-                    id,
-                    process,
-                    message,
-                    worktree,
-                    asked: Vec::new(),
-                });
-                self.org.node_mut(id).expect("ordered nodes exist").state = NodeState::Running;
-            }
+        let worktree = match worktree {
+            Ok(worktree) => worktree,
             Err(error) => {
                 let node = self.org.node_mut(id).expect("ordered nodes exist");
                 node.output = error;
                 node.state = NodeState::Failed;
                 show(node, &mut chat[message]);
                 run.halted = true;
+                return;
+            }
+        };
+        let input = self.org.input(
+            id,
+            &run.task,
+            run.round,
+            run.merge,
+            run.parallel,
+            worktree.as_ref(),
+        );
+        let node = self.org.node_mut(id).expect("ordered nodes exist");
+        node.state = NodeState::Running;
+        let mut running = Running {
+            id,
+            process: None,
+            waiting: None,
+            message,
+            worktree: None,
+            asked: Vec::new(),
+        };
+        let directory = worktree
+            .as_ref()
+            .map_or_else(|| run.directory.clone(), |tree| tree.dir.clone());
+        let mut env = env;
+        let mut filling = None;
+        if let Some(tree) = &worktree {
+            env.push(("CARGO_TARGET_DIR".into(), tree.target.display().to_string()));
+            // A stopped run's folder keeps what its agent built.
+            if !tree.target.exists() {
+                let (from, to, top) = (self.build.clone(), tree.target.clone(), tree.path.clone());
+                let (sender, filled) = mpsc::channel();
+                let ctx = ctx.clone();
+                thread::spawn(move || {
+                    let own = target::own_names(&top);
+                    let _ = sender.send(target::seed(from.as_deref(), &to, &own));
+                    ctx.request_repaint();
+                });
+                filling = Some(filled);
+                node.thoughts = t("Filling its target folder from what the project built.").into();
             }
         }
+        match filling {
+            Some(filled) => {
+                running.waiting = Some(Waiting {
+                    filled,
+                    directory,
+                    invocation: (program, args, env),
+                    input,
+                });
+                show(node, &mut chat[message]);
+            }
+            None => {
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                let env: Vec<(&str, &str)> = env
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_str()))
+                    .collect();
+                match CliProcess::start(&directory, &program, &args, &env, ctx) {
+                    Ok(mut process) => {
+                        agent::send_prompt(&mut process, &program, input);
+                        running.process = Some(process);
+                    }
+                    Err(error) => {
+                        node.output = format!("Could not start {program}: {error}");
+                        node.state = NodeState::Failed;
+                        show(node, &mut chat[message]);
+                        run.halted = true;
+                        return;
+                    }
+                }
+            }
+        }
+        running.worktree = worktree;
+        run.running.push(running);
     }
 
     /// Goes through the agents again, unless the last round is over: those
@@ -3676,17 +3882,20 @@ mod tests {
             // In the repository, as in a game: the run file lands there.
             let mut panel = OrgPanel::new(project.join(ORGANIZATIONS_DIR));
             panel.org = org;
+            panel.set_game(GameBuild::Built);
             for node in &mut panel.org.nodes {
                 node.state = NodeState::Waiting;
             }
-            // Each writes a file where it works and tells where that was.
+            // Each writes a file where it works and tells where cargo would
+            // build and where that was.
             let write = |file: &str, commit: bool| -> Invocation {
                 let commit = if commit {
                     "& git add -A& git commit -q -m d"
                 } else {
                     ""
                 };
-                let line = format!("echo {file}>{file}{commit}& cd");
+                let line =
+                    format!("echo {file}>{file}{commit}& echo target=%CARGO_TARGET_DIR%& cd");
                 ("cmd".into(), vec!["/c".into(), line], vec![])
             };
             panel.run = Some(Run {
@@ -3745,9 +3954,26 @@ mod tests {
             for id in [code, test] {
                 assert_eq!(in_project(id), !commits, "{}", node(id).output);
             }
+            // One in a worktree builds in its own target folder; the one in
+            // the project folder where the editor does.
+            let own_target = |id| {
+                let (tree, _) = worktree_place(&project, 9, id).unwrap();
+                let target = format!("target={}", tree.join("target").display());
+                node(id).output.lines().any(|line| line.trim() == target)
+            };
+            assert!(!own_target(design), "{}", node(design).output);
+            for id in [code, test] {
+                assert_eq!(own_target(id), commits, "{}", node(id).output);
+            }
             for file in ["design.md", "code.rs", "test.rs"] {
                 assert!(project.join(file).is_file(), "{file}");
             }
+            // Their target folders stayed out of the commits merged back.
+            let tracked = git(&project, &["ls-files"]).unwrap();
+            assert!(
+                !tracked.lines().any(|path| path.starts_with("target")),
+                "{tracked}"
+            );
             let said: Vec<&str> = chat
                 .iter()
                 .map(|message| message.speaker.as_ref().unwrap().0.as_str())
@@ -3778,6 +4004,112 @@ mod tests {
                 git(&project, &["branch", "--list", "besfa-org/*"]).unwrap(),
                 ""
             );
+            let _ = fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn keeps_agents_out_of_worktrees_until_the_project_build_can_fill_theirs() {
+        // No game; built, with Cargo.lock not committed; being built, then
+        // built while the designer's agents wait for it.
+        for (game, lock) in [
+            (GameBuild::Missing, false),
+            (GameBuild::Built, true),
+            (GameBuild::Building, false),
+        ] {
+            let (root, project) = repository(&format!("held-{game:?}"));
+            if lock {
+                fs::write(project.join("Cargo.lock"), "version = 4\n").unwrap();
+                git(&project, &["add", "-A"]).unwrap();
+                git(&project, &["commit", "-q", "-m", "Lock"]).unwrap();
+                fs::write(project.join("Cargo.lock"), "version = 4\n# changed\n").unwrap();
+            }
+            let (mut org, [design, code, test]) = studio();
+            org.link(design, code);
+            org.link(design, test);
+            let mut panel = OrgPanel::new(project.join(ORGANIZATIONS_DIR));
+            panel.org = org;
+            panel.set_game(game);
+            for node in &mut panel.org.nodes {
+                node.state = NodeState::Waiting;
+            }
+            let write = |file: &str| -> Invocation {
+                let line = format!("echo {file}>{file}& git add {file}& git commit -q -m d& cd");
+                ("cmd".into(), vec!["/c".into(), line], vec![])
+            };
+            panel.run = Some(Run {
+                organization: "Organization".into(),
+                task: "Add a jump.".into(),
+                files: Vec::new(),
+                chat: 1,
+                order: vec![design, code, test],
+                invocations: vec![write("design.md"), write("code.rs"), write("test.rs")],
+                round: 1,
+                running: Vec::new(),
+                answers: vec![None, None, None],
+                stopped: false,
+                halted: false,
+                directory: project.clone(),
+                watched: ("none".into(), None),
+                merge: false,
+                git: true,
+                parallel: true,
+                started: 9,
+                untouched: uncommitted(&project),
+                one_at_a_time: false,
+            });
+            let ctx = egui::Context::default();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let (mut chat, mut finished) = (Vec::new(), None);
+            let mut waited = false;
+            while finished.is_none() && std::time::Instant::now() < deadline {
+                finished = panel.poll(&ctx, (&mut chat, &mut Vec::new()));
+                // Once the designer is done, the two after it wait for the
+                // build, without the run ending; then it is built.
+                let done = panel.org.node(design).unwrap().state == NodeState::Done;
+                if game == GameBuild::Building && done && !waited {
+                    for _ in 0..20 {
+                        assert_eq!(panel.poll(&ctx, (&mut chat, &mut Vec::new())), None);
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    assert_eq!(chat.len(), 1);
+                    waited = true;
+                    panel.set_game(GameBuild::Built);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_eq!(finished, Some(false));
+            let folder = project.display().to_string();
+            let in_project = |id| {
+                let output = &panel.org.node(id).unwrap().output;
+                let last = output.trim().lines().last().unwrap_or_default();
+                last.eq_ignore_ascii_case(&folder)
+            };
+            assert!(in_project(design));
+            let said: Vec<&str> = chat
+                .iter()
+                .map(|message| message.speaker.as_ref().unwrap().0.as_str())
+                .collect();
+            if game == GameBuild::Building {
+                // Built after all: side by side, with nothing to say.
+                assert!(waited);
+                assert!(!in_project(code) && !in_project(test));
+                assert_eq!(said, ["Game Designer", "Gameplay Programmer", "Qa Tester"]);
+            } else {
+                // Said once, as the two after the designer were held back.
+                assert!(in_project(code) && in_project(test));
+                assert_eq!(
+                    said,
+                    [
+                        "Game Designer",
+                        "Organization",
+                        "Gameplay Programmer",
+                        "Qa Tester"
+                    ]
+                );
+                let why = if lock { "Cargo.lock" } else { "built the game" };
+                assert!(chat[1].text.contains(why), "{}", chat[1].text);
+            }
             let _ = fs::remove_dir_all(&root);
         }
     }

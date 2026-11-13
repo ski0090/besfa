@@ -406,6 +406,16 @@ fn korean(en: &str) -> Option<&'static str> {
         "The project folder has uncommitted changes since the run began, so the agents go one at a time there." => {
             "실행을 시작한 뒤 프로젝트 폴더에 커밋하지 않은 변경이 생겨서, 에이전트들이 그 폴더에서 한 명씩 돕니다."
         }
+        "The agents go one at a time in the project folder until the editor has built the game: in worktrees each would build its dependencies from scratch." => {
+            "에디터가 게임을 빌드할 때까지 에이전트들이 프로젝트 폴더에서 한 명씩 돕니다. 워크트리에서는 저마다 의존성을 처음부터 빌드하게 됩니다."
+        }
+        "The agents go one at a time in the project folder while Cargo.toml or Cargo.lock has uncommitted changes: worktrees made from the last commit would build the dependencies from scratch." => {
+            "Cargo.toml이나 Cargo.lock에 커밋하지 않은 변경이 있는 동안 에이전트들이 프로젝트 폴더에서 한 명씩 돕니다. 마지막 커밋으로 만든 워크트리에서는 의존성을 처음부터 빌드하게 됩니다."
+        }
+        "Filling its target folder from what the project built." => {
+            "프로젝트가 빌드해 둔 것으로 target 폴더를 채우는 중입니다."
+        }
+        "Its builds start from scratch:" => "빌드를 처음부터 합니다:",
         "Roles" => "역할",
         "Claude Code Game Studios' agents. Double-click one to add it." => {
             "Claude Code Game Studios의 에이전트입니다. 더블 클릭하면 추가됩니다."

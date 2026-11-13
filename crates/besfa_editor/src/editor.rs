@@ -34,7 +34,7 @@ use crate::{
     animation,
     i18n::{self, Language, t},
     inspector::{Action, TRANSFORM},
-    organization::{ORGANIZATIONS_DIR, OrgPanel},
+    organization::{GameBuild, ORGANIZATIONS_DIR, OrgPanel},
     panels::{
         self, ACCENT, AssetAction, AssetBrowser, GOOD, MUTED, Reimport, WARNING, prebuild_status,
     },
@@ -2043,6 +2043,21 @@ impl Editor {
     /// Reloads the scene the agent changed, unless that would throw away
     /// edits made while it ran.
     fn poll_agent(&mut self, ctx: &egui::Context) {
+        // A game that said its protocol was built from the project folder,
+        // so its target folder holds what agents' worktrees are filled from.
+        // One on its way, as after a code change, soon will.
+        let game = if self.game.is_some() && self.protocol.is_some() {
+            GameBuild::Built
+        } else if self.game.is_some()
+            || self.starting
+            || self.relaunch.is_some()
+            || self.waiting_for_prebuild
+        {
+            GameBuild::Building
+        } else {
+            GameBuild::Missing
+        };
+        self.organization.set_game(game);
         let asking = self.agent_panel.asking();
         let mut finished = self.agent_panel.poll();
         // Here, not in the Agent tab, so it starts with the window closed.
