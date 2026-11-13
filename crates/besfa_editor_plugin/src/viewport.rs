@@ -2,15 +2,19 @@
 //!
 //! The editor creates a D3D12 texture, publishes it under a named NT handle
 //! and passes the name in `BESFA_VIEWPORT`. This module opens that texture on
-//! Bevy's D3D12 device and points every window camera at it. When the editor
-//! resizes its viewport it makes a new texture and sends its name in a
-//! `viewport` command, and [`reopen`] switches to it.
+//! Bevy's D3D12 device. Every window camera draws into a texture of the game's
+//! own of the same size, which is copied into the editor's once all cameras
+//! have drawn the frame: the editor reads its texture whenever it likes, and
+//! would otherwise show the scene from before the panels the game draws over
+//! it. When the editor resizes its viewport it makes a new texture and sends
+//! its name in a `viewport` command, and [`reopen`] switches to it.
 
 use bevy::{
     camera::{ManualTextureViewHandle, RenderTarget},
     prelude::*,
     render::{
-        renderer::RenderDevice,
+        Extract, ExtractSchedule, RenderApp,
+        renderer::{RenderDevice, RenderGraph, RenderGraphSystems, RenderQueue},
         texture::{ManualTextureView, ManualTextureViews},
     },
     window::WindowRef,
@@ -29,14 +33,72 @@ impl Plugin for ViewportPlugin {
         // Before the game's Startup systems spawn their cameras.
         app.add_systems(PreStartup, open_viewport)
             .add_observer(retarget_camera);
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app
+                .add_systems(ExtractSchedule, extract_viewport)
+                // After every camera's work for the frame is submitted.
+                .add_systems(RenderGraph, copy_frame.in_set(RenderGraphSystems::Finish));
+        }
     }
 }
 
-/// Keeps the wgpu texture alive for as long as the view renders into it.
-#[derive(Resource)]
-pub(crate) struct ViewportTexture(
-    #[expect(dead_code, reason = "held only to keep the texture alive")] wgpu::Texture,
-);
+/// The texture the viewport's cameras draw into, and the editor's texture
+/// each frame is copied into. Held for as long as the view renders.
+#[derive(Resource, Clone)]
+pub(crate) struct ViewportTexture {
+    frame: wgpu::Texture,
+    shared: wgpu::Texture,
+}
+
+impl ViewportTexture {
+    /// The editor's `shared` texture, and one of the game's own of its size
+    /// to draw into.
+    fn new(device: &RenderDevice, shared: wgpu::Texture) -> Self {
+        let frame = device
+            .wgpu_device()
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("besfa_viewport_frame"),
+                size: shared.size(),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: VIEWPORT_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+        Self { frame, shared }
+    }
+}
+
+/// The render world copies what the main world opened.
+fn extract_viewport(mut commands: Commands, viewport: Extract<Option<Res<ViewportTexture>>>) {
+    if let Some(viewport) = viewport.as_ref()
+        && viewport.is_changed()
+    {
+        commands.insert_resource(ViewportTexture::clone(viewport));
+    }
+}
+
+/// Copies the frame every camera has drawn into the editor's texture, in
+/// one go.
+fn copy_frame(
+    viewport: Option<Res<ViewportTexture>>,
+    device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
+) {
+    let Some(viewport) = viewport else {
+        return;
+    };
+    let mut encoder = device
+        .wgpu_device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_texture(
+        viewport.frame.as_image_copy(),
+        viewport.shared.as_image_copy(),
+        viewport.frame.size(),
+    );
+    queue.submit([encoder.finish()]);
+}
 
 /// Opens the texture `BESFA_VIEWPORT` names, the editor's shared handle.
 /// The size comes from the texture itself.
@@ -64,15 +126,17 @@ fn open_viewport(
         }
     };
 
-    let size = show(&mut views, &texture);
-    commands.insert_resource(ViewportTexture(texture));
+    let viewport = ViewportTexture::new(&device, texture);
+    let size = show(&mut views, &viewport);
+    commands.insert_resource(viewport);
     info!("Rendering into the editor viewport {}x{}.", size.x, size.y);
 }
 
-/// Makes `texture` what the viewport's cameras render into.
-fn show(views: &mut ManualTextureViews, texture: &wgpu::Texture) -> UVec2 {
-    let size = UVec2::new(texture.width(), texture.height());
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+/// Makes the frame of `viewport` what its cameras render into.
+fn show(views: &mut ManualTextureViews, viewport: &ViewportTexture) -> UVec2 {
+    let frame = &viewport.frame;
+    let size = UVec2::new(frame.width(), frame.height());
+    let view = frame.create_view(&wgpu::TextureViewDescriptor::default());
     views.insert(
         VIEWPORT_HANDLE,
         ManualTextureView {
@@ -92,8 +156,9 @@ pub(crate) fn reopen(world: &mut World, name: &str) -> Result<(), String> {
     }
     let device = world.resource::<RenderDevice>().clone();
     let texture = shared::open(device.wgpu_device(), name)?;
-    let size = show(&mut world.resource_mut::<ManualTextureViews>(), &texture);
-    world.insert_resource(ViewportTexture(texture));
+    let viewport = ViewportTexture::new(&device, texture);
+    let size = show(&mut world.resource_mut::<ManualTextureViews>(), &viewport);
+    world.insert_resource(viewport);
     // Cameras recompute their target's size when their projection changes.
     let mut projections = world.query_filtered::<&mut Projection, With<Camera>>();
     for mut projection in projections.iter_mut(world) {
@@ -195,7 +260,8 @@ mod shared {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: VIEWPORT_FORMAT,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    // Each frame is copied in whole ([`super::copy_frame`]).
+                    usage: wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 },
                 // A shared resource starts in the common state.

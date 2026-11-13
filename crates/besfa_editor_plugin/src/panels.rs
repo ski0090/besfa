@@ -159,8 +159,12 @@ impl Plugin for PanelsPlugin {
             Camera {
                 // After the scene view and the model preview.
                 order: EDITOR_CAMERA_ORDER + 10,
-                // Over what the cameras below drew.
-                clear_color: ClearColorConfig::None,
+                // Its own picture starts clear each frame and is blended over
+                // what the cameras below drew. Not left uncleared: the texture
+                // Bevy hands it can be one another camera of its format drew
+                // into last frame, as the scene view's is when a game makes
+                // it HDR, and that frame would cover the scene.
+                clear_color: ClearColorConfig::Custom(Color::NONE),
                 // Until there is something to draw into ([`aim`]).
                 is_active: false,
                 ..default()
