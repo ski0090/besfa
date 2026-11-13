@@ -30,7 +30,7 @@ pub fn tools() -> [Value; 2] {
     [
         json!({
             "name": "generate_image",
-            "description": format!("Draws an image with OpenAI's image API (model {MODEL} unless `model` says otherwise) and saves it as a PNG inside the project, for UI art, icons and textures. Needs OPENAI_API_KEY in the server's environment. Each call costs money on the user's OpenAI account, a few cents for a low quality 1024x1024 image and more at higher quality or larger sizes, so draw what you need at the quality you need, and look at the file before drawing it again. Returns the saved path and the tokens it used."),
+            "description": format!("Draws an image with OpenAI's image API (model {MODEL} unless `model` says otherwise) and saves it as a PNG inside the project, for UI art, icons and textures. Needs OPENAI_API_KEY in the server's environment. Each call costs money on the user's OpenAI account, billed by the tokens it uses, which grow with quality and size, so draw what you need at the quality you need, and look at the file before drawing it again. Returns the saved path and the tokens it used."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -47,7 +47,7 @@ pub fn tools() -> [Value; 2] {
         }),
         json!({
             "name": "image_models",
-            "description": format!("Lists the OpenAI image models OPENAI_API_KEY can use, newest names last, for `generate_image`'s `model`. {MODEL} is its default. Free."),
+            "description": format!("Lists the OpenAI image models OPENAI_API_KEY can use, sorted by name, for `generate_image`'s `model`. {MODEL} is its default. Free."),
             "inputSchema": {"type": "object", "properties": {}},
         }),
     ]
@@ -71,6 +71,21 @@ pub fn generate(project: &Path, args: &Value) -> Result<String, String> {
     {
         return Err(format!("`file` must stay inside the project: {file}"));
     }
+    // A colon would put the image in an NTFS stream nothing opens.
+    if file.contains([':', '<', '>', '"', '|', '?', '*']) {
+        return Err(format!(
+            "`file` holds a character file names cannot: {file}"
+        ));
+    }
+    // Before the request, which costs money, rather than after it.
+    let path = project.join(relative);
+    if let Some(folder) = path.parent() {
+        fs::create_dir_all(folder)
+            .map_err(|error| format!("Could not make the folder for {file}: {error}"))?;
+    }
+    if path.is_dir() {
+        return Err(format!("{file} is a folder."));
+    }
     let key = key()?;
     let mut body = json!({
         "model": args["model"].as_str().unwrap_or(MODEL),
@@ -89,10 +104,6 @@ pub fn generate(project: &Path, args: &Value) -> Result<String, String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(image)
         .map_err(|error| format!("OpenAI's image is not base64: {error}"))?;
-    let path = project.join(relative);
-    if let Some(folder) = path.parent() {
-        fs::create_dir_all(folder).map_err(|error| error.to_string())?;
-    }
     fs::write(&path, bytes).map_err(|error| format!("Could not write {file}: {error}"))?;
     Ok(format!(
         "Saved {}. Usage: {}",
@@ -109,9 +120,13 @@ pub fn models() -> Result<String, String> {
         .into_iter()
         .flatten()
         .filter_map(|model| model["id"].as_str())
-        .filter(|id| id.contains("image") || id.starts_with("dall-e"))
+        // DALL-E answers with a URL unless asked otherwise, so it is left out.
+        .filter(|id| id.contains("image"))
         .collect();
     names.sort_unstable();
+    if names.is_empty() {
+        return Ok("OPENAI_API_KEY reaches no image model.".into());
+    }
     Ok(names.join("\n"))
 }
 
@@ -166,6 +181,10 @@ fn request(key: &str, endpoint: &str, body: Option<&Value>) -> Result<Value, Str
         )
     })?;
     match answer["error"]["message"].as_str() {
+        // That message shows part of the key.
+        Some(message) if message.starts_with("Incorrect API key") => {
+            Err("OpenAI refused OPENAI_API_KEY as incorrect.".into())
+        }
         Some(message) => Err(format!("OpenAI refused it: {message}")),
         None => Ok(answer),
     }
@@ -185,9 +204,14 @@ mod tests {
             "a/../../x.png",
             "/x.png",
             "\\x.png",
+            "a.png:s.png",
+            "a?.png",
         ] {
             let error = generate(&project, &json!({"prompt": "p", "file": file})).unwrap_err();
-            assert!(error.contains("inside the project"), "{file}: {error}");
+            assert!(
+                error.contains("inside the project") || error.contains("file names cannot"),
+                "{file}: {error}"
+            );
         }
         let error = generate(&project, &json!({"prompt": "p", "file": "x.jpg"})).unwrap_err();
         assert!(error.contains(".png"), "{error}");
