@@ -1488,6 +1488,8 @@ impl AgentPanel {
         self.attached.clear();
         self.prompt.clear();
         self.picking = None;
+        // The heights are by position, so they belong to the chat shown.
+        self.heights.clear();
         let id = chat.id;
         if id != 0 {
             self.history.retain(|other| other.id != id);
@@ -1592,7 +1594,8 @@ impl AgentPanel {
     fn messages(&mut self, ui: &mut Ui, busy: bool, live: Option<Live>) {
         // Markdown is parsed again on every draw, and typing redraws the
         // window, so a unit well out of view is not drawn: it takes the
-        // height it was last drawn at. ponytail: the key is the lengths only,
+        // height it was last drawn at. ponytail: the key is the message
+        // lengths, the spinner and the live state, not the text itself,
         // a same-length rewrite out of view keeps its old height until seen.
         const VIEW_MARGIN: f32 = 200.0;
         let mut markdown = std::mem::take(&mut self.markdown);
@@ -3083,6 +3086,16 @@ thoughts {:?}",
                 .query_by_label_contains("Message number 0")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn forgets_the_heights_when_another_chat_is_shown() {
+        let mut harness = tab(None);
+        harness.state_mut().panel.say("Still shown");
+        harness.run();
+        assert_eq!(harness.state().panel.heights.len(), 1);
+        harness.state_mut().panel.new_chat();
+        assert!(harness.state().panel.heights.is_empty());
     }
 
     #[test]
