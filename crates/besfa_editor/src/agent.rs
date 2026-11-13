@@ -1112,6 +1112,12 @@ pub struct AgentPanel {
     answered: Vec<(Ask, bool, bool)>,
     /// Laid-out code blocks and the like of the replies' Markdown.
     markdown: egui_commonmark::CommonMarkCache,
+    /// Each unit's lengths, spinner, live state and height when it was
+    /// last drawn, by its first message. Those scrolled far out of view
+    /// are not drawn again.
+    heights: Vec<Option<((usize, usize, bool, u8), f32)>>,
+    /// The width `heights` were measured at.
+    heights_width: f32,
 }
 
 impl AgentPanel {
@@ -1482,6 +1488,8 @@ impl AgentPanel {
         self.attached.clear();
         self.prompt.clear();
         self.picking = None;
+        // The heights are by position, so they belong to the chat shown.
+        self.heights.clear();
         let id = chat.id;
         if id != 0 {
             self.history.retain(|other| other.id != id);
@@ -1584,11 +1592,27 @@ impl AgentPanel {
     /// The chat's messages, where `live` says how the organization run
     /// answering in it stands, if it is not done.
     fn messages(&mut self, ui: &mut Ui, busy: bool, live: Option<Live>) {
+        // Markdown is parsed again on every draw, and typing redraws the
+        // window, so a unit well out of view is not drawn: it takes the
+        // height it was last drawn at. ponytail: the key is the message
+        // lengths, the spinner and the live state, not the text itself,
+        // a same-length rewrite out of view keeps its old height until seen.
+        const VIEW_MARGIN: f32 = 200.0;
         let mut markdown = std::mem::take(&mut self.markdown);
+        let mut heights = std::mem::take(&mut self.heights);
+        let width = ui.available_width();
+        if self.heights_width != width {
+            heights.clear();
+            self.heights_width = width;
+        }
+        heights.resize(self.chat.messages.len(), None);
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .stick_to_bottom(true)
-            .show(ui, |ui| {
+            .show_viewport(ui, |ui, view| {
+                // The viewport counts from the top of the content, but the
+                // cursor's position moves with the scroll: count up here.
+                let mut y = 4.0_f32;
                 ui.add_space(4.0);
                 let messages = &self.chat.messages;
                 if messages.is_empty() {
@@ -1596,50 +1620,85 @@ impl AgentPanel {
                 }
                 let mut index = 0;
                 while index < messages.len() {
-                    let Some(organization) = &messages[index].child else {
+                    let start = ui.cursor().top();
+                    let organization = messages[index].child.as_ref();
+                    // A child session's agents, and the rounds it announces,
+                    // answer under it until someone else speaks.
+                    let end = match organization {
+                        Some(_) => {
+                            index
+                                + 1
+                                + messages[index + 1..]
+                                    .iter()
+                                    .take_while(|message| message.speaker.is_some())
+                                    .count()
+                        }
+                        None => index + 1,
+                    };
+                    let live = live.filter(|_| end == messages.len());
+                    let working =
+                        busy && end == messages.len() && messages[end - 1].text.is_empty();
+                    let state = match live {
+                        None => 0,
+                        Some(Live::Working) => 1,
+                        Some(Live::Paused) => 2,
+                    };
+                    let key = (
+                        messages[index..end].iter().map(|m| m.text.len()).sum(),
+                        messages[index..end].iter().map(|m| m.thoughts.len()).sum(),
+                        working,
+                        state,
+                    );
+                    let known = heights[index]
+                        .filter(|(seen, _)| *seen == key)
+                        .map(|(_, px)| px);
+                    if let Some(px) = known.filter(|px| {
+                        y + px < view.min.y - VIEW_MARGIN || y > view.max.y + VIEW_MARGIN
+                    }) {
+                        ui.add_space(px);
+                        y += px;
+                        index = end;
+                        continue;
+                    }
+                    if let Some(organization) = organization {
+                        egui::Frame::new()
+                            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                            .corner_radius(8.0)
+                            .inner_margin(8.0)
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                let id = egui::Id::new(("child", self.chat.id, index));
+                                CollapsingState::load_with_default_open(ui.ctx(), id, true)
+                                    .show_header(ui, |ui| {
+                                        let title =
+                                            format!("{} · {organization}", t("Child session"));
+                                        ui.label(RichText::new(title).strong());
+                                        match live {
+                                            Some(Live::Working) => {
+                                                ui.spinner();
+                                                ui.colored_label(panels::MUTED, t("working"));
+                                            }
+                                            Some(Live::Paused) => {
+                                                ui.colored_label(panels::WARNING, t("paused"));
+                                            }
+                                            None => {}
+                                        }
+                                    })
+                                    .body(|ui| {
+                                        for at in index + 1..end {
+                                            self.message(ui, &mut markdown, at, busy);
+                                            ui.add_space(8.0);
+                                        }
+                                    });
+                            });
+                        ui.add_space(8.0);
+                    } else {
                         self.message(ui, &mut markdown, index, busy);
                         ui.add_space(8.0);
-                        index += 1;
-                        continue;
-                    };
-                    // Its agents, and the rounds it announces, answer under
-                    // it until someone else speaks.
-                    let agents = messages[index + 1..]
-                        .iter()
-                        .take_while(|message| message.speaker.is_some())
-                        .count();
-                    let end = index + 1 + agents;
-                    let live = live.filter(|_| end == messages.len());
-                    egui::Frame::new()
-                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                        .corner_radius(8.0)
-                        .inner_margin(8.0)
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            let id = egui::Id::new(("child", self.chat.id, index));
-                            CollapsingState::load_with_default_open(ui.ctx(), id, true)
-                                .show_header(ui, |ui| {
-                                    let title = format!("{} · {organization}", t("Child session"));
-                                    ui.label(RichText::new(title).strong());
-                                    match live {
-                                        Some(Live::Working) => {
-                                            ui.spinner();
-                                            ui.colored_label(panels::MUTED, t("working"));
-                                        }
-                                        Some(Live::Paused) => {
-                                            ui.colored_label(panels::WARNING, t("paused"));
-                                        }
-                                        None => {}
-                                    }
-                                })
-                                .body(|ui| {
-                                    for at in index + 1..end {
-                                        self.message(ui, &mut markdown, at, busy);
-                                        ui.add_space(8.0);
-                                    }
-                                });
-                        });
-                    ui.add_space(8.0);
+                    }
+                    let px = ui.cursor().top() - start;
+                    heights[index] = Some((key, px));
+                    y += px;
                     index = end;
                 }
                 if let Some(answer) = asks(ui, &self.asks) {
@@ -1648,6 +1707,7 @@ impl AgentPanel {
                     self.answered.push((ask, allow, always));
                 }
             });
+        self.heights = heights;
         self.markdown = markdown;
     }
 
@@ -3001,6 +3061,41 @@ thoughts {:?}",
         assert!(harness.query_by_label("src/player.rs").is_some());
         assert!(harness.query_by_label_contains("**").is_none());
         assert!(harness.query_by_label_contains("##").is_none());
+    }
+
+    #[test]
+    fn draws_only_the_messages_near_the_view() {
+        let mut harness = tab(None);
+        let panel = &mut harness.state_mut().panel;
+        for index in 0..300 {
+            panel.say(&format!("Message number {index}"));
+        }
+        for _ in 0..4 {
+            harness.run();
+        }
+        let panel = &harness.state().panel;
+        assert_eq!(panel.heights.len(), 300);
+        assert!(panel.heights.iter().all(|height| height.is_some()));
+        assert!(
+            harness
+                .query_by_label_contains("Message number 299")
+                .is_some()
+        );
+        assert!(
+            harness
+                .query_by_label_contains("Message number 0")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn forgets_the_heights_when_another_chat_is_shown() {
+        let mut harness = tab(None);
+        harness.state_mut().panel.say("Still shown");
+        harness.run();
+        assert_eq!(harness.state().panel.heights.len(), 1);
+        harness.state_mut().panel.new_chat();
+        assert!(harness.state().panel.heights.is_empty());
     }
 
     #[test]
