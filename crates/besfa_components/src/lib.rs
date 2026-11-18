@@ -44,13 +44,16 @@ pub use pose::{GAIT, Gait, PoseOffset, PoseOffsets, PosePlugin, Swing};
 pub use save::{
     Persist, SaveFilter, SceneId, backup_path, load_world, read_entity, save_world, write_entity,
 };
-pub use scene::{MeshColor, MeshShape, RuntimeOnly, SCENE_PATH, SceneEntity};
+pub use scene::{
+    CurrentScene, KeepOnSceneSwitch, MeshColor, MeshShape, RuntimeOnly, SCENE_PATH, SceneEntity,
+    SceneSpawned, SwitchScene, first_scene,
+};
 pub use sky::{Moon, Sky, SkyMode, Sun};
 pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight, TerrainTint};
 pub use world_label::{WorldLabel, WorldLabelPlugin};
 
-/// `DefaultPlugins` that load the scene from `assets/scenes/main.scn.ron`
-/// and run the components in it.
+/// `DefaultPlugins` that load the scene from `assets/scenes/main.scn.ron`,
+/// or another the game switches to, and run the components in it.
 pub fn default_plugins() -> PluginGroupBuilder {
     DefaultPlugins
         .build()

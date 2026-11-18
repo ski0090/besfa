@@ -4,7 +4,7 @@
 
 ## 씬 파일
 
-게임의 씬은 프로젝트의 에셋 폴더 안 `assets/scenes/main.scn.ron`에 Bevy의 월드 형식(`bevy_world_serialization`의 RON)으로 저장한다. 게임의 `besfa_editor_plugin`이 시작할 때 이 파일을 읽어 엔티티를 만들고(`SceneEntity` 표식을 붙인다), 에디터의 File > Save scene은 그 엔티티들을 같은 파일에 다시 쓴다. `besfa new`가 큐브·조명·카메라가 든 파일을 만들고, 사람이 직접 고쳐도 된다.
+게임의 씬은 프로젝트의 에셋 폴더 안 `assets/scenes/main.scn.ron`에 Bevy의 월드 형식(`bevy_world_serialization`의 RON)으로 저장한다. 게임의 `besfa_editor_plugin`이 시작할 때 이 파일을 읽어 엔티티를 만들고(`SceneEntity` 표식을 붙인다), 에디터의 File > Save scene은 그 엔티티들을 같은 파일에 다시 쓴다. `besfa new`가 큐브·조명·카메라가 든 파일을 만들고, 사람이 직접 고쳐도 된다. 게임은 같은 형식의 다른 씬 파일(`assets/scenes/tutorial.scn.ron` 등)로 실행 중에 넘어갈 수 있고, 에디터는 Assets 탭에서 연 씬 파일에 저장한다([RUNTIME.md](./RUNTIME.md)의 '실행 중 씬 바꾸기').
 
 - 엔티티마다 `Reflect`로 등록된 컴포넌트만 들어간다. 게임 자신의 컴포넌트는 `my_game::Spin`처럼 크레이트 이름이 앞에 붙는다.
 - 쓰지 않은 필드는 기본값을 쓴다 (`#[reflect(Default)]` 타입).

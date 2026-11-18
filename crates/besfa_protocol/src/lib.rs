@@ -56,7 +56,10 @@ use serde_json::Value;
 /// 17. What the panels and the scene view look like, for the editor to keep
 ///     while the game restarts: [`Report::PanelState`] and
 ///     [`Command::PanelState`].
-pub const VERSION: u32 = 17;
+/// 18. Starting in the scene file `BESFA_SCENE` names, relative to
+///     `assets`, which [`Command::Save`] then writes; the editor opens
+///     scenes other than `scenes/main.scn.ron` this way.
+pub const VERSION: u32 = 18;
 
 /// The first protocol whose plugins draw the Hierarchy panel themselves.
 pub const HIERARCHY_PROTOCOL: u32 = 15;

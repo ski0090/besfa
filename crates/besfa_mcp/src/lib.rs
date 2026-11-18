@@ -82,7 +82,7 @@ pub fn screenshot(
         markers: None,
         game: Some(true),
     };
-    let mut game = Game::start(&project, args)
+    let mut game = Game::start(&project, args, None)
         .map_err(|error| format!("Could not start cargo in {}: {error}", project.display()))?;
     // The first run after a code change builds the game, which takes minutes;
     // the scene file loads soon after.
@@ -161,6 +161,7 @@ fn tools() -> Value {
                 "properties": {
                     "project": {"type": "string", "description": "Absolute path of the game project, the folder with its Cargo.toml; by default the folder the server runs in, which is the game's when its .mcp.json starts `besfa mcp`."},
                     "args": {"type": "array", "items": {"type": "string"}, "description": "The game's own launch arguments, after `--`, as one that starts in a given level."},
+                    "scene": {"type": "string", "description": "The scene file to open, relative to assets/, as scenes/tutorial.scn.ron; scenes/main.scn.ron by default. `save` writes it. One that does not exist yet starts empty, and the first `save` makes it. Needs the game's besfa_editor_plugin at protocol 18 or later; an older one opens scenes/main.scn.ron."},
                 },
             },
         },
@@ -249,7 +250,8 @@ fn call(game: &mut Option<Game>, name: &str, args: &Value) -> Result<String, Str
                 .flatten()
                 .filter_map(Value::as_str)
                 .collect();
-            let started = Game::start(&project, &game_args).map_err(|error| {
+            let scene = args["scene"].as_str();
+            let started = Game::start(&project, &game_args, scene).map_err(|error| {
                 format!("Could not start cargo in {}: {error}", project.display())
             })?;
             *game = Some(started);
@@ -526,7 +528,7 @@ struct Game {
 impl Game {
     /// Starts the game the way the editor does, minus its viewport and any
     /// window, so the shared Bevy build is reused.
-    fn start(project: &Path, args: &[&str]) -> io::Result<Game> {
+    fn start(project: &Path, args: &[&str], scene: Option<&str>) -> io::Result<Game> {
         let manifest = std::fs::read_to_string(project.join("Cargo.toml")).unwrap_or_default();
         let mut cargo = quiet("cargo")
             .args([
@@ -541,6 +543,8 @@ impl Game {
             .env("BESFA_EDIT_MODE", "1")
             // Also read by it: open no window, which would take focus.
             .env("BESFA_HEADLESS", "1")
+            // Read by besfa_components: the scene to start in and save.
+            .envs(scene.map(|scene| ("BESFA_SCENE", scene)))
             .env("NO_COLOR", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

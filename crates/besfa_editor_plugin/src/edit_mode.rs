@@ -14,10 +14,13 @@ use std::{
     sync::{Mutex, PoisonError, mpsc},
 };
 
-use besfa_components::TerrainData;
+use besfa_components::{SwitchScene, TerrainData, scene::start_switch};
 use besfa_protocol::{Command, Placement, Report, Request, VERSION};
 use bevy::{
-    ecs::resource::IsResource, input::InputSystems, prelude::*, world_serialization::DynamicWorld,
+    ecs::{message::Messages, resource::IsResource},
+    input::InputSystems,
+    prelude::*,
+    world_serialization::DynamicWorld,
 };
 
 use crate::{
@@ -27,7 +30,8 @@ use crate::{
     preview::{self, ModelPreview},
     reimport,
     scene::{
-        SCENE_PATH, asset_file, instance_prefab, project_file, save, save_instance, save_prefab,
+        asset_file, first_scene, instance_prefab, open_scene, project_file, save, save_instance,
+        save_prefab,
     },
     scene_view::{self, SceneView},
     shot::{self, Shot},
@@ -59,9 +63,12 @@ impl Plugin for EditModePlugin {
         app.insert_resource(EditorCommands(Mutex::new(receiver)))
             .init_resource::<Selected>()
             .init_resource::<Changes>()
+            .add_message::<SwitchScene>()
+            .insert_resource(HeldSwitches(Some(Vec::new())))
             .add_systems(PreStartup, pause)
             // Before Bevy reads this frame's input, which the commands write.
-            .add_systems(PreUpdate, run_commands.before(InputSystems));
+            .add_systems(PreUpdate, run_commands.before(InputSystems))
+            .add_systems(PreUpdate, hold_switches.before(start_switch));
     }
 
     /// Before any schedule runs, so what PreStartup spawns, like a physics
@@ -75,6 +82,21 @@ impl Plugin for EditModePlugin {
 
 fn pause(mut time: ResMut<Time<Virtual>>) {
     time.pause();
+}
+
+/// The scenes the game asked to switch to before Play, which Play switches
+/// to; `None` once playing. Until then the scene shown is the one the
+/// editor has open, whose changes may not be saved, and Save writes it.
+#[derive(Resource)]
+struct HeldSwitches(Option<Vec<SwitchScene>>);
+
+fn hold_switches(mut switches: ResMut<Messages<SwitchScene>>, mut held: ResMut<HeldSwitches>) {
+    if let Some(held) = &mut held.0 {
+        for switch in switches.drain() {
+            info!("Switching to {} at Play.", switch.0);
+            held.push(switch);
+        }
+    }
 }
 
 /// The entities that exist before any schedule runs: Bevy's own and the
@@ -102,6 +124,7 @@ fn reset(world: &mut World) {
     world.insert_resource(keep);
 
     world.insert_resource(Selected::default());
+    world.insert_resource(HeldSwitches(Some(Vec::new())));
     world.insert_resource(SceneView::default());
     world.insert_resource(ModelPreview::default());
     world.insert_resource(terrain::Strokes::default());
@@ -121,17 +144,19 @@ fn reset(world: &mut World) {
     world.run_schedule(PostStartup);
 }
 
-/// Asks for the scene and the terrain files again, as the last save left
-/// them, since play may have changed what is loaded. The scene's old asset
-/// goes first: it would spawn at once, before the new one arrives.
+/// Asks for the scene the game starts in and the terrain files again, as
+/// the last save left them, since play may have changed what is loaded.
+/// The scene's old asset goes first: it would spawn at once, before the new
+/// one arrives.
 fn reload_files(world: &mut World) {
     let server = world.resource::<AssetServer>().clone();
-    if let Some(scene) = server.get_handle::<DynamicWorld>(SCENE_PATH) {
+    let first = first_scene();
+    if let Some(scene) = server.get_handle::<DynamicWorld>(&first) {
         world
             .resource_mut::<Assets<DynamicWorld>>()
             .remove(scene.id());
     }
-    server.reload(SCENE_PATH);
+    server.reload(first);
     let terrains: Vec<_> = world
         .resource::<Assets<TerrainData>>()
         .iter()
@@ -208,6 +233,9 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
         Command::Play => {
             panels::play(world);
             world.resource_mut::<Time<Virtual>>().unpause();
+            if let Some(held) = world.resource_mut::<HeldSwitches>().0.take() {
+                world.write_message_batch(held);
+            }
             // First, so a camera inside the model is not handed back.
             preview::close(world);
             scene_view::stop(world);
@@ -223,10 +251,11 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::Save => {
-            let result = terrain::save(world).and_then(|()| save(world, &asset_file(SCENE_PATH)));
+            let scene = open_scene(world);
+            let result = terrain::save(world).and_then(|()| save(world, &asset_file(&scene)));
             match &result {
-                Ok(()) => info!("Saved {SCENE_PATH}"),
-                Err(error) => error!("Could not save {SCENE_PATH}: {error}"),
+                Ok(()) => info!("Saved {scene}"),
+                Err(error) => error!("Could not save {scene}: {error}"),
             }
             send_report(&Report::Saved {
                 error: result.clone().err(),
@@ -666,6 +695,24 @@ mod tests {
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
         app.update();
         assert!(paused(&app));
+    }
+
+    #[test]
+    fn holds_a_scene_switch_until_play() {
+        let (mut app, editor) = editor_app();
+        let tutorial = SwitchScene("scenes/tutorial.scn.ron".into());
+        app.world_mut().write_message(tutorial.clone());
+        // Longer than a message lasts.
+        for _ in 0..3 {
+            app.update();
+        }
+        let switches = app.world().resource::<Messages<SwitchScene>>();
+        assert!(switches.is_empty(), "nothing to switch on before Play");
+
+        editor.send(r#"{"command":"play"}"#.into()).unwrap();
+        app.update();
+        let mut switches = app.world_mut().resource_mut::<Messages<SwitchScene>>();
+        assert_eq!(switches.drain().collect::<Vec<_>>(), [tutorial]);
     }
 
     #[test]
