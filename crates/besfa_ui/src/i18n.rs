@@ -109,6 +109,7 @@ fn korean(en: &str) -> Option<&'static str> {
         "Reimported" => "다시 가져옴",
         "No assets folder" => "assets 폴더 없음",
         "Double-click to preview" => "더블 클릭하면 미리 봅니다",
+        "Double-click to open" => "더블 클릭하면 엽니다",
         "Add to scene" => "씬에 추가",
         // Dialogs
         "Prefab name" => "프리팹 이름",
@@ -119,8 +120,8 @@ fn korean(en: &str) -> Option<&'static str> {
         "Discard" => "저장 안 함",
         "Delete" => "삭제",
         "Save changes to the scene?" => "씬의 변경 사항을 저장할까요?",
-        "The scene has changes that are not saved to scenes/main.scn.ron." => {
-            "scenes/main.scn.ron에 저장하지 않은 변경 사항이 있습니다."
+        "The scene has changes that are not saved to {}." => {
+            "{}에 저장하지 않은 변경 사항이 있습니다."
         }
         // Inspector
         "Hide details" => "세부 정보 숨기기",

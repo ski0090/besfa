@@ -65,8 +65,11 @@ const RESET_PROTOCOL: u32 = 13;
 
 /// Where a project keeps the scene view's snapping, in the project.
 const SNAP_FILE: &str = "besfa/snap.besfa";
-/// The scene the editor edits, which the agent may change too.
-const SCENE_FILE: &str = "assets/scenes/main.scn.ron";
+/// The scene a project opens in, relative to its asset folder.
+const MAIN_SCENE: &str = "scenes/main.scn.ron";
+/// The protocol whose plugins start in the scene `BESFA_SCENE` names, and
+/// save it.
+const OPEN_SCENE_PROTOCOL: u32 = 18;
 
 /// The log keeps the latest lines.
 const MAX_LOG_LINES: usize = 2000;
@@ -135,6 +138,9 @@ enum Dialog {
 
 pub struct Editor {
     project: Project,
+    /// The scene the editor edits and Play starts in, relative to the asset
+    /// folder. The agent may change its file too.
+    scene_file: String,
     render: Option<RenderState>,
     logs: VecDeque<String>,
     scene: Scene,
@@ -270,6 +276,7 @@ impl Editor {
             source: SourceWatch::new(project.file("src")),
             assets: AssetBrowser::new(project.file("assets")),
             project,
+            scene_file: MAIN_SCENE.into(),
             render,
             logs: VecDeque::new(),
             scene: Scene::default(),
@@ -334,11 +341,47 @@ impl Editor {
         editor
     }
 
-    /// The window title: the project, marked while the scene has unsaved
-    /// changes.
+    /// The window title: the project and its open scene, marked while the
+    /// scene has unsaved changes.
     pub fn title(&self) -> String {
         let dirty = if self.scene.dirty { " *" } else { "" };
-        format!("{}{dirty} - Besfa Editor", self.project.name())
+        let scene = self.scene_file.trim_start_matches("scenes/");
+        let scene = scene.trim_end_matches(".scn.ron");
+        format!("{} - {scene}{dirty} - Besfa Editor", self.project.name())
+    }
+
+    /// The open scene's file.
+    fn scene_path(&self) -> PathBuf {
+        self.project.file(&format!("assets/{}", self.scene_file))
+    }
+
+    /// Edits the scene file at `path`, relative to the asset folder, in
+    /// place of the open one: the game starts again in it. Changes not
+    /// saved yet would be lost, so they keep the open scene.
+    fn open_scene(&mut self, path: String, ctx: &egui::Context) {
+        if self.playing || self.starting {
+            return self.log("Stop the game to open another scene.");
+        }
+        if self.scene.dirty {
+            return self.log(format!(
+                "Save or undo the scene's changes before opening {path}."
+            ));
+        }
+        if self.game.is_some()
+            && self
+                .protocol
+                .is_none_or(|version| version < OPEN_SCENE_PROTOCOL)
+        {
+            return self.log(format!(
+                "Opening another scene needs the game running with besfa_editor_plugin speaking \
+                 protocol {OPEN_SCENE_PROTOCOL} or later. Update the plugin."
+            ));
+        }
+        self.log(format!("Opening {path}."));
+        self.scene_file = path;
+        // Its tree and place are another scene's.
+        self.panel_state = None;
+        self.restart(false, ctx);
     }
 
     /// Shows the editor; true once it should go back to the hub.
@@ -398,6 +441,7 @@ impl Editor {
                             self.instantiate(path, self.viewport_middle())
                         }
                         Some(AssetAction::Preview(path)) => self.open_preview(path),
+                        Some(AssetAction::Open(path)) => self.open_scene(path, ui.ctx()),
                         None => {}
                     },
                 }
@@ -582,8 +626,10 @@ impl Editor {
                 )),
             }
         }
-        // Read by besfa_editor_plugin: start paused, play on `play`.
-        let mut env = vec![("BESFA_EDIT_MODE", "1")];
+        // Read by besfa_editor_plugin: start paused in the open scene, play
+        // on `play`.
+        let scene = self.scene_file.clone();
+        let mut env = vec![("BESFA_EDIT_MODE", "1"), ("BESFA_SCENE", scene.as_str())];
         let scale = ctx.pixels_per_point().to_string();
         if let Some((name, adapter)) = &shared {
             // The plugin takes the size from the texture itself. It opens the
@@ -618,7 +664,11 @@ impl Editor {
         // The same build plays every part: the first `cargo run` builds it
         // while the others wait for the build directory.
         if let Some(port) = &port {
-            let server = [("BESFA_NET", "serve"), ("BESFA_NET_PORT", port)];
+            let server = [
+                ("BESFA_NET", "serve"),
+                ("BESFA_NET_PORT", port),
+                ("BESFA_SCENE", scene.as_str()),
+            ];
             self.start_net("server".into(), &args, &server, ctx);
             env.extend([
                 ("BESFA_NET", "join"),
@@ -638,6 +688,7 @@ impl Editor {
                     ("BESFA_NET", "join"),
                     ("BESFA_NET_PORT", port),
                     ("BESFA_NET_CLIENT", &number),
+                    ("BESFA_SCENE", scene.as_str()),
                 ];
                 self.start_net(format!("client {client}"), &args, &join, ctx);
             }
@@ -1963,7 +2014,7 @@ impl Editor {
         );
         if self.agent_panel.take_continue() {
             let directory = self.project.file("");
-            let scene = self.project.file(SCENE_FILE);
+            let scene = self.scene_path();
             let resumed = self
                 .organization
                 .resume(&self.agent, &self.agents, &directory, scene);
@@ -1981,7 +2032,7 @@ impl Editor {
         {
             let task = self.agent_panel.ask(prompt);
             let directory = self.project.file("");
-            let scene = self.project.file(SCENE_FILE);
+            let scene = self.scene_path();
             let started = self.organization.start(
                 &name,
                 task,
@@ -2008,7 +2059,7 @@ impl Editor {
                 &files,
                 &self.agent.project(&directory),
             );
-            let scene = self.project.file(SCENE_FILE);
+            let scene = self.scene_path();
             let lineup = self.organization.lineup();
             self.agent_panel
                 .start(invocation, &prompt, &directory, scene, &lineup, ctx);
@@ -2068,7 +2119,7 @@ impl Editor {
                 .cloned()
                 .unwrap_or(name);
             let directory = self.project.file("");
-            let scene = self.project.file(SCENE_FILE);
+            let scene = self.scene_path();
             let started = self.organization.start(
                 &name,
                 task,
@@ -2116,7 +2167,8 @@ impl Editor {
         }
         if self.scene.dirty {
             self.log(format!(
-                "The agent changed {SCENE_FILE} while the scene had unsaved changes. Saving them overwrites the agent's."
+                "The agent changed assets/{} while the scene had unsaved changes. Saving them overwrites the agent's.",
+                self.scene_file
             ));
         } else if !self.playing && !self.starting {
             self.log("The agent changed the scene; reloading it.");
@@ -2216,9 +2268,10 @@ impl Editor {
                 let modal = egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
                     ui.set_width(380.0);
                     ui.heading(t("Save changes to the scene?"));
-                    ui.label(t(
-                        "The scene has changes that are not saved to scenes/main.scn.ron.",
-                    ));
+                    ui.label(
+                        t("The scene has changes that are not saved to {}.")
+                            .replace("{}", &self.scene_file),
+                    );
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button(t("Cancel")).clicked() {
@@ -2813,6 +2866,46 @@ mod tests {
         editor.scene.dirty = false;
         editor.on_report(Report::Saved { error: None }, &ctx);
         assert!(editor.playing && !editor.starting);
+
+        drop(editor);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn opens_another_scene_only_when_nothing_is_lost() {
+        let dir = std::env::temp_dir().join(format!("besfa_open_scene_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let waiting = Prebuild::with_phase(crate::process::PrebuildPhase::Running, "");
+        let mut editor = Editor::new(Project::new(dir.to_string_lossy()), None, &waiting, &ctx);
+        assert!(editor.title().contains(" - main - "), "{}", editor.title());
+        let tutorial = || "scenes/tutorial.scn.ron".to_string();
+
+        // Unsaved changes, play, and a plugin that would open main anyway
+        // all keep the open scene.
+        editor.scene.dirty = true;
+        editor.open_scene(tutorial(), &ctx);
+        editor.scene.dirty = false;
+        editor.playing = true;
+        editor.open_scene(tutorial(), &ctx);
+        editor.playing = false;
+        let ping = ["/c", "ping -n 60 127.0.0.1 > nul"];
+        let game = CliProcess::start(&dir, "cmd", &ping, &[], &ctx);
+        editor.game = Some(game.unwrap());
+        editor.protocol = Some(OPEN_SCENE_PROTOCOL - 1);
+        editor.open_scene(tutorial(), &ctx);
+        assert_eq!(editor.scene_file, MAIN_SCENE);
+        assert!(editor.relaunch.is_none());
+
+        editor.protocol = Some(OPEN_SCENE_PROTOCOL);
+        editor.panel_state = Some("{}".into());
+        editor.open_scene(tutorial(), &ctx);
+        assert_eq!(editor.scene_file, tutorial());
+        assert_eq!(editor.relaunch, Some(false), "the game starts again in it");
+        assert!(editor.panel_state.is_none(), "main's tree and place");
+        let file = editor.scene_path();
+        assert!(file.ends_with("assets/scenes/tutorial.scn.ron"));
+        assert!(editor.title().contains(" - tutorial - "));
 
         drop(editor);
         let _ = fs::remove_dir_all(dir);

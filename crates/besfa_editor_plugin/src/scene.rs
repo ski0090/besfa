@@ -43,12 +43,21 @@ use bevy::{
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 pub use besfa_components::scene::{
-    FileEntity, Loading, MeshColor, MeshShape, RuntimeOnly, SCENE_PATH, SceneEntity, asset_file, project_file,
+    CurrentScene, FileEntity, Loading, MeshColor, MeshShape, RuntimeOnly, SceneEntity, asset_file,
+    first_scene, project_file,
 };
 #[cfg(test)]
 use besfa_components::scene::{
-    adopt_loaded_children, build_materials, build_meshes, drop_material, drop_mesh,
+    SCENE_PATH, adopt_loaded_children, build_materials, build_meshes, drop_material, drop_mesh,
 };
+
+/// The scene file Save scene writes, relative to `assets`: the one in the
+/// world, or the one the game starts in until a scene has spawned.
+pub(crate) fn open_scene(world: &World) -> String {
+    world
+        .get_resource::<CurrentScene>()
+        .map_or_else(first_scene, |scene| scene.0.clone())
+}
 
 /// Writes the scene entities to `path` in the scene file format, each under
 /// its id in the file. Entities new to the file get new ids and keep them.
@@ -158,8 +167,9 @@ pub(crate) fn instance_prefab(world: &World, root: Entity) -> Result<String, Str
 pub(crate) fn save_instance(world: &mut World, root: Entity, path: &Path) -> Result<(), String> {
     // Writing the scene placed in itself would replace the scene with it,
     // and reloading would respawn the whole scene from that.
-    if path == asset_file(SCENE_PATH) {
-        return Err(format!("{SCENE_PATH} is saved with Save scene"));
+    let scene = open_scene(world);
+    if path == asset_file(&scene) {
+        return Err(format!("{scene} is saved with Save scene"));
     }
     // Copies the editor made inside the instance are the scene's own, and
     // instances inside it are written as their paths.
@@ -189,9 +199,9 @@ fn write(
     // Until the scene file has spawned, a save would write it over with
     // only what the game made so far.
     if world.contains_resource::<Loading>() {
-        return Err(format!(
-            "{SCENE_PATH} has not loaded yet, and what it holds would be left out; try again once it has"
-        ));
+        return Err(
+            "The scene file has not loaded yet, and what it holds would be left out; try again once it has".into(),
+        );
     }
     // A file that places itself would load forever.
     if let Some(placed) = entities

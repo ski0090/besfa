@@ -43,6 +43,11 @@ pub fn can_place(path: &str) -> bool {
     can_preview(path) || path.ends_with(".scn.ron")
 }
 
+/// Scene files, which the editor opens; prefabs are in other folders.
+pub fn is_scene(path: &str) -> bool {
+    path.starts_with("scenes/") && path.ends_with(".scn.ron")
+}
+
 /// glTF models, which the model preview shows.
 pub fn can_preview(path: &str) -> bool {
     path.ends_with(".glb") || path.ends_with(".gltf")
@@ -54,6 +59,8 @@ pub enum AssetAction {
     Add(String),
     /// Open it in the model preview.
     Preview(String),
+    /// Open the scene file to edit it in place of the open one.
+    Open(String),
 }
 
 /// One row of the asset tree: a path relative to the asset folder, with
@@ -321,6 +328,15 @@ impl AssetBrowser {
                                 })
                             {
                                 action = Some(AssetAction::Preview(row.path.clone()));
+                            }
+                        } else if is_scene(&row.path) {
+                            let name = name.response.on_hover_text(t("Double-click to open"));
+                            if name.contains_pointer()
+                                && ui.input(|i| {
+                                    i.pointer.button_double_clicked(PointerButton::Primary)
+                                })
+                            {
+                                action = Some(AssetAction::Open(row.path.clone()));
                             }
                         }
                         if ui
