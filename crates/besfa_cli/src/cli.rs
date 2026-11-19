@@ -22,6 +22,11 @@ pub(crate) enum Commands {
         #[arg(value_name = "DIRECTORY")]
         directory: PathBuf,
 
+        /// The game to start from: a spinning cube (3d) or a spinning
+        /// square (2d), which the editor shows in a 2D view.
+        #[arg(long, value_enum, default_value_t = Template::ThreeD)]
+        template: Template,
+
         /// Also add Claude Code Game Studios: agents, skills and hooks for
         /// making the game with Claude Code. Needs Git and the network.
         #[arg(long)]
@@ -102,6 +107,14 @@ impl CargoArgs {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
+pub(crate) enum Template {
+    #[value(name = "3d")]
+    ThreeD,
+    #[value(name = "2d")]
+    TwoD,
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum OutputFormat {
     Json,
@@ -119,10 +132,12 @@ mod tests {
         match cli.command {
             Commands::New {
                 directory,
+                template,
                 ccgs,
                 output,
             } => {
                 assert_eq!(directory, PathBuf::from("projects/demo"));
+                assert_eq!(template, Template::ThreeD, "3D is the default");
                 assert!(!ccgs, "CCGS is opt-in");
                 assert!(matches!(output, Some(OutputFormat::Json)));
             }
@@ -132,6 +147,16 @@ mod tests {
         let cli =
             Cli::try_parse_from(["besfa", "new", "demo", "--ccgs"]).expect("--ccgs should parse");
         assert!(matches!(cli.command, Commands::New { ccgs: true, .. }));
+
+        let cli = Cli::try_parse_from(["besfa", "new", "demo", "--template", "2d"])
+            .expect("--template should parse");
+        assert!(matches!(
+            cli.command,
+            Commands::New {
+                template: Template::TwoD,
+                ..
+            }
+        ));
     }
 
     #[test]

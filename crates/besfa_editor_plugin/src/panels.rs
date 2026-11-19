@@ -59,7 +59,7 @@ use crate::{
     inspect::{self, Selected, report_selection, send_report},
     part_changes,
     preview::ModelPreview,
-    scene_view::{EDITOR_CAMERA_ORDER, EditorCamera, HeadlessView, SceneView},
+    scene_view::{EDITOR_CAMERA_ORDER, EditorCamera, HeadlessView, SceneView, TwoD},
     viewport::{VIEWPORT_HANDLE, ViewportTexture},
 };
 
@@ -73,6 +73,14 @@ const SPAWN_KINDS: [(SpawnKind, &str); 8] = [
     (SpawnKind::Camera, "Camera"),
     (SpawnKind::Terrain, "Terrain"),
     (SpawnKind::Sky, "Sky"),
+];
+
+/// What a 2D game's add menu creates.
+const SPAWN_KINDS_2D: [(SpawnKind, &str); 4] = [
+    (SpawnKind::Empty, "Empty"),
+    (SpawnKind::Rectangle, "Rectangle"),
+    (SpawnKind::Circle, "Circle"),
+    (SpawnKind::Camera, "Camera"),
 ];
 
 /// In [`crate::default_plugins`] when the editor shows the game in its
@@ -897,13 +905,14 @@ fn draw(world: &mut World) {
         .get_resource::<SceneView>()
         .is_some_and(|view| !view.stopped);
     let selected = world.resource::<Selected>().0;
+    let two_d = world.contains_resource::<TwoD>();
 
     let mut left = 0.0;
     if asked.hierarchy && !previewing {
         let panel = egui::Panel::left(HIERARCHY)
             .default_size(220.0)
             .show(&mut root, |ui| {
-                hierarchy(ui, world.resource::<Listed>(), selected, editing)
+                hierarchy(ui, world.resource::<Listed>(), selected, editing, two_d)
             });
         left = panel.response.rect.right() * scale;
         match panel.inner {
@@ -1069,12 +1078,14 @@ enum Click {
 
 /// The scene's entities as a tree; clicking one selects it, clicking the
 /// selected one clears the selection. The header adds, duplicates and
-/// deletes entities, and saves one as a prefab while `editing`.
+/// deletes entities, and saves one as a prefab while `editing`. A `two_d`
+/// game adds 2D shapes.
 fn hierarchy(
     ui: &mut egui::Ui,
     listed: &Listed,
     selected: Option<Entity>,
     editing: bool,
+    two_d: bool,
 ) -> Option<Click> {
     let mut click = None;
     let selected = selected.map(Entity::to_bits);
@@ -1095,7 +1106,8 @@ fn hierarchy(
             }
         }
         ui.menu_button("➕", |ui| {
-            for (kind, label) in SPAWN_KINDS {
+            let kinds: &[_] = if two_d { &SPAWN_KINDS_2D } else { &SPAWN_KINDS };
+            for &(kind, label) in kinds {
                 if ui.button(t(label)).clicked() {
                     let pointer = None;
                     click = Some(Click::Ask(PanelAction::Spawn { kind, pointer }));
@@ -1512,7 +1524,7 @@ mod tests {
         let panel = |ui: &mut egui::Ui| {
             egui::Panel::left(HIERARCHY)
                 .default_size(220.0)
-                .show(ui, |ui| hierarchy(ui, &entities, None, false));
+                .show(ui, |ui| hierarchy(ui, &entities, None, false, false));
         };
 
         // As a game starts: its own width, all folded, at the top.
@@ -1608,7 +1620,7 @@ mod tests {
         );
         let mut harness = Harness::new_ui_state(
             |ui, selected: &mut Option<Entity>| {
-                hierarchy(ui, &entities, *selected, false);
+                hierarchy(ui, &entities, *selected, false, false);
             },
             None,
         );
@@ -1641,7 +1653,7 @@ mod tests {
         };
         let mut harness = Harness::new_ui_state(
             |ui, entities: &mut Listed| {
-                hierarchy(ui, entities, None, false);
+                hierarchy(ui, entities, None, false, false);
             },
             ships(1, 3),
         );
@@ -1702,7 +1714,7 @@ mod tests {
         };
         let mut harness = Harness::new_ui_state(
             |ui, entities: &mut Listed| {
-                hierarchy(ui, entities, None, false);
+                hierarchy(ui, entities, None, false, false);
             },
             one(201, "Hull"),
         );
@@ -1730,7 +1742,7 @@ mod tests {
         entities.extend((3..1000).map(|id| format!(r#"{{"id":{id},"name":"Rock {id}"}}"#)));
         let entities = listed(&entities.join(","));
         let mut harness = Harness::new_ui(|ui| {
-            hierarchy(ui, &entities, None, false);
+            hierarchy(ui, &entities, None, false, false);
         });
         harness.run();
         assert!(harness.query_by_label("Stave").is_none(), "starts folded");
@@ -1749,7 +1761,7 @@ mod tests {
         let entities = listed(r#"{"id":1,"name":"Ship"}"#);
         let mut harness = Harness::new_ui_state(
             |ui, state: &mut (Option<Entity>, Option<PanelAction>)| match hierarchy(
-                ui, &entities, state.0, true,
+                ui, &entities, state.0, true, false,
             ) {
                 Some(Click::Select(entity)) => state.0 = entity,
                 Some(Click::Ask(action)) => state.1 = Some(action),

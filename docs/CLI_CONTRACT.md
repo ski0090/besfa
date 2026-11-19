@@ -7,7 +7,7 @@
 ## 명령
 
 ```text
-besfa new <DIRECTORY> [--ccgs] --output json
+besfa new <DIRECTORY> [--template 3d|2d] [--ccgs] --output json
 ```
 
 `DIRECTORY`는 생성될 게임 프로젝트의 최종 루트 디렉터리다.
@@ -24,6 +24,8 @@ cargo new --bin <프로젝트 이름>
 - `src/main.rs`를 씬 파일을 읽고 큐브를 돌리는 게임으로 바꾼다. 원본은 `crates/besfa_cli/template/main.rs`다.
 - 프로젝트 루트에 `.mcp.json`을 써서, 그 폴더의 Claude Code 같은 에이전트가 `besfa mcp`로 게임을 띄우고 고치게 한다.
 - `assets/scenes/main.scn.ron`에 카메라, 조명, 회전하는 큐브가 있는 씬을 쓴다. 원본은 `crates/besfa_cli/template/main.scn.ron`이고, `{{crate}}`를 프로젝트의 크레이트 이름(디렉터리 이름의 `-`를 `_`로)으로 바꾼다. 형식은 [DATA_FORMAT.md](./DATA_FORMAT.md)의 '씬 파일'을 따른다.
+
+`--template`은 시작할 게임을 고른다. 기본값 `3d`는 위의 큐브 게임이다. `2d`는 `src/main.rs`와 씬만 `crates/besfa_cli/template/main_2d.rs`·`main_2d.scn.ron`으로 바꾼다: `Camera2d` 하나와 XY 평면에서 돌아가는 100×100 픽셀 사각형(`MeshShape::Rectangle`)이고, `besfa_editor` feature에서는 `besfa_editor_plugin::default_plugins_2d()`를 쓴다. 에디터의 씬 뷰는 그 게임을 2D 카메라로 -Z 방향으로 내려다보고, 끌기는 화면을 옮기고 휠은 확대·축소하며, 핸들은 X·Y로 옮기고 크기를 바꾸고 Z축으로 돌린다. Hierarchy의 추가 메뉴는 빈 엔티티, 사각형, 원, 2D 카메라를 준다. 의존성과 feature는 3D와 같아서 prebuild의 Bevy 빌드를 그대로 쓴다. 에디터 허브의 **Template** 선택(3D/2D)이 이 옵션이다.
 
 `%LOCALAPPDATA%`가 있으면 모든 게임이 Bevy 빌드를 공유하도록 두 가지를 더 한다.
 
@@ -118,15 +120,9 @@ Cargo가 프로젝트 이름 때문에 생성에 실패하면, `besfa`는 Cargo�
 - 모든 파일 작성과 검증이 성공한 뒤에만 최종 디렉터리로 이동한다.
 - 실패한 생성 작업은 임시 디렉터리를 정리한다.
 
-## 템플릿 도입 계획
+## 템플릿
 
-초기 버전에는 `--template` 옵션을 제공하지 않는다. 먼저 내장 Bevy 시작 코드로 생성한 프로젝트를 실제로 제작하고 테스트한다. 그 결과에서 공통으로 재사용할 수 있고 안정성이 검증된 파일, 설정, 구조만 추출해 템플릿으로 만든다.
-
-템플릿이 도입되는 시점에 다음을 별도 계약 변경으로 추가한다.
-
-- `--template <TEMPLATE>` 옵션
-- 템플릿 탐색 및 복사 정책
-- 존재하지 않는 템플릿에 대한 종료 코드 `12`
+`--template`은 CLI에 내장된 `3d`와 `2d`만 받는다. 그 밖의 값은 clap이 사용법 오류로 거절한다. 디스크에서 템플릿을 찾고 복사하는 정책과 그 실패의 종료 코드 `12`는 사용자 템플릿이 필요해질 때 정한다.
 
 ## 구현 상태
 

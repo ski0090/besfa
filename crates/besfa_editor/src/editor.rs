@@ -1268,7 +1268,12 @@ impl Editor {
             PanelAction::Spawn { kind, pointer } => {
                 let pointer = matches!(
                     kind,
-                    SpawnKind::Empty | SpawnKind::Cube | SpawnKind::Sphere | SpawnKind::Plane
+                    SpawnKind::Empty
+                        | SpawnKind::Cube
+                        | SpawnKind::Sphere
+                        | SpawnKind::Plane
+                        | SpawnKind::Rectangle
+                        | SpawnKind::Circle
                 )
                 .then(|| pointer.or_else(|| self.viewport_middle()))
                 .flatten();

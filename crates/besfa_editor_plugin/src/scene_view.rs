@@ -8,6 +8,10 @@
 //! the scene file, the Inspector and the editor's changes see the switch the
 //! game left them with.
 //! When the game plays, the editor camera goes and everything here stops.
+//!
+//! In a 2D game ([`TwoD`]) the view looks down -Z at the XY plane with a 2D
+//! camera: both drags pan, the handles move and scale on X and Y and rotate
+//! about Z, and the grid lies on XY.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
@@ -111,6 +115,32 @@ pub(crate) struct EditorCamera {
     /// Took over the pose of a game camera.
     pub(crate) adopted: bool,
 }
+
+/// A 2D game's scene view, from [`crate::default_plugins_2d`].
+#[derive(Resource)]
+pub(crate) struct TwoD;
+
+pub(crate) struct TwoDPlugin;
+
+impl Plugin for TwoDPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(TwoD);
+    }
+}
+
+/// How far the view moves per pointer pixel, per unit of distance; in 2D,
+/// the world units a pixel shows per unit of distance.
+const PAN_SPEED: f32 = 0.0015;
+
+/// Pixels long a 2D view's handles are.
+const HANDLE_PIXELS_2D: f32 = 100.0;
+
+/// A 2D view's world units per pixel, zoomed all the way in and out.
+const SCALE_2D: (f32, f32) = (0.02, 50.0);
+
+/// Pixels a 2D grid's cells stay at least, so a fine grid does not cover
+/// the view: smaller cells draw every second, fourth... line.
+const GRID_PIXELS_2D: f32 = 8.0;
 
 /// After every game camera, so the editor's view is the one left.
 pub(crate) const EDITOR_CAMERA_ORDER: isize = 1_000_000;
@@ -336,7 +366,35 @@ impl EditorCamera {
         let rotation = self.rotation();
         self.focus += (rotation * Vec3::NEG_X * delta.x + rotation * Vec3::Y * delta.y)
             * self.distance
-            * 0.0015;
+            * PAN_SPEED;
+    }
+
+    /// A 2D view over `at`, `scale` world units to a pixel.
+    fn flat(at: Vec3, scale: f32) -> Self {
+        Self {
+            focus: at,
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: scale / PAN_SPEED,
+            adopted: false,
+        }
+    }
+
+    /// Zooms a 2D view, which spans more than a 3D one.
+    fn zoom_2d(&mut self, scroll: f32) {
+        let scale = (self.scale_2d() * (1.0 + scroll * 0.001)).clamp(SCALE_2D.0, SCALE_2D.1);
+        self.distance = scale / PAN_SPEED;
+    }
+
+    /// A 2D view's world units per pixel, so panning keeps up with the
+    /// pointer.
+    fn scale_2d(&self) -> f32 {
+        self.distance * PAN_SPEED
+    }
+
+    /// A 2D view's pose: over its focus, at the depth 2D cameras sit at.
+    fn transform_2d(&self) -> Transform {
+        Transform::from_xyz(self.focus.x, self.focus.y, 0.0)
     }
 
     /// Turns the view the way orbiting does, but about the eye.
@@ -362,16 +420,23 @@ impl EditorCamera {
     }
 }
 
-fn spawn_editor_camera(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    // The template camera's pose until a game camera shows up.
-    let pose = Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y);
-    let camera = EditorCamera::looking(&pose);
-    let mut editor = commands.spawn((
+fn spawn_editor_camera(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    two_d: Option<Res<TwoD>>,
+) {
+    let mut editor = if two_d.is_some() {
+        let camera = EditorCamera::flat(Vec3::ZERO, 1.0);
+        commands.spawn((camera, camera.transform_2d(), Camera2d))
+    } else {
+        // The template camera's pose until a game camera shows up.
+        let pose = Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y);
+        let camera = EditorCamera::looking(&pose);
+        commands.spawn((camera, camera.transform(), Camera3d::default()))
+    };
+    editor.insert((
         Name::new("Editor camera"),
         EditorOnly,
-        camera,
-        camera.transform(),
-        Camera3d::default(),
         Camera {
             order: EDITOR_CAMERA_ORDER,
             ..default()
@@ -403,23 +468,41 @@ pub(crate) struct HeadlessView(pub(crate) Handle<Image>);
 fn adopt_game_camera(
     mut editor: Query<&mut EditorCamera>,
     // Not the preview's camera, nor one inside the previewed model.
-    game: Query<&Transform, (With<Camera>, Without<EditorOnly>)>,
+    game: Query<(&Transform, Option<&Projection>), (With<Camera>, Without<EditorOnly>)>,
+    two_d: Option<Res<TwoD>>,
 ) {
     let Ok(mut editor) = editor.single_mut() else {
         return;
     };
-    if let Some(pose) = game.iter().next().filter(|_| !editor.adopted) {
+    if let Some((pose, projection)) = game.iter().next().filter(|_| !editor.adopted) {
+        // A 2D game's zoom too; exact for its default `WindowSize` scaling.
+        let scale = match projection {
+            Some(Projection::Orthographic(projection)) => projection.scale,
+            _ => 1.0,
+        };
         *editor = EditorCamera {
             adopted: true,
-            ..EditorCamera::looking(pose)
+            ..if two_d.is_some() {
+                EditorCamera::flat(pose.translation, scale)
+            } else {
+                EditorCamera::looking(pose)
+            }
         };
     }
 }
 
 /// Flies the editor camera while the right button is held. Real time: the
-/// game's clock stands still in edit mode.
-fn fly(mut view: ResMut<SceneView>, time: Res<Time<Real>>, mut cameras: Query<&mut EditorCamera>) {
-    if !matches!(view.pressed, Some((Button::Right, _))) || view.fly == Vec3::ZERO {
+/// game's clock stands still in edit mode. A 2D view pans instead.
+fn fly(
+    mut view: ResMut<SceneView>,
+    time: Res<Time<Real>>,
+    mut cameras: Query<&mut EditorCamera>,
+    two_d: Option<Res<TwoD>>,
+) {
+    if two_d.is_some()
+        || !matches!(view.pressed, Some((Button::Right, _)))
+        || view.fly == Vec3::ZERO
+    {
         return;
     }
     view.looking = true;
@@ -441,8 +524,18 @@ fn handle_axes(tool: Tool, transform: &GlobalTransform) -> [Vec3; 3] {
 }
 
 /// Handles keep the same size on screen.
-fn handle_length(camera: &GlobalTransform, origin: Vec3) -> f32 {
-    camera.translation().distance(origin) * 0.15
+fn handle_length(view: &EditorCamera, camera: &GlobalTransform, origin: Vec3, two_d: bool) -> f32 {
+    if two_d {
+        view.scale_2d() * HANDLE_PIXELS_2D
+    } else {
+        camera.translation().distance(origin) * 0.15
+    }
+}
+
+/// Whether the view shows handle `axis`: a 2D view moves and scales on X
+/// and Y and rotates about Z only.
+fn handle_shown(tool: Tool, axis: usize, two_d: bool) -> bool {
+    !two_d || (axis == 2) == (tool == Tool::Rotate)
 }
 
 #[allow(
@@ -452,7 +545,13 @@ fn handle_length(camera: &GlobalTransform, origin: Vec3) -> f32 {
 fn handle_pointer(
     mut view: ResMut<SceneView>,
     mut selected: ResMut<Selected>,
-    mut cameras: Query<(&mut EditorCamera, &mut Transform, &Camera, &GlobalTransform)>,
+    mut cameras: Query<(
+        &mut EditorCamera,
+        &mut Transform,
+        &mut Projection,
+        &Camera,
+        &GlobalTransform,
+    )>,
     mut targets: Query<(&mut Transform, &GlobalTransform, Option<&ChildOf>), Without<EditorCamera>>,
     globals: Query<&GlobalTransform>,
     editor_only: Query<(), With<EditorOnly>>,
@@ -461,8 +560,12 @@ fn handle_pointer(
     parents: Query<&ChildOf>,
     mut ray_cast: MeshRayCast,
     registry: Res<AppTypeRegistry>,
+    two_d: Option<Res<TwoD>>,
 ) {
-    let Ok((mut camera, mut camera_transform, render, camera_global)) = cameras.single_mut() else {
+    let two_d = two_d.is_some();
+    let Ok((mut camera, mut camera_transform, mut projection, render, camera_global)) =
+        cameras.single_mut()
+    else {
         view.events.clear();
         return;
     };
@@ -489,12 +592,21 @@ fn handle_pointer(
                     (
                         origin,
                         handle_axes(tool, global),
-                        handle_length(camera_global, origin),
+                        handle_length(&camera, camera_global, origin, two_d),
                     )
                 });
         let grab = |pointer: Vec2| {
             let (origin, axes, length) = handles?;
-            nearest_handle(tool, render, camera_global, origin, axes, length, pointer)
+            nearest_handle(
+                tool,
+                render,
+                camera_global,
+                origin,
+                axes,
+                length,
+                pointer,
+                two_d,
+            )
         };
 
         match event {
@@ -534,6 +646,7 @@ fn handle_pointer(
                         *transform = dragged(tool, drag, ray, snap);
                     }
                 }
+                (None, Some((Button::Right | Button::Middle, _))) if two_d => camera.pan(delta),
                 (None, Some((Button::Right, _))) if view.looking => camera.look(delta),
                 (None, Some((Button::Right, _))) => camera.orbit(delta),
                 (None, Some((Button::Middle, _))) => camera.pan(delta),
@@ -580,6 +693,7 @@ fn handle_pointer(
                     }
                 }
             }
+            PointerEvent::Scroll { delta } if two_d => camera.zoom_2d(delta),
             PointerEvent::Scroll { delta } => camera.zoom(delta),
         }
     }
@@ -588,12 +702,23 @@ fn handle_pointer(
         && let Some((_, global, _)) = selected.0.and_then(|entity| targets.get(entity).ok())
     {
         camera.focus = global.translation();
-        camera.distance = (global.scale().max_element() * 3.0).max(2.0);
+        // A 2D view keeps its zoom.
+        if !two_d {
+            camera.distance = (global.scale().max_element() * 3.0).max(2.0);
+        }
     }
-    *camera_transform = camera.transform();
+    if two_d {
+        *camera_transform = camera.transform_2d();
+        if let Projection::Orthographic(projection) = &mut *projection {
+            projection.scale = camera.scale_2d();
+        }
+    } else {
+        *camera_transform = camera.transform();
+    }
 }
 
 /// The handle under `pointer`, if any is within grabbing distance.
+#[allow(clippy::too_many_arguments, reason = "the handles and the view")]
 fn nearest_handle(
     tool: Tool,
     camera: &Camera,
@@ -602,6 +727,7 @@ fn nearest_handle(
     axes: [Vec3; 3],
     length: f32,
     pointer: Vec2,
+    two_d: bool,
 ) -> Option<usize> {
     let project = |point: Vec3| camera.world_to_viewport(camera_global, point).ok();
     let distance_to = |start, end| {
@@ -611,6 +737,7 @@ fn nearest_handle(
     };
     axes.iter()
         .enumerate()
+        .filter(|&(index, _)| handle_shown(tool, index, two_d))
         .filter_map(|(index, &axis)| {
             let distance = match tool {
                 Tool::Translate | Tool::Scale => {
@@ -704,21 +831,49 @@ fn draw(
     selected: Res<Selected>,
     markers: Query<(Entity, &Marker, &GlobalTransform)>,
     targets: Query<(&GlobalTransform, Option<&Aabb>), Without<EditorCamera>>,
-    camera: Query<&GlobalTransform, With<EditorCamera>>,
+    camera: Query<(&EditorCamera, &GlobalTransform, &Camera)>,
     mut gizmos: Gizmos<GridGizmos>,
     mut handles: Gizmos<HandleGizmos>,
     mut marked: Gizmos<MarkerGizmos>,
+    two_d: Option<Res<TwoD>>,
 ) {
-    // About 40 meters across, in cells the snapping grid's size; an even
-    // count, so lines go through the origin where snapped things go.
+    let two_d = two_d.is_some();
     let grid = view.snap.grid;
-    let cells = (20.0 / grid).round().clamp(5.0, 200.0) as u32 * 2;
-    gizmos.grid(
-        Isometry3d::from_rotation(Quat::from_rotation_x(FRAC_PI_2)),
-        UVec2::splat(cells),
-        Vec2::splat(grid),
-        Color::srgba(0.6, 0.6, 0.6, 0.35),
-    );
+    let color = Color::srgba(0.6, 0.6, 0.6, 0.35);
+    match camera.single() {
+        // A 2D game's covers the view, on lines the snapping grid shares.
+        Ok((view_camera, _, render)) if two_d => {
+            let scale = view_camera.scale_2d();
+            let mut cell = grid;
+            while cell / scale < GRID_PIXELS_2D {
+                cell *= 2.0;
+            }
+            let seen = render
+                .logical_viewport_size()
+                .unwrap_or(Vec2::splat(1000.0))
+                * scale;
+            let cells = (seen / cell / 2.0).ceil().as_uvec2() * 2 + 2;
+            let middle = (view_camera.focus.truncate() / cell).round() * cell;
+            gizmos.grid(
+                Isometry3d::from_translation(middle.extend(0.0)),
+                cells,
+                Vec2::splat(cell),
+                color,
+            );
+        }
+        // About 40 meters across, in cells the snapping grid's size; an
+        // even count, so lines go through the origin where snapped things
+        // go.
+        _ => {
+            let cells = (20.0 / grid).round().clamp(5.0, 200.0) as u32 * 2;
+            gizmos.grid(
+                Isometry3d::from_rotation(Quat::from_rotation_x(FRAC_PI_2)),
+                UVec2::splat(cells),
+                Vec2::splat(grid),
+                color,
+            );
+        }
+    }
     if let (Some(scatter), Some(at)) = (&view.scatter, view.brush_at) {
         let flat = Quat::from_rotation_arc(Vec3::Z, Vec3::Y);
         let color = if scatter.erase {
@@ -744,7 +899,7 @@ fn draw(
             marked.circle(Isometry3d::new(at + Vec3::Y * 0.05, flat), marker.radius, color.with_alpha(0.6));
         }
     }
-    let (Some((global, aabb)), Ok(camera), None, None) = (
+    let (Some((global, aabb)), Ok((view_camera, camera, _)), None, None) = (
         selected.0.and_then(|entity| targets.get(entity).ok()),
         camera.single(),
         view.brush,
@@ -758,9 +913,12 @@ fn draw(
         handles.cube(global.mul_transform(bounds), ACTIVE_COLOR.with_alpha(0.6));
     }
     let origin = global.translation();
-    let length = handle_length(camera, origin);
+    let length = handle_length(view_camera, camera, origin, two_d);
     let active = view.drag.as_ref().map(|drag| drag.axis).or(view.hovered);
     for (index, axis) in handle_axes(view.tool, global).into_iter().enumerate() {
+        if !handle_shown(view.tool, index, two_d) {
+            continue;
+        }
         let color = if active == Some(index) {
             ACTIVE_COLOR
         } else {

@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::prune;
+use crate::{cli::Template, prune};
 
 #[derive(Debug)]
 pub(crate) struct CreateError {
@@ -33,8 +33,12 @@ impl CreateError {
 }
 
 /// `ccgs` also adds Claude Code Game Studios, see [`add_ccgs`].
-pub(crate) fn create_project(directory: &Path, ccgs: bool) -> Result<PathBuf, CreateError> {
-    create_project_with(directory, shared_dir().as_deref(), ccgs)
+pub(crate) fn create_project(
+    directory: &Path,
+    template: Template,
+    ccgs: bool,
+) -> Result<PathBuf, CreateError> {
+    create_project_with(directory, shared_dir().as_deref(), template, ccgs)
 }
 
 /// Builds Bevy into the shared target directory the way the editor's Run
@@ -158,6 +162,7 @@ fn shared_dir() -> Option<PathBuf> {
 fn create_project_with(
     directory: &Path,
     shared: Option<&Path>,
+    template: Template,
     ccgs: bool,
 ) -> Result<PathBuf, CreateError> {
     let destination = std::path::absolute(directory).map_err(|error| {
@@ -218,7 +223,7 @@ fn create_project_with(
         ));
     }
 
-    if let Err(error) = write_bevy_template(&staged_project, shared) {
+    if let Err(error) = write_bevy_template(&staged_project, shared, template) {
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(error);
     }
@@ -257,6 +262,20 @@ const TEMPLATE_MAIN: &str = include_str!("../template/main.rs");
 /// The cube, light and camera scene; `{{crate}}` becomes the game's crate.
 const TEMPLATE_SCENE: &str = include_str!("../template/main.scn.ron");
 
+/// The 2D game: same dependencies, so it reuses the prebuild's Bevy.
+const TEMPLATE_MAIN_2D: &str = include_str!("../template/main_2d.rs");
+const TEMPLATE_SCENE_2D: &str = include_str!("../template/main_2d.scn.ron");
+
+impl Template {
+    /// Its `src/main.rs` and scene file.
+    fn files(self) -> (&'static str, &'static str) {
+        match self {
+            Self::ThreeD => (TEMPLATE_MAIN, TEMPLATE_SCENE),
+            Self::TwoD => (TEMPLATE_MAIN_2D, TEMPLATE_SCENE_2D),
+        }
+    }
+}
+
 /// Where the game and the editor read and write the scene.
 const SCENE_FILE: &str = "assets/scenes/main.scn.ron";
 
@@ -291,13 +310,18 @@ opt-level = 1
 opt-level = 3
 "#;
 
-/// Turns Cargo's hello-world project into a Bevy game that loads a cube
-/// scene from `assets/scenes/main.scn.ron`.
+/// Turns Cargo's hello-world project into a Bevy game that loads the
+/// `template`'s scene from `assets/scenes/main.scn.ron`.
 ///
 /// With a machine-wide `shared` directory, the game also builds into
 /// `<shared>/target` and starts from `<shared>/prebuild/Cargo.lock`, so every
 /// Besfa game reuses one Bevy build instead of compiling its own.
-fn write_bevy_template(project: &Path, shared: Option<&Path>) -> Result<(), CreateError> {
+fn write_bevy_template(
+    project: &Path,
+    shared: Option<&Path>,
+    template: Template,
+) -> Result<(), CreateError> {
+    let (main, scene) = template.files();
     let manifest_path = project.join("Cargo.toml");
     let manifest = fs::read_to_string(&manifest_path)
         .map_err(|error| filesystem_error("Failed to read the generated Cargo.toml.", error))?;
@@ -314,7 +338,7 @@ fn write_bevy_template(project: &Path, shared: Option<&Path>) -> Result<(), Crea
         format!("{}\n{TEMPLATE_DEPENDENCIES}", manifest.trim_end()),
     )
     .map_err(|error| filesystem_error("Failed to write Cargo.toml.", error))?;
-    fs::write(project.join("src").join("main.rs"), TEMPLATE_MAIN)
+    fs::write(project.join("src").join("main.rs"), main)
         .map_err(|error| filesystem_error("Failed to write src/main.rs.", error))?;
     fs::write(project.join(".mcp.json"), MCP_CONFIG)
         .map_err(|error| filesystem_error("Failed to write .mcp.json.", error))?;
@@ -327,11 +351,8 @@ fn write_bevy_template(project: &Path, shared: Option<&Path>) -> Result<(), Crea
     let scene_file = project.join(SCENE_FILE);
     fs::create_dir_all(scene_file.parent().expect("the scene file has a directory"))
         .map_err(|error| filesystem_error("Failed to create assets/scenes.", error))?;
-    fs::write(
-        &scene_file,
-        TEMPLATE_SCENE.replace("{{crate}}", &crate_name),
-    )
-    .map_err(|error| filesystem_error(format!("Failed to write {SCENE_FILE}."), error))?;
+    fs::write(&scene_file, scene.replace("{{crate}}", &crate_name))
+        .map_err(|error| filesystem_error(format!("Failed to write {SCENE_FILE}."), error))?;
 
     let Some(shared) = shared else {
         return Ok(());
@@ -632,12 +653,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_2d_template_is_the_2d_game_on_the_same_dependencies() {
+        let parent = test_directory("create_2d");
+        fs::create_dir(&parent).expect("test parent should be created");
+        let destination = parent.join("flat_game");
+
+        let result = create_project_with(&destination, None, Template::TwoD, false);
+        let manifest = fs::read_to_string(destination.join("Cargo.toml"));
+        let main = fs::read_to_string(destination.join("src").join("main.rs"));
+        let scene = fs::read_to_string(destination.join(SCENE_FILE));
+        fs::remove_dir_all(&parent).expect("test directory should be removed");
+
+        result.expect("project creation should succeed");
+        assert!(manifest.unwrap().ends_with(TEMPLATE_DEPENDENCIES));
+        assert_eq!(main.unwrap(), TEMPLATE_MAIN_2D);
+        let scene = scene.unwrap();
+        assert!(scene.contains("\"flat_game::Spin\": ()"), "{scene}");
+        assert!(scene.contains("Camera2d"), "{scene}");
+    }
+
+    #[test]
     fn creates_a_cargo_binary_project_in_the_requested_directory() {
         let parent = test_directory("create");
         fs::create_dir(&parent).expect("test parent should be created");
         let destination = parent.join("demo_game");
 
-        let result = create_project_with(&destination, None, false);
+        let result = create_project_with(&destination, None, Template::ThreeD, false);
         let manifest = fs::read_to_string(destination.join("Cargo.toml"));
         let has_cargo_config = destination.join(".cargo").exists();
         let main = fs::read_to_string(destination.join("src").join("main.rs"));
@@ -678,7 +719,7 @@ mod tests {
             .expect("prebuild lock should be written");
         let destination = parent.join("demo_game");
 
-        let result = create_project_with(&destination, Some(&shared), false);
+        let result = create_project_with(&destination, Some(&shared), Template::ThreeD, false);
         let config = fs::read_to_string(destination.join(".cargo").join("config.toml"));
         let lock = fs::read_to_string(destination.join("Cargo.lock"));
         fs::remove_dir_all(&parent).expect("test directory should be removed");
@@ -740,8 +781,8 @@ mod tests {
         let destination = parent.join("demo_game");
         fs::create_dir_all(&destination).expect("test destination should be created");
 
-        let error =
-            create_project(&destination, false).expect_err("existing destination should fail");
+        let error = create_project(&destination, Template::ThreeD, false)
+            .expect_err("existing destination should fail");
         fs::remove_dir_all(&parent).expect("test directory should be removed");
 
         assert_eq!(error.exit_code, 10);

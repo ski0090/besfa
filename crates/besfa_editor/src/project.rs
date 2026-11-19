@@ -99,10 +99,12 @@ impl RecentProjects {
 }
 
 /// Creates a project in `directory` with `besfa new` and returns its path,
-/// or what went wrong. `ccgs` adds Claude Code Game Studios.
-pub fn create(directory: &str, ccgs: bool) -> Result<String, String> {
+/// or what went wrong. `two_d` starts from the 2D template, `ccgs` adds
+/// Claude Code Game Studios.
+pub fn create(directory: &str, two_d: bool, ccgs: bool) -> Result<String, String> {
     let output = command("besfa")
         .args(["new", directory, "--output", "json"])
+        .args(two_d.then_some(["--template", "2d"]).into_iter().flatten())
         .args(ccgs.then_some("--ccgs"))
         .output()
         .map_err(|error| format!("Could not start the Besfa CLI.\n{error}"))?;

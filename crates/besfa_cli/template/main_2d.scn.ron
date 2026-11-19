@@ -1,0 +1,41 @@
+// The game's scene: besfa_editor_plugin spawns it at startup and the Besfa
+// editor saves it back here. Bevy's world format; a component is only here
+// when its entity has it, and fields left out keep their defaults. Meshes
+// and materials are built from MeshShape and MeshColor when the scene loads.
+// A 2D game: shapes lie on XY, sizes are in pixels, the camera looks down -Z.
+(
+  resources: {},
+  entities: {
+    4294967295: (
+      components: {
+        "bevy_ecs::name::Name": "Square",
+        "bevy_transform::components::transform::Transform": (
+          translation: (0.0, 0.0, 0.0),
+          rotation: (0.0, 0.0, 0.0, 1.0),
+          scale: (1.0, 1.0, 1.0),
+        ),
+        "besfa_editor_plugin::scene::MeshShape": Rectangle(
+          size: (100.0, 100.0),
+        ),
+        "besfa_editor_plugin::scene::MeshColor": (Srgba((
+          red: 0.55,
+          green: 0.7,
+          blue: 1.0,
+          alpha: 1.0,
+        ))),
+        "{{crate}}::Spin": (),
+      },
+    ),
+    4294967294: (
+      components: {
+        "bevy_ecs::name::Name": "Camera",
+        "bevy_camera::components::Camera2d": (),
+        "bevy_transform::components::transform::Transform": (
+          translation: (0.0, 0.0, 0.0),
+          rotation: (0.0, 0.0, 0.0, 1.0),
+          scale: (1.0, 1.0, 1.0),
+        ),
+      },
+    ),
+  },
+)

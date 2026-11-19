@@ -20,7 +20,7 @@ use besfa_components::reflect::{self, component_registration, entity_mut};
 
 use crate::{
     scene::{MeshColor, MeshShape, SceneEntity},
-    scene_view::keep_parked,
+    scene_view::{TwoD, keep_parked},
     sky::Sky,
     terrain::{self, Terrain},
 };
@@ -67,6 +67,16 @@ pub(crate) fn insert(world: &mut World, entity: Entity, component: &str) -> Resu
 
 pub(crate) use besfa_components::reflect::{remove, subtree};
 
+/// Whether a game of that kind shows `kind`: 2D games draw flat shapes,
+/// 3D games the rest, and both have empties and cameras.
+pub(crate) fn shows(kind: SpawnKind, two_d: bool) -> bool {
+    match kind {
+        SpawnKind::Empty | SpawnKind::Camera => true,
+        SpawnKind::Rectangle | SpawnKind::Circle => two_d,
+        _ => !two_d,
+    }
+}
+
 /// Spawns a scene entity at the origin, so saving keeps it. A terrain
 /// gets a new file of its own.
 pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Entity {
@@ -74,6 +84,7 @@ pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Entity {
         SpawnKind::Terrain => Some(terrain::new_file(world)),
         _ => None,
     };
+    let two_d = world.contains_resource::<TwoD>();
     let mut entity = world.spawn((SceneEntity, Transform::default()));
     match kind {
         // So what goes under it as a group shows.
@@ -95,6 +106,20 @@ pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Entity {
             },
             MeshColor::default(),
         )),
+        // A 2D game's units are pixels.
+        SpawnKind::Rectangle => entity.insert((
+            Name::new("Rectangle"),
+            MeshShape::Rectangle {
+                size: Vec2::splat(100.0),
+            },
+            MeshColor::default(),
+        )),
+        SpawnKind::Circle => entity.insert((
+            Name::new("Circle"),
+            MeshShape::Circle { radius: 50.0 },
+            MeshColor::default(),
+        )),
+        SpawnKind::Camera if two_d => entity.insert((Name::new("Camera"), Camera2d)),
         SpawnKind::Light => entity.insert((
             Name::new("Light"),
             PointLight {
@@ -195,6 +220,12 @@ pub(crate) fn show_asset(world: &mut World, path: &str) -> Result<Entity, String
 /// Puts a new `entity` where `place` says. `parent` is the one `place`
 /// names, already checked with [`parent`].
 pub(crate) fn place(world: &mut World, entity: Entity, place: &Placement, parent: Option<Entity>) {
+    // A 2D game's yaw turns in its plane, about Z.
+    let up = if world.contains_resource::<TwoD>() {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
     let mut entity = world.entity_mut(entity);
     if let Some(name) = &place.name {
         entity.insert(Name::new(name.clone()));
@@ -204,7 +235,7 @@ pub(crate) fn place(world: &mut World, entity: Entity, place: &Placement, parent
             transform.translation = translation.into();
         }
         if let Some(yaw) = place.yaw {
-            transform.rotation = Quat::from_rotation_y(yaw.to_radians());
+            transform.rotation = Quat::from_axis_angle(up, yaw.to_radians());
         }
         if let Some(scale) = place.scale {
             transform.scale = Vec3::splat(scale);
