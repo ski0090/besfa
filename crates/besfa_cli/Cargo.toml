@@ -2,6 +2,7 @@
 name = "besfa_cli"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/ski0090/besfa"
 
 [dependencies]
 besfa_mcp = { path = "../besfa_mcp" }
@@ -11,3 +12,11 @@ serde_json = "1.0"
 [[bin]]
 name = "besfa"
 path = "src/main.rs"
+
+# `cargo binstall --git https://github.com/ski0090/besfa besfa_cli` takes
+# the besfa.exe that .github/workflows/cli-release.yml builds from main,
+# instead of compiling it. Other targets have no build there and compile.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/cli-latest/besfa-{ target }.zip"
+pkg-fmt = "zip"
+bin-dir = "besfa{ binary-ext }"

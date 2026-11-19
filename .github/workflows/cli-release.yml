@@ -1,0 +1,44 @@
+# Builds the besfa CLI from main and puts it on the `cli-latest` release,
+# which `cargo binstall --git https://github.com/ski0090/besfa besfa_cli`
+# downloads instead of compiling (see crates/besfa_cli/Cargo.toml).
+name: CLI release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - crates/besfa_cli/**
+      - crates/besfa_mcp/**
+      - crates/besfa_protocol/**
+      - Cargo.lock
+      - .github/workflows/cli-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# A newer push replaces the asset anyway.
+concurrency:
+  group: cli-release
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable --no-self-update && rustup default stable
+      - run: cargo build --release --locked -p besfa_cli
+      - run: Compress-Archive -Path target/release/besfa.exe -DestinationPath besfa-x86_64-pc-windows-msvc.zip
+      - name: Upload to the cli-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "The besfa CLI built from main at $env:GITHUB_SHA. Install or update with:`n`n    cargo binstall --git https://github.com/ski0090/besfa besfa_cli --force"
+          gh release view cli-latest *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create cli-latest --title "besfa CLI (main)" --notes $notes --prerelease --target $env:GITHUB_SHA
+          } else {
+            gh release edit cli-latest --notes $notes
+          }
+          gh release upload cli-latest besfa-x86_64-pc-windows-msvc.zip --clobber
