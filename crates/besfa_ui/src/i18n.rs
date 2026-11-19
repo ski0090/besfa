@@ -99,6 +99,8 @@ fn korean(en: &str) -> Option<&'static str> {
         "Cube" => "큐브",
         "Sphere" => "구",
         "Plane" => "평면",
+        "Rectangle" => "사각형",
+        "Circle" => "원",
         "Light" => "조명",
         "Camera" => "카메라",
         "Terrain" => "지형",
@@ -545,6 +547,7 @@ fn korean(en: &str) -> Option<&'static str> {
             "새 Cargo 프로젝트의 폴더 경로를 입력하세요."
         }
         "Project directory" => "프로젝트 디렉터리",
+        "Template" => "템플릿",
         "🗁 Browse" => "🗁 찾아보기",
         "Add Claude Code Game Studios" => "Claude Code Game Studios 추가",
         "Creating…" => "만드는 중…",

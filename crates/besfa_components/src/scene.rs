@@ -93,7 +93,8 @@ pub struct SceneEntity;
 pub struct FileEntity(pub Entity);
 
 /// A mesh the plugin builds from a primitive shape, and rebuilds when the
-/// shape changes.
+/// shape changes. `Rectangle` and `Circle` are flat on XY and drawn by 2D
+/// cameras, the rest by 3D ones.
 #[derive(Component, Reflect, Clone, Debug, PartialEq)]
 #[type_path = "besfa_editor_plugin::scene"]
 #[reflect(Component, Default)]
@@ -101,6 +102,8 @@ pub enum MeshShape {
     Cuboid { size: Vec3 },
     Sphere { radius: f32 },
     Plane { size: Vec2 },
+    Rectangle { size: Vec2 },
+    Circle { radius: f32 },
 }
 
 impl Default for MeshShape {
@@ -115,7 +118,13 @@ impl MeshShape {
             Self::Cuboid { size } => Cuboid::from_size(size).into(),
             Self::Sphere { radius } => Sphere::new(radius).into(),
             Self::Plane { size } => Plane3d::default().mesh().size(size.x, size.y).into(),
+            Self::Rectangle { size } => Rectangle::from_size(size).into(),
+            Self::Circle { radius } => Circle::new(radius).into(),
         }
+    }
+
+    pub fn is_2d(&self) -> bool {
+        matches!(self, Self::Rectangle { .. } | Self::Circle { .. })
     }
 }
 
@@ -320,36 +329,66 @@ pub fn build_meshes(
     mut commands: Commands,
 ) {
     for (entity, shape) in &shapes {
-        commands
-            .entity(entity)
-            .insert(Mesh3d(meshes.add(shape.mesh())));
+        let mesh = meshes.add(shape.mesh());
+        let mut entity = commands.entity(entity);
+        if shape.is_2d() {
+            entity.remove::<Mesh3d>().insert(Mesh2d(mesh));
+        } else {
+            entity.remove::<Mesh2d>().insert(Mesh3d(mesh));
+        }
     }
 }
 
+/// A shape switched between 2D and 3D gets the other kind of material; a
+/// resized one keeps its material.
 #[doc(hidden)]
+#[allow(clippy::type_complexity, reason = "a system's query")]
 pub fn build_materials(
-    colors: Query<(Entity, &MeshColor), Changed<MeshColor>>,
+    colors: Query<
+        (
+            Entity,
+            Ref<MeshColor>,
+            Option<&MeshShape>,
+            Has<MeshMaterial2d<ColorMaterial>>,
+        ),
+        Or<(Changed<MeshColor>, Changed<MeshShape>)>,
+    >,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut flat: ResMut<Assets<ColorMaterial>>,
     mut commands: Commands,
 ) {
-    for (entity, color) in &colors {
-        commands
-            .entity(entity)
-            .insert(MeshMaterial3d(materials.add(color.0)));
+    for (entity, color, shape, is_flat) in &colors {
+        let two_d = shape.is_some_and(MeshShape::is_2d);
+        if !color.is_changed() && is_flat == two_d {
+            continue;
+        }
+        let mut entity = commands.entity(entity);
+        if two_d {
+            entity
+                .remove::<MeshMaterial3d<StandardMaterial>>()
+                .insert(MeshMaterial2d(flat.add(color.0)));
+        } else {
+            entity
+                .remove::<MeshMaterial2d<ColorMaterial>>()
+                .insert(MeshMaterial3d(materials.add(color.0)));
+        }
     }
 }
 
 /// Removing the shape removes the mesh built from it.
 #[doc(hidden)]
 pub fn drop_mesh(remove: On<Remove<MeshShape>>, mut commands: Commands) {
-    commands.entity(remove.entity).try_remove::<Mesh3d>();
+    commands
+        .entity(remove.entity)
+        .try_remove::<(Mesh3d, Mesh2d)>();
 }
 
 #[doc(hidden)]
 pub fn drop_material(remove: On<Remove<MeshColor>>, mut commands: Commands) {
-    commands
-        .entity(remove.entity)
-        .try_remove::<MeshMaterial3d<StandardMaterial>>();
+    commands.entity(remove.entity).try_remove::<(
+        MeshMaterial3d<StandardMaterial>,
+        MeshMaterial2d<ColorMaterial>,
+    )>();
 }
 
 /// Where the asset at `path`, relative to the asset directory, is on disk.
@@ -430,6 +469,7 @@ mod tests {
         ))
         .init_asset::<Mesh>()
         .init_asset::<StandardMaterial>()
+        .init_asset::<ColorMaterial>()
         .register_type::<Name>()
         .register_type::<Transform>()
         .register_type::<ChildOf>();

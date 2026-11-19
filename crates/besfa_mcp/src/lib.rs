@@ -172,7 +172,7 @@ fn tools() -> Value {
                 "`spawned` reports come in the order of the commands that make entities; a failed command shows as {\"type\":\"done\",\"command\":INDEX,\"error\":...}. ",
                 "Entities are the ids `entities` lists; components are named by type path, as `entities` with an id shows them. Commands:\n",
                 "{\"command\":\"instantiate\",\"path\":\"models/oak-tree.glb\",\"translation\":[-55,0,10],\"yaw\":45,\"scale\":1.2,\"name\":\"Oak\",\"parent\":ID} places a model or prefab, relative to assets/; all but path optional; translation and yaw are in the world, yaw in degrees counterclockwise from above\n",
-                "{\"command\":\"spawn\",\"kind\":\"empty|cube|sphere|plane|light|camera\"} takes the same placement; a named empty makes a group\n",
+                "{\"command\":\"spawn\",\"kind\":\"empty|cube|sphere|plane|light|camera\"} takes the same placement; a named empty makes a group; a 2D game also has rectangle|circle, in pixels on XY\n",
                 "{\"command\":\"parent\",\"id\":ID,\"parent\":ID} moves it under another scene entity, or to the top without parent, staying where it is in the world\n",
                 "{\"command\":\"set\",\"id\":ID,\"component\":PATH,\"value\":{...}} replaces the whole value; left-out fields take defaults\n",
                 "{\"command\":\"insert\",\"id\":ID,\"component\":PATH} / {\"command\":\"remove\",...}\n",
@@ -358,6 +358,10 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 /// The protocol version a game must speak to run `command`.
 fn since(command: &Command) -> u32 {
     match command {
+        Command::Spawn {
+            kind: SpawnKind::Rectangle | SpawnKind::Circle,
+            ..
+        } => 19,
         Command::Screenshot {
             game: Some(true), ..
         } => 14,
@@ -915,6 +919,7 @@ mod tests {
             "a game picture needs a game that takes it"
         );
         assert_eq!(since(shot(false)), 4);
+        assert_eq!(since(json!({"command": "spawn", "kind": "circle"})), 19);
 
         let good = call(&mut game, json!({"command": "spawn", "kind": "cube"}));
         assert_eq!(good["isError"], true);

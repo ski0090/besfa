@@ -1,6 +1,7 @@
 //! Connects a Bevy game to the Besfa editor.
 //!
-//! Games use [`default_plugins`] in place of `DefaultPlugins`. Run on its own,
+//! Games use [`default_plugins`] in place of `DefaultPlugins`, or
+//! [`default_plugins_2d`] for a 2D game. Run on its own,
 //! the game behaves like `DefaultPlugins` and loads its scene from
 //! `assets/scenes/main.scn.ron`. Launched by the editor, it renders into the
 //! editor's viewport instead of opening a window, starts paused in edit mode
@@ -36,6 +37,13 @@ pub use besfa_components::{
     SceneEntity, Sky, SkyMode, Sun, Terrain, TerrainData, TerrainFile, TerrainHandle,
     TerrainHeight,
 };
+
+/// [`default_plugins`] for a 2D game: the scene view looks down -Z at the
+/// XY plane with a 2D camera, pans and zooms instead of orbiting, and the
+/// Hierarchy adds 2D shapes and cameras.
+pub fn default_plugins_2d() -> PluginGroupBuilder {
+    default_plugins().add(scene_view::TwoDPlugin)
+}
 
 /// `besfa_components::default_plugins`, adjusted to start in edit mode and
 /// render into the editor viewport when the editor launched the game, or

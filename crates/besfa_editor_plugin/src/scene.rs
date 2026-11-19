@@ -421,12 +421,11 @@ fn saved_components(
 
 /// A copy of `value` for the file. A concrete clone keeps types that
 /// serialize through serde, like `Name`, serializable; a dynamic value
-/// loses that. Bevy recomputes a camera's matrices and target size and a
-/// perspective's aspect ratio every frame, so the file keeps their defaults.
+/// loses that. Bevy recomputes a camera's matrices and target size, a
+/// perspective's aspect ratio and an orthographic projection's area every
+/// frame, so the file keeps their defaults.
 /// A game camera switched off in edit mode keeps the switch it plays with,
 /// `parked`. None for a value that cannot be copied either way.
-// ponytail: the template's camera; an orthographic projection's `area` is
-// recomputed too, clear it once 2D scenes are saved.
 fn saved_value(value: &dyn Reflect, parked: Option<bool>) -> Option<Box<dyn PartialReflect>> {
     if let Some(camera) = value.downcast_ref::<Camera>() {
         return Some(Box::new(Camera {
@@ -439,6 +438,12 @@ fn saved_value(value: &dyn Reflect, parked: Option<bool>) -> Option<Box<dyn Part
         return Some(Box::new(Projection::Perspective(PerspectiveProjection {
             aspect_ratio: PerspectiveProjection::default().aspect_ratio,
             ..perspective.clone()
+        })));
+    }
+    if let Some(Projection::Orthographic(orthographic)) = value.downcast_ref::<Projection>() {
+        return Some(Box::new(Projection::Orthographic(OrthographicProjection {
+            area: OrthographicProjection::default_2d().area,
+            ..orthographic.clone()
         })));
     }
     value
@@ -482,6 +487,8 @@ pub(crate) fn left_out(type_id: TypeId) -> bool {
         TypeId::of::<RenderTarget>(),
         TypeId::of::<Mesh3d>(),
         TypeId::of::<MeshMaterial3d<StandardMaterial>>(),
+        TypeId::of::<Mesh2d>(),
+        TypeId::of::<MeshMaterial2d<ColorMaterial>>(),
         TypeId::of::<GlobalTransform>(),
         TypeId::of::<TransformTreeChanged>(),
         TypeId::of::<InheritedVisibility>(),
@@ -641,6 +648,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<ColorMaterial>>()
             .register_type::<Name>()
             .register_type::<Transform>()
             .register_type::<PointLight>()
@@ -707,6 +715,85 @@ mod tests {
         assert_eq!(
             world.get::<Transform>(entities[2]).unwrap().translation,
             Vec3::new(-2.5, 4.5, 9.0)
+        );
+    }
+
+    #[test]
+    fn loads_and_saves_the_2d_template() {
+        let ron = include_str!("../../besfa_cli/template/main_2d.scn.ron")
+            .replace("{{crate}}", "besfa_editor_plugin::scene::tests");
+        let mut app = test_app();
+        app.register_type::<Camera2d>()
+            .register_type::<Projection>();
+
+        let entities = spawn(&mut app, &ron);
+
+        let world = app.world();
+        assert!(world.get::<Spin>(entities[0]).is_some());
+        assert!(world.get::<Mesh2d>(entities[0]).is_some());
+        assert!(
+            world
+                .get::<MeshMaterial2d<ColorMaterial>>(entities[0])
+                .is_some()
+        );
+        assert!(world.get::<Mesh3d>(entities[0]).is_none());
+        assert!(world.get::<Camera2d>(entities[1]).is_some());
+        // What Bevy works out for the camera each frame.
+        let Some(Projection::Orthographic(mut projection)) =
+            world.get::<Projection>(entities[1]).cloned()
+        else {
+            panic!("a 2D camera is orthographic");
+        };
+        projection.area = Rect::new(-640.0, -360.0, 640.0, 360.0);
+        app.world_mut()
+            .entity_mut(entities[1])
+            .insert(Projection::Orthographic(projection));
+        let dir = std::env::temp_dir().join(format!("besfa-2d-{}", std::process::id()));
+        let path = dir.join(SCENE_PATH);
+        save(app.world_mut(), &path).expect("the scene should save");
+        let saved = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(saved.contains("Rectangle"), "{saved}");
+        assert!(saved.contains("Camera2d"), "{saved}");
+        assert!(!saved.contains("Mesh2d"), "{saved}");
+        assert!(!saved.contains("MeshMaterial2d"), "{saved}");
+        assert!(
+            !saved.contains("640"),
+            "the area is left at its default: {saved}"
+        );
+
+        // A shape switched to 3D draws in 3D.
+        app.world_mut()
+            .entity_mut(entities[0])
+            .insert(MeshShape::default());
+        app.update();
+        let world = app.world();
+        assert!(world.get::<Mesh3d>(entities[0]).is_some());
+        assert!(world.get::<Mesh2d>(entities[0]).is_none());
+        assert!(
+            world
+                .get::<MeshMaterial3d<StandardMaterial>>(entities[0])
+                .is_some()
+        );
+        assert!(
+            world
+                .get::<MeshMaterial2d<ColorMaterial>>(entities[0])
+                .is_none()
+        );
+
+        // Resizing keeps the material.
+        let material = world
+            .get::<MeshMaterial3d<StandardMaterial>>(entities[0])
+            .cloned();
+        app.world_mut()
+            .entity_mut(entities[0])
+            .insert(MeshShape::Sphere { radius: 2.0 });
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<MeshMaterial3d<StandardMaterial>>(entities[0])
+                .cloned(),
+            material
         );
     }
 

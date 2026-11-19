@@ -20,9 +20,10 @@ fn main() -> ExitCode {
     match cli.command {
         Commands::New {
             directory,
+            template,
             ccgs,
             output,
-        } => match create_project(&directory, ccgs) {
+        } => match create_project(&directory, template, ccgs) {
             Ok(project_path) => {
                 print_create_success(output, &project_path);
                 ExitCode::SUCCESS

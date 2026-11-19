@@ -22,7 +22,7 @@ use bevy::{
 
 use crate::{
     inspect::send_report,
-    scene_view::{EditorCamera, EditorOnly, MARKER_LAYER, Parked},
+    scene_view::{EditorCamera, EditorOnly, MARKER_LAYER, Parked, TwoD},
     thumbnail::{Compiling, IDLE_FRAMES, LOAD_FRAMES, RENDER_FRAMES, save},
 };
 
@@ -187,11 +187,17 @@ fn work(world: &mut World) {
             }
             (None, borrowed)
         } else {
-            let camera = world
-                .spawn((
+            let two_d = world.contains_resource::<TwoD>();
+            let mut camera = world.spawn_empty();
+            if two_d {
+                camera.insert(Camera2d);
+            } else {
+                camera.insert(Camera3d::default());
+            }
+            let camera = camera
+                .insert((
                     Name::new("Screenshot camera"),
                     EditorOnly,
-                    Camera3d::default(),
                     Camera {
                         order: -90,
                         ..default()

@@ -36,6 +36,8 @@ pub struct Hub {
 #[derive(Default)]
 struct CreateDialog {
     directory: String,
+    /// `besfa new --template 2d`: a 2D game instead of a 3D one.
+    two_d: bool,
     /// `besfa new --ccgs`: add Claude Code Game Studios to the project.
     ccgs: bool,
     error: Option<String>,
@@ -336,6 +338,16 @@ impl Hub {
             });
             ui.group(|ui| {
                 ui.set_width(ui.available_width());
+                ui.label(RichText::new(t("Template")).small().color(MUTED));
+                ui.add_enabled_ui(!creating, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut dialog.two_d, false, "3D");
+                        ui.radio_value(&mut dialog.two_d, true, "2D");
+                    });
+                });
+            });
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
                 ui.label(RichText::new("Claude Code").small().color(MUTED));
                 ui.horizontal(|ui| {
                     let ccgs =
@@ -387,8 +399,10 @@ impl Hub {
                 dialog.error = Some(t("Enter a directory for the new project.").into());
             } else {
                 dialog.error = None;
-                let ccgs = dialog.ccgs;
-                dialog.creating = Some(background(ctx, move || project::create(&directory, ccgs)));
+                let (two_d, ccgs) = (dialog.two_d, dialog.ccgs);
+                dialog.creating = Some(background(ctx, move || {
+                    project::create(&directory, two_d, ccgs)
+                }));
             }
         } else if !creating && (cancel || modal.should_close()) {
             self.create = None;

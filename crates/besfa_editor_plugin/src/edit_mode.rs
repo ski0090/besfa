@@ -575,6 +575,11 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
         } => {
             if !(inside(&file) && file.ends_with(".png")) {
                 Err(format!("{file} is not a .png path inside the project"))
+            } else if top.is_some()
+                && game != Some(true)
+                && world.contains_resource::<crate::scene_view::TwoD>()
+            {
+                Err("a 2D game has no view from above; give an eye on +Z".into())
             } else {
                 let view = if game == Some(true) {
                     Shot::game(width, height)

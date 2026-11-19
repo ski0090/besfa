@@ -59,7 +59,8 @@ use serde_json::Value;
 /// 18. Starting in the scene file `BESFA_SCENE` names, relative to
 ///     `assets`, which [`Command::Save`] then writes; the editor opens
 ///     scenes other than `scenes/main.scn.ron` this way.
-pub const VERSION: u32 = 18;
+/// 19. 2D games: [`SpawnKind::Rectangle`] and [`SpawnKind::Circle`].
+pub const VERSION: u32 = 19;
 
 /// The first protocol whose plugins draw the Hierarchy panel themselves.
 pub const HIERARCHY_PROTOCOL: u32 = 15;
@@ -513,6 +514,9 @@ pub enum SpawnKind {
     Cube,
     Sphere,
     Plane,
+    /// A 2D game's flat shapes.
+    Rectangle,
+    Circle,
     Light,
     Camera,
     /// Flat ground 256 meters a side covered by its first surface layer,

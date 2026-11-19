@@ -20,7 +20,7 @@ use besfa_components::reflect::{self, component_registration, entity_mut};
 
 use crate::{
     scene::{MeshColor, MeshShape, SceneEntity},
-    scene_view::keep_parked,
+    scene_view::{TwoD, keep_parked},
     sky::Sky,
     terrain::{self, Terrain},
 };
@@ -74,6 +74,7 @@ pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Entity {
         SpawnKind::Terrain => Some(terrain::new_file(world)),
         _ => None,
     };
+    let two_d = world.contains_resource::<TwoD>();
     let mut entity = world.spawn((SceneEntity, Transform::default()));
     match kind {
         // So what goes under it as a group shows.
@@ -95,6 +96,20 @@ pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Entity {
             },
             MeshColor::default(),
         )),
+        // A 2D game's units are pixels.
+        SpawnKind::Rectangle => entity.insert((
+            Name::new("Rectangle"),
+            MeshShape::Rectangle {
+                size: Vec2::splat(100.0),
+            },
+            MeshColor::default(),
+        )),
+        SpawnKind::Circle => entity.insert((
+            Name::new("Circle"),
+            MeshShape::Circle { radius: 50.0 },
+            MeshColor::default(),
+        )),
+        SpawnKind::Camera if two_d => entity.insert((Name::new("Camera"), Camera2d)),
         SpawnKind::Light => entity.insert((
             Name::new("Light"),
             PointLight {
