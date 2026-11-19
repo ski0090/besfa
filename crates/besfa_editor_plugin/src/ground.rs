@@ -99,12 +99,11 @@ pub(crate) fn surface_at(world: &mut World, pointer: Vec2) -> Option<Vec3> {
         .cast_ray(ray, &settings)
         .first()
         .map(|(_, hit)| hit.point);
-    // A 2D game's is the XY plane.
-    let up = if world.contains_resource::<TwoD>() {
-        Vec3::Z
-    } else {
-        Vec3::Y
-    };
+    // A 2D game's is the XY plane, and what goes on a shape goes in front
+    // of it, drawn over it.
+    let two_d = world.contains_resource::<TwoD>();
+    let hit = hit.map(|point| if two_d { point + Vec3::Z } else { point });
+    let up = if two_d { Vec3::Z } else { Vec3::Y };
     let ground = plane_point(Vec3::ZERO, up, ray)
         .filter(|point| (point - ray.origin).dot(*ray.direction) > 0.0);
     Some(hit.or(ground).unwrap_or(focus))

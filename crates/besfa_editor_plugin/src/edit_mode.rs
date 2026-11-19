@@ -282,7 +282,13 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             Ok(())
         }),
         Command::Spawn { kind, place } => {
-            spawn_placed(world, &place, |world| Ok(edit::spawn(world, kind)))
+            let two_d = world.contains_resource::<crate::scene_view::TwoD>();
+            if edit::shows(kind, two_d) {
+                spawn_placed(world, &place, |world| Ok(edit::spawn(world, kind)))
+            } else {
+                let game = if two_d { "2D" } else { "3D" };
+                Err(format!("a {game} game does not show {kind:?}"))
+            }
         }
         Command::Duplicate { id } => entity(id)
             .and_then(|entity| edit::duplicate(world, entity))
@@ -575,12 +581,8 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
         } => {
             if !(inside(&file) && file.ends_with(".png")) {
                 Err(format!("{file} is not a .png path inside the project"))
-            } else if top.is_some()
-                && game != Some(true)
-                && world.contains_resource::<crate::scene_view::TwoD>()
-            {
-                Err("a 2D game has no view from above; give an eye on +Z".into())
             } else {
+                let two_d = world.contains_resource::<crate::scene_view::TwoD>();
                 let view = if game == Some(true) {
                     Shot::game(width, height)
                 } else {
@@ -592,6 +594,13 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
                         height,
                         markers.unwrap_or(false),
                     )
+                    .map(|shot| {
+                        if two_d {
+                            shot.facing_xy(target.into())
+                        } else {
+                            shot
+                        }
+                    })
                 };
                 view.map(|view| shot::request(world, file.clone(), project_file(&file), view))
             }

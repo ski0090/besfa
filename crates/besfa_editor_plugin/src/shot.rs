@@ -107,6 +107,16 @@ impl Shot {
         })
     }
 
+    /// A 2D game's view from above: from +Z onto the XY plane, Y up, `top`
+    /// being the picture's width in pixels. An eye keeps its own view.
+    pub(crate) fn facing_xy(mut self, target: Vec3) -> Self {
+        if matches!(self.projection, Projection::Orthographic(_)) {
+            self.transform = Transform::from_translation(target + Vec3::Z * TOP_HEIGHT)
+                .looking_at(target, Vec3::Y);
+        }
+        self
+    }
+
     /// What the player sees: the game's cameras that draw to the window,
     /// with the game's UI, 1280 by 720 by default, Bevy's window size.
     pub(crate) fn game(width: Option<u32>, height: Option<u32>) -> Result<Self, String> {
@@ -377,6 +387,12 @@ mod tests {
                 .xz()
                 .abs_diff_eq(Vec2::new(10.0, -5.0), 1e-5)
         );
+        // A 2D game's, onto its XY plane.
+        let flat = Shot::new(Vec3::ZERO, None, Some(200.0), None, None, false)
+            .unwrap()
+            .facing_xy(Vec3::new(10.0, 0.0, -5.0));
+        assert!(flat.transform.forward().abs_diff_eq(Vec3::NEG_Z, 1e-5));
+        assert!(flat.transform.up().abs_diff_eq(Vec3::Y, 1e-5));
         let Projection::Orthographic(projection) = shot.projection else {
             panic!("a view from above is orthographic");
         };

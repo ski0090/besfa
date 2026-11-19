@@ -761,6 +761,9 @@ mod tests {
             !saved.contains("640"),
             "the area is left at its default: {saved}"
         );
+        // Unlike a 3D camera's, a 2D camera's projection is not `Projection`'s
+        // default, so it is written even untouched.
+        assert!(saved.contains("Orthographic"), "{saved}");
 
         // A shape switched to 3D draws in 3D.
         app.world_mut()
