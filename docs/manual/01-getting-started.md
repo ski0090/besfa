@@ -45,7 +45,13 @@ cd besfa
 cargo install --path crates/besfa_cli
 ```
 
-`~/.cargo/bin/besfa.exe`가 설치됩니다. 설치됐는지 확인하세요.
+`~/.cargo/bin/besfa.exe`가 설치됩니다.
+
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall)이 있으면 컴파일하지 않고 main에서 빌드해 둔 실행 파일만 받아 설치할 수 있습니다. 저장소 폴더가 아니어도 됩니다. 업데이트할 때도 같은 명령을 씁니다(`--force`는 버전 번호가 같아도 새로 받게 합니다).
+
+```bash
+cargo binstall --git https://github.com/ski0090/besfa besfa_cli --force
+``` 설치됐는지 확인하세요.
 
 ```bash
 besfa --version
