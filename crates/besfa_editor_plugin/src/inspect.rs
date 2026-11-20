@@ -9,7 +9,9 @@
 
 use std::{any::TypeId, io::Write};
 
-use besfa_protocol::{ComponentData, ComponentType, EntityInfo, Report, Shapes, SystemInfo};
+use besfa_protocol::{
+    ComponentData, ComponentType, EntityInfo, Report, ResourceData, Shapes, SystemInfo,
+};
 use bevy::{
     ecs::{
         component::{ComponentId, ComponentInfo},
@@ -366,6 +368,37 @@ fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
     Some(components)
 }
 
+/// The reflected resources whose type path contains `filter`, ignoring
+/// case, or all of them, with their values, by type path.
+pub(crate) fn resources(world: &World, filter: Option<&str>) -> Report {
+    let registry = world.resource::<AppTypeRegistry>().read();
+    let filter = filter.map(str::to_lowercase);
+    let mut resources: Vec<ResourceData> = world
+        .iter_resources()
+        .filter_map(|(id, info, _)| {
+            let registration = registry.get(info.type_id()?)?;
+            registration.data::<ReflectResource>()?;
+            let path = registration.type_info().type_path();
+            if filter
+                .as_ref()
+                .is_some_and(|filter| !path.to_lowercase().contains(filter))
+            {
+                return None;
+            }
+            // A resource is a component of an entity of its own.
+            let entity = world.entity(world.resource_entities().get(id)?);
+            let value = registration.data::<ReflectComponent>()?.reflect(entity)?;
+            Some(ResourceData {
+                path: path.into(),
+                value: json(value.as_partial_reflect(), &registry)
+                    .unwrap_or_else(|_| Value::String(format!("{value:?}"))),
+            })
+        })
+        .collect();
+    resources.sort_by(|a, b| a.path.cmp(&b.path));
+    Report::Resources { resources }
+}
+
 /// What a type says of its fields, by their path in its JSON value, keys
 /// joined by `/` and list items as `*`: the enums of plain variants with the
 /// variants the editor offers, the Options with what one that is None starts
@@ -531,6 +564,38 @@ mod tests {
 
     #[derive(Component)]
     struct Plain;
+
+    #[derive(Resource, Reflect)]
+    #[reflect(Resource)]
+    struct Score {
+        points: u32,
+    }
+
+    /// Not reflected, so not reported.
+    #[derive(Resource)]
+    struct Secret;
+
+    #[test]
+    fn reports_reflected_resources_by_type_path() {
+        let mut app = App::new();
+        app.register_type::<Score>()
+            .insert_resource(Score { points: 7 })
+            .insert_resource(Secret);
+
+        let Report::Resources { resources: score } = resources(app.world(), Some("SCORE")) else {
+            unreachable!()
+        };
+        assert_eq!(score.len(), 1);
+        assert!(score[0].path.ends_with("tests::Score"));
+        assert_eq!(score[0].value, serde_json::json!({"points": 7}));
+
+        let Report::Resources { resources: all } = resources(app.world(), None) else {
+            unreachable!()
+        };
+        let score = |resource: &ResourceData| resource.path.ends_with("tests::Score");
+        assert!(all.iter().any(score));
+        assert!(!all.iter().any(|resource| resource.path.contains("Secret")));
+    }
 
     #[derive(Reflect, Default)]
     #[reflect(Default)]

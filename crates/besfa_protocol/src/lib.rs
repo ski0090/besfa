@@ -63,7 +63,9 @@ use serde_json::Value;
 /// 20. Playing a set number of frames, [`Command::Step`].
 /// 21. 2D games' sprites: [`SpawnKind::Sprite`] with [`Command::Spawn`]'s
 ///     `path`, and PNG images in [`Command::Instantiate`].
-pub const VERSION: u32 = 21;
+/// 22. Reading the game's resources, [`Command::Resources`] answered by
+///     [`Report::Resources`].
+pub const VERSION: u32 = 22;
 
 /// The first protocol whose plugins draw the Hierarchy panel themselves.
 pub const HIERARCHY_PROTOCOL: u32 = 15;
@@ -154,6 +156,13 @@ pub enum Command {
         frames: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seconds: Option<f32>,
+    },
+    /// Reports `resources`: the game's reflected resources whose type path
+    /// contains `path`, ignoring case, or all of them, with their values.
+    /// Since protocol 22.
+    Resources {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     /// Picks the entity whose components the game reports; none clears it.
     Select {
@@ -855,6 +864,8 @@ pub enum Report {
     Scattered { added: Vec<u64>, removed: Vec<u64> },
     /// The answer to `heights`, a height or none for each point.
     Heights { heights: Vec<Option<f32>> },
+    /// The answer to `resources`, in the order of their type paths.
+    Resources { resources: Vec<ResourceData> },
     /// The outcome of `reimport`.
     Reimported { path: String, error: Option<String> },
     /// A report from a newer plugin than this protocol knows.
@@ -1022,6 +1033,15 @@ pub struct ClipInfo {
     pub name: String,
     /// In seconds.
     pub duration: f32,
+}
+
+/// A reflected resource and its value, in the shape `entity` reports a
+/// component's: as the game wrote it, or the way Debug prints it when it
+/// does not serialize.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ResourceData {
+    pub path: String,
+    pub value: Value,
 }
 
 /// A component type the editor can add to an entity.
@@ -1280,6 +1300,12 @@ mod tests {
                     translation: Some([64.0, 32.0, 0.0]),
                     ..Placement::default()
                 },
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"resources","path":"score"}"#).command,
+            Command::Resources {
+                path: Some("score".into())
             }
         );
         assert_eq!(

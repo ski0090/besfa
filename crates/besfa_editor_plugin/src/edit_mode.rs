@@ -323,6 +323,10 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             world.resource_mut::<Selected>().0 = id.and_then(Entity::try_from_bits);
             Ok(())
         }
+        Command::Resources { path } => {
+            send_report(&inspect::resources(world, path.as_deref()));
+            Ok(())
+        }
         Command::Save => {
             let scene = open_scene(world);
             let result = terrain::save(world).and_then(|()| save(world, &asset_file(&scene)));
