@@ -15,7 +15,7 @@ use std::{
 };
 
 use besfa_components::{SwitchScene, TerrainData, scene::start_switch};
-use besfa_protocol::{Command, Placement, Report, Request, VERSION};
+use besfa_protocol::{Command, Placement, Report, Request, SpawnKind, VERSION};
 use bevy::{
     ecs::{message::Messages, resource::IsResource},
     input::InputSystems,
@@ -354,13 +354,18 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             part_changes::edited(world, entity, &component);
             Ok(())
         }),
-        Command::Spawn { kind, place } => {
+        Command::Spawn { kind, path, place } => {
             let two_d = world.contains_resource::<crate::scene_view::TwoD>();
-            if edit::shows(kind, two_d) {
-                spawn_placed(world, &place, |world| Ok(edit::spawn(world, kind)))
-            } else {
-                let game = if two_d { "2D" } else { "3D" };
-                Err(format!("a {game} game does not show {kind:?}"))
+            match path {
+                _ if !edit::shows(kind, two_d) => {
+                    let game = if two_d { "2D" } else { "3D" };
+                    Err(format!("a {game} game does not show {kind:?}"))
+                }
+                None => spawn_placed(world, &place, |world| Ok(edit::spawn(world, kind))),
+                Some(path) if kind == SpawnKind::Sprite && path.ends_with(".png") => {
+                    spawn_placed(world, &place, |world| edit::instantiate(world, &path))
+                }
+                Some(path) => Err(format!("a {kind:?} does not show {path}")),
             }
         }
         Command::Duplicate { id } => entity(id)
@@ -541,9 +546,13 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             }
             Ok(())
         }
-        // Over a panel there is no scene to show the ghost on.
+        // Over a panel there is no scene to show the ghost on, and a 3D
+        // game shows no sprite: refusing it would log every move.
         Command::Ghost { path, pointer } => {
-            let path = path.filter(|_| !panels::covers(world, pointer.into()));
+            let two_d = world.contains_resource::<crate::scene_view::TwoD>();
+            let path = path.filter(|path| {
+                !panels::covers(world, pointer.into()) && (two_d || !path.ends_with(".png"))
+            });
             ground::ghost(world, path.as_deref(), pointer.into())
         }
         // Frames the previewed model, or the selection in the scene view.

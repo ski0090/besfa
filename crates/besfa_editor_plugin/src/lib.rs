@@ -32,10 +32,10 @@ mod viewport;
 pub(crate) use besfa_components::sky;
 pub use besfa_components::{
     AnimationClips, AnimationCondition, AnimationParams, AnimationState, AnimationStateMachine,
-    AnimationStateMachinePlugin, AnimationTransition, ConditionTest, EditorOnly, MeshColor,
-    MeshShape, Moon, PartChange, PartChanges, Reimported, SCENE_PATH, ScatterGroup, Scattered,
-    SceneEntity, Sky, SkyMode, Sun, Terrain, TerrainData, TerrainFile, TerrainHandle,
-    TerrainHeight,
+    AnimationStateMachinePlugin, AnimationTransition, AtlasCell, ConditionTest, EditorOnly,
+    MeshColor, MeshShape, Moon, PartChange, PartChanges, Reimported, SCENE_PATH, ScatterGroup,
+    Scattered, SceneEntity, Sky, SkyMode, SpriteImage, Sun, Terrain, TerrainData, TerrainFile,
+    TerrainHandle, TerrainHeight,
 };
 
 /// [`default_plugins`] for a 2D game: the scene view looks down -Z at the

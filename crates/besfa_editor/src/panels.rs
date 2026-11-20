@@ -38,8 +38,14 @@ pub fn prebuild_status(ui: &mut Ui, prebuild: &Prebuild) {
     };
 }
 
-/// Files the scene can show: glTF models, and scene and prefab files.
+/// Files the scene can show: what the scatter brush places, and the PNG
+/// images a 2D game shows as sprites.
 pub fn can_place(path: &str) -> bool {
+    can_scatter(path) || path.ends_with(".png")
+}
+
+/// Files the scatter brush places: glTF models, and scene and prefab files.
+pub fn can_scatter(path: &str) -> bool {
     can_preview(path) || path.ends_with(".scn.ron")
 }
 
@@ -455,6 +461,7 @@ mod tests {
             ]
         );
         assert!(can_place("models/ship.glb") && can_place("A.scn.ron") && !can_place("b.txt"));
+        assert!(can_place("sprites/crate.png"));
         fs::remove_dir_all(dir).unwrap();
     }
 

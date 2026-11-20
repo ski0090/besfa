@@ -19,7 +19,7 @@ use serde_json::Value;
 use besfa_components::reflect::{self, component_registration, entity_mut};
 
 use crate::{
-    scene::{MeshColor, MeshShape, SceneEntity},
+    scene::{MeshColor, MeshShape, SceneEntity, SpriteImage},
     scene_view::{TwoD, keep_parked},
     sky::Sky,
     terrain::{self, Terrain},
@@ -72,7 +72,7 @@ pub(crate) use besfa_components::reflect::{remove, subtree};
 pub(crate) fn shows(kind: SpawnKind, two_d: bool) -> bool {
     match kind {
         SpawnKind::Empty | SpawnKind::Camera => true,
-        SpawnKind::Rectangle | SpawnKind::Circle => two_d,
+        SpawnKind::Rectangle | SpawnKind::Circle | SpawnKind::Sprite => two_d,
         _ => !two_d,
     }
 }
@@ -118,6 +118,14 @@ pub(crate) fn spawn(world: &mut World, kind: SpawnKind) -> Entity {
             Name::new("Circle"),
             MeshShape::Circle { radius: 50.0 },
             MeshColor::default(),
+        )),
+        // White until its image is set.
+        SpawnKind::Sprite => entity.insert((
+            Name::new("Sprite"),
+            SpriteImage {
+                size: Some(Vec2::splat(100.0)),
+                ..default()
+            },
         )),
         SpawnKind::Camera if two_d => entity.insert((Name::new("Camera"), Camera2d)),
         SpawnKind::Light => entity.insert((
@@ -190,8 +198,9 @@ pub(crate) fn despawn(world: &mut World, entity: Entity) -> Result<(), String> {
 }
 
 /// Spawns a scene entity at the origin that shows an asset, named after its
-/// file: a glTF model's first scene, or a scene or prefab file. The asset's
-/// entities become its children; saving keeps only the asset's path.
+/// file: a glTF model's first scene, or a scene or prefab file, whose
+/// entities become its children and whose path alone is saved, or in a 2D
+/// game a PNG image as a sprite.
 pub(crate) fn instantiate(world: &mut World, path: &str) -> Result<Entity, String> {
     let entity = show_asset(world, path)?;
     world.entity_mut(entity).insert(SceneEntity);
@@ -201,11 +210,22 @@ pub(crate) fn instantiate(world: &mut World, path: &str) -> Result<Entity, Strin
 /// [`instantiate`]'s entity, not yet in the scene.
 pub(crate) fn show_asset(world: &mut World, path: &str) -> Result<Entity, String> {
     let file = path.rsplit('/').next().unwrap_or(path);
+    if let Some(name) = file.strip_suffix(".png") {
+        if !world.contains_resource::<TwoD>() {
+            return Err(format!("a 3D game does not show the sprite {path}"));
+        }
+        let image = SpriteImage {
+            path: path.into(),
+            ..default()
+        };
+        let name = Name::new(name.to_string());
+        return Ok(world.spawn((name, Transform::default(), image)).id());
+    }
     let name = file
         .strip_suffix(".scn.ron")
         .or_else(|| file.strip_suffix(".glb"))
         .or_else(|| file.strip_suffix(".gltf"))
-        .ok_or_else(|| format!("{path} is not a glTF model or a scene file"))?
+        .ok_or_else(|| format!("{path} is not a glTF model, a scene file or a PNG image"))?
         .to_string();
     let assets = world.resource::<AssetServer>().clone();
     let mut entity = world.spawn((Name::new(name), Transform::default()));
@@ -540,6 +560,28 @@ mod tests {
         assert!(set_parent(&mut world, part, None).is_err());
         delete(&mut world, forest).unwrap();
         assert!(parent(&world, forest.to_bits()).is_err(), "deleted");
+    }
+
+    #[test]
+    fn places_png_images_as_sprites_in_a_2d_game_only() {
+        let mut world = world();
+        assert!(instantiate(&mut world, "sprites/crate.png").is_err(), "3D");
+
+        world.insert_resource(TwoD);
+        let placed = instantiate(&mut world, "sprites/crate.png").unwrap();
+        assert_eq!(world.get::<Name>(placed).unwrap().as_str(), "crate");
+        assert!(world.get::<SceneEntity>(placed).is_some());
+        let image = world.get::<SpriteImage>(placed).unwrap();
+        assert_eq!(image.path, "sprites/crate.png");
+        assert_eq!(image.size, None, "the image's own size");
+
+        let blank = spawn(&mut world, SpawnKind::Sprite);
+        let image = world.get::<SpriteImage>(blank).unwrap();
+        assert_eq!(
+            (image.path.as_str(), image.size),
+            ("", Some(Vec2::splat(100.0)))
+        );
+        assert!(shows(SpawnKind::Sprite, true) && !shows(SpawnKind::Sprite, false));
     }
 
     #[test]

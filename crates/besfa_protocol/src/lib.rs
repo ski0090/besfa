@@ -61,7 +61,9 @@ use serde_json::Value;
 ///     scenes other than `scenes/main.scn.ron` this way.
 /// 19. 2D games: [`SpawnKind::Rectangle`] and [`SpawnKind::Circle`].
 /// 20. Playing a set number of frames, [`Command::Step`].
-pub const VERSION: u32 = 20;
+/// 21. 2D games' sprites: [`SpawnKind::Sprite`] with [`Command::Spawn`]'s
+///     `path`, and PNG images in [`Command::Instantiate`].
+pub const VERSION: u32 = 21;
 
 /// The first protocol whose plugins draw the Hierarchy panel themselves.
 pub const HIERARCHY_PROTOCOL: u32 = 15;
@@ -178,6 +180,10 @@ pub enum Command {
     /// Spawns a scene entity where `place` says, reports it and selects it.
     Spawn {
         kind: SpawnKind,
+        /// A sprite's image, relative to the asset directory; since
+        /// protocol 21.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
         #[serde(flatten)]
         place: Placement,
     },
@@ -197,7 +203,9 @@ pub enum Command {
         id: u64,
     },
     /// Spawns an entity showing the asset at `path`, relative to the asset
-    /// directory, where `place` says, then reports and selects it.
+    /// directory, where `place` says, then reports and selects it: a glTF
+    /// model, a scene or prefab file, or in a 2D game a PNG image as a
+    /// sprite (since protocol 21).
     Instantiate {
         path: String,
         #[serde(flatten)]
@@ -531,6 +539,9 @@ pub enum SpawnKind {
     /// A 2D game's flat shapes.
     Rectangle,
     Circle,
+    /// A 2D game's image, from [`Command::Spawn`]'s `path`; a white square
+    /// without one.
+    Sprite,
     Light,
     Camera,
     /// Flat ground 256 meters a side covered by its first surface layer,
@@ -1172,6 +1183,7 @@ mod tests {
             request(r#"{"command":"spawn","kind":"cube","pointer":[640,360]}"#).command,
             Command::Spawn {
                 kind: SpawnKind::Cube,
+                path: None,
                 place: Placement {
                     pointer: Some([640.0, 360.0]),
                     ..Placement::default()
@@ -1203,6 +1215,7 @@ mod tests {
             seq: None,
             command: Command::Spawn {
                 kind: SpawnKind::Empty,
+                path: None,
                 place: Placement::default(),
             },
         })
@@ -1253,7 +1266,20 @@ mod tests {
             request(r#"{"command":"spawn","kind":"terrain"}"#).command,
             Command::Spawn {
                 kind: SpawnKind::Terrain,
+                path: None,
                 place: Placement::default(),
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"spawn","kind":"sprite","path":"sprites/crate.png","translation":[64,32,0]}"#)
+                .command,
+            Command::Spawn {
+                kind: SpawnKind::Sprite,
+                path: Some("sprites/crate.png".into()),
+                place: Placement {
+                    translation: Some([64.0, 32.0, 0.0]),
+                    ..Placement::default()
+                },
             }
         );
         assert_eq!(

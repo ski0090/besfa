@@ -1280,6 +1280,7 @@ impl Editor {
                 self.edit(
                     Command::Spawn {
                         kind,
+                        path: None,
                         place: Placement {
                             pointer,
                             ..Placement::default()

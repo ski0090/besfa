@@ -1,10 +1,10 @@
 //! Loads the game's scene from a file, and another when the game asks.
 //!
 //! A scene is a file such as `assets/scenes/main.scn.ron` in Bevy's RON
-//! world format: the entities and their reflected components. Meshes and
-//! materials are handles, which cannot go in a file, so the file holds a
-//! [`MeshShape`] and a [`MeshColor`] instead and the plugin builds the
-//! assets when it loads.
+//! world format: the entities and their reflected components. Meshes,
+//! materials and sprites hold handles, which cannot all go in a file, so the
+//! file holds a [`MeshShape`], a [`MeshColor`] and a [`SpriteImage`] instead
+//! and the plugin builds them when it loads.
 //!
 //! The game starts in [`first_scene`]. It goes to another scene by writing
 //! [`SwitchScene`]; once that file has loaded, the old scene's entities go,
@@ -19,6 +19,7 @@ use bevy::{
     camera::visibility::VisibilitySystems,
     ecs::{entity::EntityHashMap, entity_disabling::Disabled, name::NameOrEntity, query::Allow},
     prelude::*,
+    sprite::Anchor,
     transform::TransformSystems,
     world_serialization::{DynamicWorld, WorldInstanceSpawnError},
 };
@@ -141,6 +142,48 @@ impl Default for MeshColor {
     }
 }
 
+/// An image the plugin draws as a 2D sprite, and draws again when this
+/// changes. Bevy's `Sprite` holds handles, and a texture atlas made in code
+/// cannot go in a file, so the scene file holds this instead.
+#[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
+#[type_path = "besfa_editor_plugin::scene"]
+#[reflect(Component, Default)]
+pub struct SpriteImage {
+    /// The image file, relative to `assets`; empty draws a white square.
+    pub path: String,
+    /// The point of the image at the entity's origin: (0, 0) its middle,
+    /// (-0.5, -0.5) its bottom left corner, as Bevy's `Anchor`.
+    pub anchor: Vec2,
+    /// Its size in the world, pixels in a 2D game: the image's own, or its
+    /// cell's, when None.
+    pub size: Option<Vec2>,
+    /// The cell to show of an image cut into a grid of cells.
+    pub atlas: Option<AtlasCell>,
+}
+
+/// Cell `index` of an image cut into `columns` by `rows` cells `cell`
+/// pixels wide and high, numbered along each row from the top left.
+#[derive(Reflect, Clone, Copy, Debug, PartialEq)]
+#[type_path = "besfa_editor_plugin::scene"]
+#[reflect(Default)]
+pub struct AtlasCell {
+    pub cell: UVec2,
+    pub columns: u32,
+    pub rows: u32,
+    pub index: usize,
+}
+
+impl Default for AtlasCell {
+    fn default() -> Self {
+        Self {
+            cell: UVec2::splat(32),
+            columns: 1,
+            rows: 1,
+            index: 0,
+        }
+    }
+}
+
 pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
@@ -150,7 +193,7 @@ impl Plugin for ScenePlugin {
             .add_systems(Startup, load)
             .add_systems(PreUpdate, (start_switch, spawn_loaded).chain())
             // After SpawnScene, so a loaded scene gets its meshes this frame.
-            .add_systems(PostUpdate, (build_meshes, build_materials))
+            .add_systems(PostUpdate, (build_meshes, build_materials, build_sprites))
             .add_systems(
                 PostUpdate,
                 adopt_loaded_children
@@ -158,7 +201,8 @@ impl Plugin for ScenePlugin {
                     .before(VisibilitySystems::VisibilityPropagate),
             )
             .add_observer(drop_mesh)
-            .add_observer(drop_material);
+            .add_observer(drop_material)
+            .add_observer(drop_sprite);
     }
 }
 
@@ -383,6 +427,49 @@ pub fn drop_mesh(remove: On<Remove<MeshShape>>, mut commands: Commands) {
         .try_remove::<(Mesh3d, Mesh2d)>();
 }
 
+/// Gives each new or changed [`SpriteImage`] a new `Sprite` and `Anchor`.
+#[doc(hidden)]
+pub fn build_sprites(
+    images: Query<(Entity, &SpriteImage), Changed<SpriteImage>>,
+    assets: Res<AssetServer>,
+    mut layouts: ResMut<Assets<TextureAtlasLayout>>,
+    mut commands: Commands,
+) {
+    for (entity, image) in &images {
+        let texture_atlas = image.atlas.map(|atlas| TextureAtlas {
+            layout: layouts.add(TextureAtlasLayout::from_grid(
+                atlas.cell,
+                atlas.columns,
+                atlas.rows,
+                None,
+                None,
+            )),
+            index: atlas.index,
+        });
+        let sprite = Sprite {
+            image: if image.path.is_empty() {
+                Handle::default()
+            } else {
+                assets.load(&image.path)
+            },
+            texture_atlas,
+            custom_size: image.size,
+            ..default()
+        };
+        commands
+            .entity(entity)
+            .insert((sprite, Anchor(image.anchor)));
+    }
+}
+
+/// Removing the image removes the sprite built from it.
+#[doc(hidden)]
+pub fn drop_sprite(remove: On<Remove<SpriteImage>>, mut commands: Commands) {
+    commands
+        .entity(remove.entity)
+        .try_remove::<(Sprite, Anchor)>();
+}
+
 #[doc(hidden)]
 pub fn drop_material(remove: On<Remove<MeshColor>>, mut commands: Commands) {
     commands.entity(remove.entity).try_remove::<(
@@ -470,6 +557,8 @@ mod tests {
         .init_asset::<Mesh>()
         .init_asset::<StandardMaterial>()
         .init_asset::<ColorMaterial>()
+        .init_asset::<Image>()
+        .init_asset::<TextureAtlasLayout>()
         .register_type::<Name>()
         .register_type::<Transform>()
         .register_type::<ChildOf>();
@@ -564,6 +653,63 @@ mod tests {
         });
         assert_eq!(settle(&mut app), ["scenes/tutorial.scn.ron"]);
         assert!(named(&mut app, "Camp").is_empty(), "main never spawns");
+        fs::remove_dir_all(assets).unwrap();
+    }
+
+    /// A crate standing on its bottom edge, showing cell 5 of a sheet of
+    /// 4 by 2 cells 16 pixels a side.
+    const SPRITES: &str = r#"(
+  resources: {},
+  entities: {
+    1: (components: {
+      "bevy_ecs::name::Name": "Crate",
+      "besfa_editor_plugin::scene::SpriteImage": (
+        path: "sprites/crates.png",
+        anchor: (0.0, -0.5),
+        size: Some((64.0, 48.0)),
+        atlas: Some((cell: (16, 16), columns: 4, rows: 2, index: 5)),
+      ),
+    }),
+  },
+)"#;
+
+    #[test]
+    fn builds_sprites_from_the_images_the_file_names() {
+        let assets = assets("sprites", &[("main", SPRITES)]);
+        let mut app = app(&assets);
+        app.register_type::<SpriteImage>()
+            .register_type::<AtlasCell>();
+        settle(&mut app);
+        let crate_box = named(&mut app, "Crate")[0];
+
+        let world = app.world();
+        let sprite = world.get::<Sprite>(crate_box).expect("a sprite");
+        let path = sprite.image.path().map(ToString::to_string);
+        assert_eq!(path.as_deref(), Some("sprites/crates.png"));
+        assert_eq!(sprite.custom_size, Some(Vec2::new(64.0, 48.0)));
+        let atlas = sprite.texture_atlas.as_ref().expect("an atlas");
+        let layouts = world.resource::<Assets<TextureAtlasLayout>>();
+        let layout = layouts.get(&atlas.layout).unwrap();
+        assert_eq!(layout.textures.len(), 8);
+        assert_eq!(layout.textures[atlas.index], URect::new(16, 16, 32, 32));
+        assert_eq!(
+            world.get::<Anchor>(crate_box).unwrap().0,
+            Vec2::new(0.0, -0.5)
+        );
+
+        app.world_mut()
+            .get_mut::<SpriteImage>(crate_box)
+            .unwrap()
+            .atlas = None;
+        app.update();
+        let sprite = app.world().get::<Sprite>(crate_box).unwrap();
+        assert!(sprite.texture_atlas.is_none(), "drawn again");
+
+        app.world_mut()
+            .entity_mut(crate_box)
+            .remove::<SpriteImage>();
+        app.update();
+        assert!(app.world().get::<Sprite>(crate_box).is_none());
         fs::remove_dir_all(assets).unwrap();
     }
 }

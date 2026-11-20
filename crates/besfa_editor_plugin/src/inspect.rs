@@ -354,7 +354,7 @@ fn components(world: &World, entity: Entity) -> Option<Vec<ComponentData>> {
                 required_by: required_by(id),
                 // Computed from other components, or put on by the game
                 // itself: the scene file leaves it out.
-                saved: info.type_id().is_some_and(|id| !unsaved(world, id)),
+                saved: info.type_id().is_some_and(|id| !unsaved(world, entity, id)),
                 value,
                 shapes: info
                     .type_id()

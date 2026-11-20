@@ -172,7 +172,8 @@ fn tools() -> Value {
                 "`spawned` reports come in the order of the commands that make entities; a failed command shows as {\"type\":\"done\",\"command\":INDEX,\"error\":...}. ",
                 "Entities are the ids `entities` lists; components are named by type path, as `entities` with an id shows them. Commands:\n",
                 "{\"command\":\"instantiate\",\"path\":\"models/oak-tree.glb\",\"translation\":[-55,0,10],\"yaw\":45,\"scale\":1.2,\"name\":\"Oak\",\"parent\":ID} places a model or prefab, relative to assets/; all but path optional; translation and yaw are in the world, yaw in degrees counterclockwise from above\n",
-                "{\"command\":\"spawn\",\"kind\":\"empty|cube|sphere|plane|light|camera\"} takes the same placement; a named empty makes a group; a 2D game has empty|rectangle|circle|camera instead, in pixels on XY, where yaw turns about Z\n",
+                "{\"command\":\"spawn\",\"kind\":\"empty|cube|sphere|plane|light|camera\"} takes the same placement; a named empty makes a group; a 2D game has empty|rectangle|circle|sprite|camera instead, in pixels on XY, where yaw turns about Z\n",
+                "Sprites (2D games): {\"command\":\"spawn\",\"kind\":\"sprite\",\"path\":\"sprites/crate.png\",\"translation\":[64,32,0]} or {\"command\":\"instantiate\",\"path\":\"sprites/crate.png\",...} places a PNG image relative to assets/, named after its file (without a path, a white 100x100 square); it is a besfa_editor_plugin::scene::SpriteImage, which the scene file saves and the game draws as a Bevy Sprite: set it to {\"path\":\"sprites/crate.png\",\"anchor\":[0,-0.5],\"size\":[64,64],\"atlas\":{\"cell\":[32,32],\"columns\":8,\"rows\":4,\"index\":3}} for the point at the entity's origin ([0,0] the middle, [-0.5,-0.5] the bottom left), the size in pixels (null for the image's or cell's own) and a cell of an image cut into equal cells numbered along rows from the top left (null for the whole image); z orders sprites, higher in front\n",
                 "{\"command\":\"parent\",\"id\":ID,\"parent\":ID} moves it under another scene entity, or to the top without parent, staying where it is in the world\n",
                 "{\"command\":\"set\",\"id\":ID,\"component\":PATH,\"value\":{...}} replaces the whole value; left-out fields take defaults\n",
                 "{\"command\":\"insert\",\"id\":ID,\"component\":PATH} / {\"command\":\"remove\",...}\n",
@@ -361,6 +362,11 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 /// The protocol version a game must speak to run `command`.
 fn since(command: &Command) -> u32 {
     match command {
+        Command::Spawn {
+            kind: SpawnKind::Sprite,
+            ..
+        } => 21,
+        Command::Instantiate { path, .. } if path.ends_with(".png") => 21,
         Command::Step { .. } => 20,
         Command::Spawn {
             kind: SpawnKind::Rectangle | SpawnKind::Circle,
@@ -925,6 +931,10 @@ mod tests {
         assert_eq!(since(shot(false)), 4);
         assert_eq!(since(json!({"command": "spawn", "kind": "circle"})), 19);
         assert_eq!(since(json!({"command": "step", "frames": 2})), 20);
+        let sprite = json!({"command": "spawn", "kind": "sprite", "path": "a.png"});
+        assert_eq!(since(sprite), 21);
+        let png = json!({"command": "instantiate", "path": "a.png"});
+        assert_eq!(since(png), 21);
 
         let good = call(&mut game, json!({"command": "spawn", "kind": "cube"}));
         assert_eq!(good["isError"], true);

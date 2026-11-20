@@ -330,9 +330,22 @@ fn give_back(world: &mut World, borrowed: Vec<Borrowed>) {
     }
 }
 
-/// Placed models and prefabs still loading or spawning, which a picture
-/// would miss. One that failed to load is not waited for.
+/// Placed models and prefabs still loading or spawning, or sprites' images
+/// still loading, which a picture would miss. One that failed to load is
+/// not waited for.
 fn loading(world: &mut World) -> bool {
+    let mut sprites = world.query::<&Sprite>();
+    let server = world.resource::<AssetServer>();
+    let image_loading = |sprite: &Sprite| {
+        let id = sprite.image.id().untyped();
+        // A handle with no path, as a white square's, is not loaded from disk.
+        sprite.image.path().is_some()
+            && !matches!(server.load_state(id), LoadState::Failed(_))
+            && !server.is_loaded_with_dependencies(id)
+    };
+    if sprites.iter(world).any(image_loading) {
+        return true;
+    }
     let mut roots = world.query_filtered::<(
         Option<&WorldAssetRoot>,
         Option<&DynamicWorldRoot>,
