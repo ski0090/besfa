@@ -41,6 +41,8 @@ Claude Code는 `besfa mcp`로 게임을 **창 없이** 편집 상태로 띄우�
 
 `besfa mcp`는 한 번에 게임 하나만 띄웁니다. Claude Code를 닫으면 띄운 게임도 함께 꺼집니다.
 
+게임을 자동으로 확인할 때는 실제 시간을 기다리지 말고 정해진 만큼만 진행시키세요. `{"command":"step","frames":10}`은 정확히 10프레임, `{"command":"step","seconds":0.5}`는 게임 시간 0.5초(가장 가까운 정수 프레임)만큼 플레이하고 다시 멈춥니다. 프레임마다 게임 시간은 벽시계가 아니라 고정 시간 간격(따로 정하지 않으면 1/64초)만큼 흐르므로 `FixedUpdate`가 프레임마다 한 번 돌고, 같은 명령은 실행할 때마다 같은 결과를 냅니다. Play 전이면 Play부터 하되 실제 시간이 흐르는 프레임 없이 시작합니다. 마우스는 `pointer` 명령으로 넣습니다. 게임은 `Window::cursor_position`과 `Camera::viewport_to_world_2d`로 창이 있을 때처럼 읽습니다([Play와 저장](05-play-and-save.md#게임-코드를-쓰는-사람을-위한-참고)).
+
 ## 이미지 만들기
 
 Claude는 그림을 그리지 못하므로, `besfa mcp`가 OpenAI의 이미지 API로 그림을 그려 프로젝트에 PNG로 저장합니다. UI 아이콘, 버튼, 패널 조각에 씁니다. 예: "`assets/ui/coin.png`에 금화 아이콘을 투명 배경으로 그려 줘".

@@ -60,7 +60,8 @@ use serde_json::Value;
 ///     `assets`, which [`Command::Save`] then writes; the editor opens
 ///     scenes other than `scenes/main.scn.ron` this way.
 /// 19. 2D games: [`SpawnKind::Rectangle`] and [`SpawnKind::Circle`].
-pub const VERSION: u32 = 19;
+/// 20. Playing a set number of frames, [`Command::Step`].
+pub const VERSION: u32 = 20;
 
 /// The first protocol whose plugins draw the Hierarchy panel themselves.
 pub const HIERARCHY_PROTOCOL: u32 = 15;
@@ -139,6 +140,19 @@ pub enum Command {
     /// [`Report::Hello`] and the reports that follow it as a new game does.
     /// Since protocol 13.
     Reset,
+    /// Plays `frames` frames, or the `seconds` of game time nearest a whole
+    /// number of frames, then pauses virtual time again, and answers once
+    /// they have run; what comes after waits for them. Each frame moves
+    /// virtual time on by one fixed timestep, so `FixedUpdate` runs once a
+    /// frame and the same steps play the same every run. Before play it
+    /// starts play first, as `play` does, without a frame of real time;
+    /// 0 frames only starts it. Since protocol 20.
+    Step {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frames: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seconds: Option<f32>,
+    },
     /// Picks the entity whose components the game reports; none clears it.
     Select {
         id: Option<u64>,
@@ -1240,6 +1254,13 @@ mod tests {
             Command::Spawn {
                 kind: SpawnKind::Terrain,
                 place: Placement::default(),
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"step","seconds":0.5}"#).command,
+            Command::Step {
+                frames: None,
+                seconds: Some(0.5)
             }
         );
         assert_eq!(

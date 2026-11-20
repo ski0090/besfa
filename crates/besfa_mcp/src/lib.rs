@@ -194,6 +194,7 @@ fn tools() -> Value {
                 "{\"command\":\"key\",\"code\":\"KeyW\",\"pressed\":true} holds a key down in the playing game until the same with pressed false; codes are Bevy KeyCode names like KeyW, ShiftLeft, Space\n",
                 "{\"command\":\"pointer\",\"event\":\"move\",\"x\":640,\"y\":360} moves the mouse, in pixels of the game's 1280x720 view from its top left; {\"command\":\"pointer\",\"event\":\"down\",\"x\":640,\"y\":360,\"button\":\"left\"} presses a button (left, middle or right) there and \"event\":\"up\" lets it go, and {\"command\":\"pointer\",\"event\":\"scroll\",\"delta\":120} scrolls, positive down; before play it drives the editor's scene view instead (orbit, pan, select), after play it is the game's mouse: ButtonInput<MouseButton>, CursorMoved, MouseMotion and MouseWheel, and the primary Window's cursor_position, which Camera::viewport_to_world_2d and viewport_to_world take as in a window (a plugin from before this keeps the window's cursor empty); a command after a pointer runs in the next frame, once the game's Update has seen it\n",
                 "{\"command\":\"play\"} unpauses the game\n",
+                "{\"command\":\"step\",\"frames\":10} or {\"command\":\"step\",\"seconds\":0.5} plays exactly that many frames, or the seconds of game time rounded to whole frames, then pauses again, the same every run: each frame moves virtual time on by one fixed timestep (1/64 s unless the game sets Time<Fixed> otherwise) instead of the wall clock's, so FixedUpdate runs once a frame; before play it starts play first, as play does, without letting real time run, and frames 0 only starts it; the commands after it wait until its frames ran; a frame takes about 1/60 s of real time, so give timeout_secs for long steps; Update systems also run in paused frames, so count frames by Time's delta, not by Update runs\n",
                 "{\"command\":\"reset\"} ends play without restarting the game: what it made goes, the scene file loads again as last saved, Startup runs again, and the game is paused in edit mode as after start; unsaved edits are lost\n",
                 "Screenshot, thumbnail and reimport are waited for until their answer comes. An unknown command is refused with the list of valid ones.",
             ),
@@ -360,6 +361,7 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 /// The protocol version a game must speak to run `command`.
 fn since(command: &Command) -> u32 {
     match command {
+        Command::Step { .. } => 20,
         Command::Spawn {
             kind: SpawnKind::Rectangle | SpawnKind::Circle,
             ..
@@ -922,6 +924,7 @@ mod tests {
         );
         assert_eq!(since(shot(false)), 4);
         assert_eq!(since(json!({"command": "spawn", "kind": "circle"})), 19);
+        assert_eq!(since(json!({"command": "step", "frames": 2})), 20);
 
         let good = call(&mut game, json!({"command": "spawn", "kind": "cube"}));
         assert_eq!(good["isError"], true);
