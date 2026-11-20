@@ -27,6 +27,7 @@ use bevy::{
     prelude::*,
     render::view::screenshot::{Screenshot, ScreenshotCaptured},
     transform::TransformSystems,
+    window::RawHandleWrapper,
     world_serialization::{
         WorldAssetRoot, WorldInstance, WorldInstanceReady, WorldInstanceSpawner,
     },
@@ -332,9 +333,14 @@ pub(crate) fn screenshot(world: &mut World, path: String, file: PathBuf) -> Resu
         .find(|(camera, _)| camera.is_active)
         .map(|(_, target)| target.clone())
         .ok_or("no model is previewed")?;
-    // Headless, Bevy would skip the capture every frame and never report.
+    // Headless, Bevy would skip the capture every frame and never report:
+    // the window the plugin gives such a game has no surface to draw on.
     if matches!(target, RenderTarget::Window(_))
-        && world.query::<&Window>().iter(world).next().is_none()
+        && world
+            .query_filtered::<(), (With<Window>, With<RawHandleWrapper>)>()
+            .iter(world)
+            .next()
+            .is_none()
     {
         return Err("the game has no window or viewport to picture the preview in".into());
     }

@@ -321,6 +321,12 @@ fn give_back(world: &mut World, borrowed: Vec<Borrowed>) {
         if borrowed.ui {
             camera.remove::<IsDefaultUiCamera>();
         }
+        // Bevy works a camera's size out again only when its projection or
+        // its target's size changes, so it would keep the picture's, and
+        // turning the pointer into the world would go by it.
+        if let Some(mut projection) = camera.get_mut::<Projection>() {
+            projection.set_changed();
+        }
     }
 }
 
@@ -373,6 +379,22 @@ fn captured(capture: On<ScreenshotCaptured>, mut commands: Commands) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_camera_given_back_works_its_size_out_again() {
+        let mut world = World::new();
+        let camera = world.spawn((Camera::default(), Projection::default())).id();
+        world.clear_trackers();
+        let borrowed = Borrowed {
+            camera,
+            target: RenderTarget::default(),
+            active: true,
+            ui: false,
+        };
+
+        give_back(&mut world, vec![borrowed]);
+        assert!(world.entity(camera).get_ref::<Projection>().unwrap().is_changed());
+    }
 
     #[test]
     fn looks_down_with_north_up_from_above() {

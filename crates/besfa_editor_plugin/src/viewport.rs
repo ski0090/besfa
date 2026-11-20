@@ -17,7 +17,7 @@ use bevy::{
         renderer::{RenderDevice, RenderGraph, RenderGraphSystems, RenderQueue},
         texture::{ManualTextureView, ManualTextureViews},
     },
-    window::WindowRef,
+    window::{PrimaryWindow, WindowRef},
 };
 
 pub(crate) const VIEWPORT_HANDLE: ManualTextureViewHandle = ManualTextureViewHandle(0xBE5FA);
@@ -108,6 +108,7 @@ fn open_viewport(
     mut views: ResMut<ManualTextureViews>,
     mut exit: MessageWriter<AppExit>,
     opened: Option<Res<ViewportTexture>>,
+    mut window: Query<&mut Window, With<PrimaryWindow>>,
 ) {
     // Stop runs the startup schedules again in this process. The viewport is
     // still open, and after a resize it is another texture than the one
@@ -128,6 +129,9 @@ fn open_viewport(
 
     let viewport = ViewportTexture::new(&device, texture);
     let size = show(&mut views, &viewport);
+    if let Ok(mut window) = window.single_mut() {
+        window.resolution.set_physical_resolution(size.x, size.y);
+    }
     commands.insert_resource(viewport);
     info!("Rendering into the editor viewport {}x{}.", size.x, size.y);
 }
@@ -159,6 +163,11 @@ pub(crate) fn reopen(world: &mut World, name: &str) -> Result<(), String> {
     let viewport = ViewportTexture::new(&device, texture);
     let size = show(&mut world.resource_mut::<ManualTextureViews>(), &viewport);
     world.insert_resource(viewport);
+    // The game's window, whose size its pointer and code go by.
+    let mut window = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
+    if let Ok(mut window) = window.single_mut(world) {
+        window.resolution.set_physical_resolution(size.x, size.y);
+    }
     // Cameras recompute their target's size when their projection changes.
     let mut projections = world.query_filtered::<&mut Projection, With<Camera>>();
     for mut projection in projections.iter_mut(world) {

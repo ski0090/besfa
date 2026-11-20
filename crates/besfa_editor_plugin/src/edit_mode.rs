@@ -132,6 +132,7 @@ fn reset(world: &mut World) {
     world.insert_resource(shot::Shots::default());
     world.insert_resource(thumbnail::Thumbnails::default());
     world.remove_resource::<input::LastPointer>();
+    input::set_cursor(world, None);
     panels::reset(world);
     world.insert_resource(Time::<Virtual>::default());
 
