@@ -12,6 +12,7 @@ Besfa는 두 부분을 따로 업데이트합니다.
 - [에디터와 CLI 업데이트](#에디터와-cli-업데이트)
 - [게임의 플러그인 업데이트](#게임의-플러그인-업데이트)
 - [릴리스 빌드에는 에디터가 들어가지 않습니다](#릴리스-빌드에는-에디터가-들어가지-않습니다)
+- [병합 전 Besfa로 게임 빌드하기](#병합-전-besfa로-게임-빌드하기)
 
 ## 에디터와 CLI 업데이트
 
@@ -80,6 +81,68 @@ cargo update -p besfa_editor_plugin
 ```bash
 cargo build --release
 ```
+
+## 병합 전 Besfa로 게임 빌드하기
+
+Besfa와 게임을 함께 고칠 때는, `main`에 합치기 전의 Besfa 체크아웃이나 브랜치로 게임을 빌드해 새 기능을 바로 씁니다. 바꿀 것은 세 가지입니다. 게임의 플러그인, `besfa mcp` 같은 CLI, 그리고 끝난 뒤 되돌리기입니다.
+
+### 1. 게임의 플러그인을 체크아웃으로 바꾸기
+
+게임의 `Cargo.toml` 맨 끝에 붙입니다. 경로는 Besfa 체크아웃(또는 워크트리)의 `crates` 폴더이고, 슬래시(`/`)로 씁니다.
+
+```toml
+[patch."https://github.com/ski0090/besfa"]
+besfa_components = { path = "C:/codes/besfa/crates/besfa_components" }
+besfa_editor_plugin = { path = "C:/codes/besfa/crates/besfa_editor_plugin" }
+# 게임이 besfa_net도 쓰면:
+# besfa_net = { path = "C:/codes/besfa/crates/besfa_net" }
+```
+
+- 경로를 쓰면 게임은 그 폴더의 지금 파일을 씁니다. 아직 커밋하지 않은 고침도 다음 빌드에 들어갑니다.
+- 고침이 나뉘어 있어 커밋한 브랜치를 고정해 쓰고 싶으면 경로 대신 로컬 저장소의 브랜치를 씁니다. `Cargo.lock`이 그 커밋을 기억하고, 새 커밋은 `cargo update -p besfa_editor_plugin`으로 받습니다.
+
+  ```toml
+  [patch."https://github.com/ski0090/besfa"]
+  besfa_components = { git = "file:///C:/codes/besfa", branch = "my-branch" }
+  besfa_editor_plugin = { git = "file:///C:/codes/besfa", branch = "my-branch" }
+  ```
+
+- 처음 빌드(`besfa build`나 에디터의 Run)는 Besfa 크레이트만 그 경로에서 새로 빌드합니다. Bevy는 공유 빌드를 그대로 씁니다.
+- 워크트리를 가리켰다면 그 워크트리를 지우기 전에 패치를 되돌리세요. 경로가 사라지면 게임이 빌드되지 않습니다.
+- 에디터 툴바의 플러그인 업데이트 아이콘은 경로로 쓰는 플러그인에는 나오지 않습니다. 에디터보다 새 프로토콜이면 ⚠가 나오는데, 그 브랜치의 에디터를 쓰지 않는 한 그대로 두면 됩니다.
+
+### 2. 같은 체크아웃의 CLI 쓰기
+
+`besfa mcp`는 자기가 빌드될 때 알던 명령만 받습니다. 그래서 브랜치에 생긴 명령(`step` 등)을 쓰려면 CLI도 그 체크아웃에서 빌드해야 합니다. 설치한 `besfa`를 덮어쓰지 않으려면 따로 둘 폴더(`--root`)에 설치합니다.
+
+```powershell
+cargo install --locked --force --path C:/codes/besfa/crates/besfa_cli --root C:/codes/besfa-cli-branch
+```
+
+브랜치가 바뀌면 같은 명령을 다시 실행합니다. 그리고 게임의 `.mcp.json`이 그 실행 파일을 쓰게 합니다. Claude Code를 다시 시작하면 반영됩니다.
+
+```json
+{
+  "mcpServers": {
+    "besfa": {
+      "command": "C:/codes/besfa-cli-branch/bin/besfa.exe",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+`besfa screenshot`, `besfa build`, `besfa test`도 같은 실행 파일로 부르세요(`C:/codes/besfa-cli-branch/bin/besfa.exe test`). 설치한 `besfa` 자체를 바꾸려면 [에디터와 CLI 업데이트](#에디터와-cli-업데이트)처럼 `--root` 없이 설치합니다. 에디터의 Bevy 미리 빌드도 그 CLI를 쓰니, 브랜치가 아직 합쳐지지 않았다면 따로 두는 쪽이 안전합니다.
+
+### 3. 되돌리기
+
+브랜치가 `main`에 합쳐지면 `[patch.…]` 줄을 지우고 게임 폴더에서 플러그인을 GitHub의 것으로 되돌립니다.
+
+```bash
+cargo update -p besfa_editor_plugin
+```
+
+`.mcp.json`의 `command`는 다시 `besfa`로 바꾸고, 설치한 CLI를 [업데이트](#에디터와-cli-업데이트)합니다.
 
 ---
 
