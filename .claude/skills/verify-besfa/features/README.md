@@ -10,6 +10,7 @@ server, which sends the same `besfa_protocol` commands the editor's UI sends.
 - A throwaway project from `new-game.ps1`, patched to the checkout under test,
   built, started with `mcp__besfa__start`, and answering `mcp__besfa__entities`
   with the template's `Cube`, `Light` and `Camera` (see `../SKILL.md`, Launch).
+  The 2D recipe needs `-Template 2d` instead, whose game answers `Square` and `Camera`.
 - `doctor.ps1 -Project <project>` prints no `FAIL`.
 - Never drive a project the user's editor has open, or one this run did not create.
 
@@ -44,7 +45,11 @@ four H2s in this order: `Sub-features`, `How to get to it (user POV)`,
 - [Terrain](./terrain.md): create ground, sculpt and paint it, save its `.terrain` file.
 - [Assets and prefabs](./assets-prefabs.md): place a glTF model, thumbnail, save and place a prefab.
 - [Panels the game draws](./panels.md): the Hierarchy in the viewport, clicked with `pointer` commands.
+- [Scene files](./scenes.md): open another scene, make a new one by saving, and a game that switches scenes at Play.
+- [2D games](./two-d.md): the 2D template, flat shapes in pixels, 3D kinds refused, shots from +Z.
 
 Not mapped yet (add a file when a change touches them): scatter brush, sky,
 animation state machines, model preview, undo/redo (editor-side history), net
-Play (server and clients), the project hub.
+Play (server and clients), the project hub. `generate_image` is not mapped on
+purpose: every call bills the user's OpenAI account, so never call it in a proof
+without their go-ahead.

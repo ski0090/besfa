@@ -1,6 +1,6 @@
 ---
 name: verify-besfa
-description: Prove a Besfa change works by running a real game the way the editor does, headless, through the besfa MCP server (start, send editor commands, list entities, save, screenshot) against a throwaway project built from this checkout's crates. Use after changing besfa_editor_plugin, besfa_components, besfa_protocol or besfa_mcp, or to check scene editing, saving, terrain, assets or scatter end to end. The egui editor UI itself is a secondary surface (see the end).
+description: Prove a Besfa change works by running a real game the way the editor does, headless, through the besfa MCP server (start, send editor commands, list entities, save, screenshot) against a throwaway 3D or 2D project built from this checkout's crates. Use after changing besfa_editor_plugin, besfa_components, besfa_protocol, besfa_mcp or the besfa_cli templates, or to check scene editing, saving, opening and switching scene files, 2D games, terrain, assets or scatter end to end. The egui editor UI itself is a secondary surface (see the end).
 ---
 
 # Verify Besfa
@@ -27,27 +27,35 @@ is patched to its crates.
    overwrite each other's exe.
 2. **Make the project.**
    ```powershell
-   pwsh -NoProfile -File .claude/skills/verify-besfa/new-game.ps1 -Parent <run folder>
+   pwsh -NoProfile -File .claude/skills/verify-besfa/new-game.ps1 -Parent <run folder> [-Template 2d]
    ```
    It builds this checkout's `besfa` CLI (the installed `~/.cargo/bin/besfa.exe`
    can trail the template, so never use it here and never reinstall it: the
-   user's editor runs it for its prebuild). It also runs `besfa new` and appends a
+   user's editor runs it for its prebuild). It also runs `besfa new` (the 3D
+   template unless `-Template 2d`) and appends a
    `[patch]` that points `besfa_components` and `besfa_editor_plugin` at this
    checkout. It prints the project path. That is `<project>` below.
+   In a worktree, which has no `target/` of its own, set
+   `$env:CARGO_TARGET_DIR = '<main checkout>\target'` (see Evidence) in the same PowerShell call, so
+   the CLI builds in seconds instead of from cold. The script drops it before `besfa new`.
 3. **Build in the background** (Bash tool with `run_in_background`, no `timeout` wrapper,
    which would kill rustc mid-crate):
    ```bash
-   cd <project> && cargo build --features bevy/dynamic_linking,besfa_editor 2>&1 | grep -v Compiling | tail -20
+   cd <project> && env -u CARGO_TARGET_DIR cargo build --features bevy/dynamic_linking,besfa_editor 2>&1 | grep -v Compiling | tail -20
    ```
+   `CARGO_TARGET_DIR` must not reach this build: it beats the project's
+   `.cargo/config.toml` and would build all of Bevy from cold in another folder.
    Expect about 1-3 min when Bevy is already in the shared target. Cargo
    prints `Blocking waiting for file lock on build directory` while another session's
    game builds, and waits. That is fine. A Bevy version change or a
-   cold target takes 15-35 min.
+   cold target takes 15-35 min. Check `Get-PSDrive C` first: a cold Bevy build
+   takes about 10 GB.
 4. **Start.** `mcp__besfa__start` with `project` = `<project>`. It returns as soon as cargo
-   starts.
+   starts. Add `scene` (relative to `assets/`) to open another scene file, and
+   `args` for the game's own arguments.
 5. **Ready = the scene file has loaded.** `mcp__besfa__entities` with `timeout_secs: 300`
-   returns the template's `Cube`, `Light` and `Camera`. Until then the game is
-   still linking or loading, and `save` is refused.
+   returns the template's `Cube`, `Light` and `Camera` (3D), or `Square` and
+   `Camera` (2D). Until then the game is still linking or loading, and `save` is refused.
 
 ## Doctor
 
@@ -58,10 +66,11 @@ pwsh -NoProfile -File .claude/skills/verify-besfa/doctor.ps1 -Project <project>
 ```
 
 It checks, read-only: the manifest is patched to this checkout. The scene file
-exists. `target/debug/besfa.exe` is newer than the last CLI/MCP commit. Whether
-another build is compiling into the shared target, and whether `besfa_editor.exe` is running.
+exists. The CLI `new-game.ps1` built is newer than the last CLI/MCP commit (in a
+worktree, give the doctor the same `CARGO_TARGET_DIR` you gave `new-game.ps1`, or this
+line fails). Whether a build is compiling into the shared target, and whether `besfa_editor.exe` is running.
 Whether this run's game exe is up. Every `FAIL` line must be fixed before driving. A
-`WARN` about another build only means waiting.
+`WARN` about a build only means waiting.
 
 `mcp__besfa__send` errors also diagnose: "The game is not up yet" means it is
 still building. "The game exited" comes with the log, so read the first error
@@ -81,6 +90,8 @@ Use the `mcp__besfa__*` tools (this repo's `.mcp.json` serves them from
   `save_prefab`, `screenshot`, `thumbnail`, `terrain_stroke`, `terrain_fill`,
   `heights`, `scatter`, `scatter_erase`, `play`, `key`.
 - `stop` kills the game and cargo. Unsaved changes are gone.
+- Never call `generate_image` in a proof without the user's go-ahead: each call bills
+  their OpenAI account.
 
 Address entities by the ids that `spawned` reports or that `entities` lists. Ids
 change on every start, so look them up again after a restart. A failed command
@@ -105,8 +116,10 @@ the game when its input ends. Use the same helper when the session has no
 
 ## Evidence
 
-Put proof in `<checkout>/target/verify-besfa/<run name>/`. `target/` is git-ignored and
-lives outside the throwaway project, so cleanup cannot delete it. For each
+Put proof in `<main checkout>/target/verify-besfa/<run name>/`, where the main
+checkout is the first line of `git worktree list` (the checkout itself when you
+are not in a worktree). `target/` is git-ignored and lives outside the throwaway
+project and any worktree, so cleanup cannot delete it. For each
 feature you verify, keep:
 
 - the command batch you sent and the reports it returned (`<feature>.reports.txt`),
@@ -139,7 +152,16 @@ effects on disk, not only the reports.
    ```
    Never run `cargo clean` in a game project: it wipes the shared target that
    every game and the user's editor use.
-4. Confirm `target/verify-besfa/<run name>/` still holds the evidence.
+   **From a worktree you will remove,** also delete the besfa crates the game
+   compiled from that worktree's path (~630 MB, and the editor's prune never
+   matches them). Only units whose dep-info names the worktree are touched. Skip
+   this for the main checkout, whose units the next run reuses:
+   ```powershell
+   $wt = '<worktree path>'; $d = "$env:LOCALAPPDATA\Besfa\target\debug"
+   Get-ChildItem "$d\deps\besfa_*.d" | Where-Object { Select-String -Path $_ -SimpleMatch "$wt\crates\" -Quiet } | ForEach-Object {
+       $u = $_.BaseName; Remove-Item -Recurse -Force "$d\deps\lib$u.*", $_.FullName, "$d\.fingerprint\$u" -ErrorAction SilentlyContinue; $u }
+   ```
+4. Confirm `<main checkout>/target/verify-besfa/<run name>/` still holds the evidence.
 
 ## Isolation
 
@@ -167,6 +189,10 @@ effects on disk, not only the reports.
 - `new-game.ps1` builds this checkout's CLI into the workspace `target/`, but it does not
   install it. A change to the project template is tested by running
   `new-game.ps1` again.
+- Testing a `crates/besfa_cli` change from a worktree: run `new-game.ps1` without
+  `CARGO_TARGET_DIR` (a cold CLI build of a few minutes). Every checkout builds the
+  CLI to the same unhashed `besfa.exe`, so in a shared target another checkout's
+  build can be the one you run, with its template.
 
 ## The editor UI (secondary, not driven by this recipe)
 

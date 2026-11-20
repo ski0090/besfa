@@ -17,14 +17,16 @@ $crates = ($checkout -replace '\\', '/') + '/crates'
 Say ($manifest -like "*besfa_editor_plugin = { path = `"$crates/besfa_editor_plugin`" }*") "game is patched to this checkout ($crates)"
 Say (Test-Path "$Project/assets/scenes/main.scn.ron") 'scene file assets/scenes/main.scn.ron exists'
 
-$cli = Get-Item "$checkout/target/debug/besfa.exe" -ErrorAction SilentlyContinue
+# The CLI new-game.ps1 built: in CARGO_TARGET_DIR when set, as for a worktree.
+$target = (cargo metadata -q --no-deps --format-version 1 --manifest-path "$checkout/Cargo.toml" | ConvertFrom-Json).target_directory
+$cli = Get-Item "$target/debug/besfa.exe" -ErrorAction SilentlyContinue
 $cliChanged = [datetime](git -C $checkout log -1 --format=%cI -- crates/besfa_cli crates/besfa_mcp)
-Say ($cli -and $cli.LastWriteTime -ge $cliChanged) "target/debug/besfa.exe is newer than the last CLI commit ($cliChanged)"
+Say ($cli -and $cli.LastWriteTime -ge $cliChanged) "$target\debug\besfa.exe is newer than the last CLI commit ($cliChanged)"
 
 $shared = "$env:LOCALAPPDATA\Besfa\target"
 $procs = Get-CimInstance Win32_Process -Filter "Name='rustc.exe' or Name='cargo.exe' or Name='besfa_editor.exe'"
 $others = $procs | Where-Object { $_.Name -eq 'rustc.exe' -and $_.CommandLine -like '*Besfa*target*' -and $_.CommandLine -notlike "*--crate-name $name *" }
-if ($others) { Say 'warn' "another build is compiling into $shared (cargo waits for its lock): rustc pids $($others.ProcessId -join ', ')" }
+if ($others) { Say 'warn' "a build is compiling into $shared (this run's own while it builds the plugin, else another; cargo waits for its lock): rustc pids $($others.ProcessId -join ', ')" }
 else { Say $true "no other build in $shared" }
 $editors = $procs | Where-Object Name -eq 'besfa_editor.exe'
 if ($editors) { Say 'warn' "besfa_editor.exe is running (pids $($editors.ProcessId -join ', ')); never open this project in it" }
