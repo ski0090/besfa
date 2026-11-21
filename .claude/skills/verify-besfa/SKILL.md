@@ -83,8 +83,11 @@ Use the `mcp__besfa__*` tools (this repo's `.mcp.json` serves them from
 
 - `entities`: no args lists scene entities (`id`, `name`, `parent`, `scene` =
   kept by the scene file, `asset`). Filter with `name`, `asset` or `parent`. With `id`, it returns that
-  entity's components as JSON and selects it.
-- `send` with `commands: [...]` runs editor commands in order and returns the reports. Its tool
+  entity's components as JSON and selects it; with `component` as well (a type path or short name),
+  only that component's value.
+- `send` with `commands: [...]` runs editor commands in order and returns the reports. A command
+  after a `screenshot`, `thumbnail` or `reimport` is sent once that answer came, so a picture shows
+  the game before what follows it. Its tool
   description lists every command and its fields. The ones the map uses:
   `spawn`, `set`, `instantiate`, `duplicate`, `delete`, `restore`, `save`,
   `save_prefab`, `screenshot`, `thumbnail`, `terrain_stroke`, `terrain_fill`,
