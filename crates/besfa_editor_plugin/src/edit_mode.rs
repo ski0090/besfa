@@ -50,8 +50,6 @@ pub(crate) struct EditorCommands(pub(crate) Mutex<mpsc::Receiver<String>>);
 
 impl Plugin for EditModePlugin {
     fn build(&self, app: &mut App) {
-        // The first line, so the editor knows what this plugin understands.
-        send_report(&Report::Hello { version: VERSION });
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             for line in std::io::stdin().lines().map_while(Result::ok) {
@@ -74,12 +72,26 @@ impl Plugin for EditModePlugin {
             .add_systems(PreUpdate, hold_switches.before(start_switch));
     }
 
+    /// The first line, so the editor knows what this plugin understands,
+    /// once every plugin has said whether the game is 2D; before the
+    /// reports other plugins send as they clean up.
+    fn finish(&self, app: &mut App) {
+        send_report(&hello(app.world()));
+    }
+
     /// Before any schedule runs, so what PreStartup spawns, like a physics
     /// plugin's context, is made again by a reset rather than kept twice.
     fn cleanup(&self, app: &mut App) {
         let world = app.world_mut();
         let all = non_resources(world);
         world.insert_resource(Baseline(all));
+    }
+}
+
+fn hello(world: &World) -> Report {
+    Report::Hello {
+        version: VERSION,
+        two_d: world.contains_resource::<scene_view::TwoD>(),
     }
 }
 
@@ -185,7 +197,7 @@ fn reset(world: &mut World) {
     world.insert_resource(Time::<Virtual>::default());
 
     reload_files(world);
-    send_report(&Report::Hello { version: VERSION });
+    send_report(&hello(world));
     send_report(&inspect::systems(world));
     send_report(&inspect::addable_components(world));
     world.run_schedule(PreStartup);
@@ -300,21 +312,26 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::Step { frames, seconds } => {
-            let timestep = world.resource::<Time<Fixed>>().timestep().as_secs_f64();
-            let frames = match (frames, seconds) {
-                (Some(frames), None) => frames,
-                (None, Some(seconds)) if seconds >= 0.0 && seconds.is_finite() => {
-                    (f64::from(seconds) / timestep).round() as u32
+            // Game time a frame takes: a timestep at the game's speed.
+            let frame = world.resource::<Time<Fixed>>().timestep().as_secs_f64()
+                * world.resource::<Time<Virtual>>().relative_speed_f64();
+            match (frames, seconds) {
+                (Some(frames), None) => Ok(frames),
+                (None, Some(seconds)) if seconds >= 0.0 && seconds.is_finite() && frame > 0.0 => {
+                    Ok((f64::from(seconds) / frame).round() as u32)
                 }
-                _ => return Err("step takes frames or seconds of 0 or more".into()),
-            };
-            if world.resource::<HeldSwitches>().0.is_some() {
-                play(world);
+                _ => Err("step takes frames or seconds of 0 or more".to_string()),
             }
-            if frames > 0 {
-                step(world, frames);
-            }
-            Ok(())
+            .map(|frames| {
+                if world.resource::<HeldSwitches>().0.is_some() {
+                    play(world);
+                }
+                if frames > 0 {
+                    step(world, frames);
+                } else {
+                    world.resource_mut::<Time<Virtual>>().pause();
+                }
+            })
         }
         Command::Reset => {
             reset(world);
@@ -877,6 +894,28 @@ mod tests {
             app.update();
         }
         assert_eq!(app.world().resource::<Moved>().0, 3 + 16);
+
+        // Seconds are the game's: at twice the speed, half the frames.
+        let mut time = app.world_mut().resource_mut::<Time<Virtual>>();
+        time.set_relative_speed(2.0);
+        let before = time.elapsed();
+        editor
+            .send(r#"{"command":"step","seconds":0.25}"#.into())
+            .unwrap();
+        for _ in 0..20 {
+            app.update();
+        }
+        let elapsed = app.world().resource::<Time<Virtual>>().elapsed() - before;
+        assert_eq!(elapsed, std::time::Duration::from_millis(250));
+        assert_eq!(app.world().resource::<Moved>().0, 3 + 16 + 8);
+
+        // No frames pauses a game that plays.
+        app.world_mut().resource_mut::<Time<Virtual>>().unpause();
+        editor
+            .send(r#"{"command":"step","frames":0}"#.into())
+            .unwrap();
+        app.update();
+        assert!(paused(&app));
     }
 
     #[test]

@@ -46,7 +46,7 @@ pub use save::{
 };
 pub use scene::{
     AtlasCell, CurrentScene, KeepOnSceneSwitch, MeshColor, MeshShape, RuntimeOnly, SCENE_PATH,
-    SceneEntity, SceneSpawned, SpriteImage, SwitchScene, first_scene,
+    SceneEntity, SceneSpawned, SpriteBuilt, SpriteImage, SwitchScene, first_scene,
 };
 pub use sky::{Moon, Sky, SkyMode, Sun};
 pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight, TerrainTint};

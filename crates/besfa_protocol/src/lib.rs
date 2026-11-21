@@ -62,7 +62,8 @@ use serde_json::Value;
 /// 19. 2D games: [`SpawnKind::Rectangle`] and [`SpawnKind::Circle`].
 /// 20. Playing a set number of frames, [`Command::Step`].
 /// 21. 2D games' sprites: [`SpawnKind::Sprite`] with [`Command::Spawn`]'s
-///     `path`, and PNG images in [`Command::Instantiate`].
+///     `path`, PNG images in [`Command::Instantiate`], and
+///     [`Report::Hello`]'s `two_d`.
 /// 22. Reading the game's resources, [`Command::Resources`] answered by
 ///     [`Report::Resources`].
 pub const VERSION: u32 = 22;
@@ -147,10 +148,11 @@ pub enum Command {
     /// Plays `frames` frames, or the `seconds` of game time nearest a whole
     /// number of frames, then pauses virtual time again, and answers once
     /// they have run; what comes after waits for them. Each frame moves
-    /// virtual time on by one fixed timestep, so `FixedUpdate` runs once a
-    /// frame and the same steps play the same every run. Before play it
-    /// starts play first, as `play` does, without a frame of real time;
-    /// 0 frames only starts it. Since protocol 20.
+    /// real time on by one fixed timestep and virtual time by that at the
+    /// game's speed, never by the wall clock, so at normal speed
+    /// `FixedUpdate` runs once a frame. Before play it starts play first,
+    /// as `play` does, without a frame of real time; 0 frames only starts
+    /// it, or pauses a game that plays. Since protocol 20.
     Step {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         frames: Option<u32>,
@@ -779,7 +781,12 @@ pub enum PanelInput {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Report {
     /// The first line, with the protocol [`VERSION`] the plugin speaks.
-    Hello { version: u32 },
+    Hello {
+        version: u32,
+        /// A 2D game, which shows PNG images as sprites; since protocol 21.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        two_d: bool,
+    },
     /// The scene's entities, whenever they change.
     Entities { entities: Vec<EntityInfo> },
     /// The selected entity's components, whenever they change.
@@ -1117,6 +1124,24 @@ mod tests {
 
     fn request(line: &str) -> Request {
         serde_json::from_str(line).unwrap()
+    }
+
+    #[test]
+    fn says_hello_as_a_2d_game_only_when_it_is_one() {
+        let hello = |two_d| Report::Hello { version: 21, two_d };
+        assert_eq!(
+            hello(false).line(),
+            r#"@besfa {"type":"hello","version":21}"#
+        );
+        assert_eq!(Report::parse(&hello(true).line()), Some(hello(true)));
+        let old = Report::parse(r#"@besfa {"type":"hello","version":19}"#);
+        assert_eq!(
+            old,
+            Some(Report::Hello {
+                version: 19,
+                two_d: false
+            })
+        );
     }
 
     #[test]

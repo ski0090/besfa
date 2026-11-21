@@ -427,15 +427,26 @@ pub fn drop_mesh(remove: On<Remove<MeshShape>>, mut commands: Commands) {
         .try_remove::<(Mesh3d, Mesh2d)>();
 }
 
+/// Marks the `Sprite` and `Anchor` a [`SpriteImage`] built, which go with
+/// it and stay out of saved scenes. Copied with the entity.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct SpriteBuilt;
+
 /// Gives each new or changed [`SpriteImage`] a new `Sprite` and `Anchor`.
+/// An entity with a `Sprite` of its own keeps it: the image is not drawn.
 #[doc(hidden)]
+#[allow(clippy::type_complexity, reason = "a system's query")]
 pub fn build_sprites(
-    images: Query<(Entity, &SpriteImage), Changed<SpriteImage>>,
+    images: Query<(Entity, &SpriteImage, Has<Sprite>, Has<SpriteBuilt>), Changed<SpriteImage>>,
     assets: Res<AssetServer>,
     mut layouts: ResMut<Assets<TextureAtlasLayout>>,
     mut commands: Commands,
 ) {
-    for (entity, image) in &images {
+    for (entity, image, sprite, built) in &images {
+        if sprite && !built {
+            warn!("{entity} keeps the Sprite it has; its SpriteImage is not drawn.");
+            continue;
+        }
         let texture_atlas = image.atlas.map(|atlas| TextureAtlas {
             layout: layouts.add(TextureAtlasLayout::from_grid(
                 atlas.cell,
@@ -458,16 +469,22 @@ pub fn build_sprites(
         };
         commands
             .entity(entity)
-            .insert((sprite, Anchor(image.anchor)));
+            .insert((sprite, Anchor(image.anchor), SpriteBuilt));
     }
 }
 
-/// Removing the image removes the sprite built from it.
+/// Removing the image removes the sprite built from it, and only that.
 #[doc(hidden)]
-pub fn drop_sprite(remove: On<Remove<SpriteImage>>, mut commands: Commands) {
-    commands
-        .entity(remove.entity)
-        .try_remove::<(Sprite, Anchor)>();
+pub fn drop_sprite(
+    remove: On<Remove<SpriteImage>>,
+    built: Query<(), With<SpriteBuilt>>,
+    mut commands: Commands,
+) {
+    if built.contains(remove.entity) {
+        commands
+            .entity(remove.entity)
+            .try_remove::<(Sprite, Anchor, SpriteBuilt)>();
+    }
 }
 
 #[doc(hidden)]
@@ -710,6 +727,18 @@ mod tests {
             .remove::<SpriteImage>();
         app.update();
         assert!(app.world().get::<Sprite>(crate_box).is_none());
+
+        // A sprite of the game's own is neither drawn over nor taken away.
+        let own = Sprite::sized(Vec2::splat(7.0));
+        let painted = app.world_mut().spawn(own.clone()).id();
+        app.world_mut()
+            .entity_mut(painted)
+            .insert(SpriteImage::default());
+        app.update();
+        assert_eq!(app.world().get::<Sprite>(painted), Some(&own));
+        app.world_mut().entity_mut(painted).remove::<SpriteImage>();
+        app.update();
+        assert_eq!(app.world().get::<Sprite>(painted), Some(&own));
         fs::remove_dir_all(assets).unwrap();
     }
 }

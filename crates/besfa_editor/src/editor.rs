@@ -162,6 +162,9 @@ pub struct Editor {
     /// The protocol version the game's plugin speaks: 0 for one from before
     /// versions, None until the game says.
     protocol: Option<u32>,
+    /// The game said it is 2D, so the Assets tab places PNG images as
+    /// sprites.
+    two_d: bool,
     /// The terrain brush the game paints with, as last sent.
     brush: Option<TerrainBrush>,
     /// The scatter brush, as last sent.
@@ -288,6 +291,7 @@ impl Editor {
             viewport_request: None,
             seq: 0,
             protocol: None,
+            two_d: false,
             brush: None,
             scatter_brush: None,
             scatter: ScatterTools::default(),
@@ -436,7 +440,7 @@ impl Editor {
                 ui.separator();
                 match self.bottom_tab {
                     BottomTab::Log => panels::log(ui, &self.logs),
-                    BottomTab::Assets => match self.assets.ui(ui, !self.playing) {
+                    BottomTab::Assets => match self.assets.ui(ui, !self.playing, self.two_d) {
                         Some(AssetAction::Add(path)) => {
                             self.instantiate(path, self.viewport_middle())
                         }
@@ -874,8 +878,9 @@ impl Editor {
     /// answers to requests, and checks the plugin's protocol.
     fn on_report(&mut self, report: Report, ctx: &egui::Context) {
         match report {
-            Report::Hello { version } => {
+            Report::Hello { version, two_d } => {
                 self.protocol = Some(version);
+                self.two_d = two_d;
                 // The language may have changed since the game was started.
                 if self.draws_hierarchy() {
                     let korean = Language::current() == Language::Korean;
@@ -2738,7 +2743,11 @@ mod tests {
             &ctx,
         );
         assert_eq!(editor.panel_focus, (true, ime));
-        editor.on_report(Report::Hello { version: VERSION }, &ctx);
+        let hello = Report::Hello {
+            version: VERSION,
+            two_d: false,
+        };
+        editor.on_report(hello, &ctx);
         assert_eq!(editor.panel_focus, (false, None));
         assert_eq!(editor.panel_layout, (0.0, 0.0));
 
@@ -2749,8 +2758,13 @@ mod tests {
         editor.on_report(state, &ctx);
         assert_eq!(editor.panel_state.as_deref(), Some("{}"));
         editor.new_game = true;
-        editor.on_report(Report::Hello { version: VERSION }, &ctx);
+        let hello = Report::Hello {
+            version: VERSION,
+            two_d: true,
+        };
+        editor.on_report(hello, &ctx);
         assert!(!editor.new_game);
+        assert!(editor.two_d, "a 2D game's PNG images can be placed");
         drop(editor);
         let _ = fs::remove_dir_all(dir);
     }

@@ -10,7 +10,9 @@
 // The messages name no window all the same: bevy_egui would hand that
 // window's mouse to the egui of the cameras drawing to it.
 // ponytail: bevy_ui's `Interaction` follows window cameras only, so it stays
-// `None` here; mirror the picking hover into it if games need it.
+// `None` in the editor's viewport, where cameras draw to its texture (it can
+// move without one, where they draw to the plugin's window); mirror the
+// picking hover into it if games need it.
 
 use bevy::{
     camera::NormalizedRenderTarget,

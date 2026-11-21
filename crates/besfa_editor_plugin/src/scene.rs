@@ -44,8 +44,8 @@ use bevy::{
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 pub use besfa_components::scene::{
-    CurrentScene, FileEntity, Loading, MeshColor, MeshShape, RuntimeOnly, SceneEntity, SpriteImage,
-    asset_file, first_scene, project_file,
+    CurrentScene, FileEntity, Loading, MeshColor, MeshShape, RuntimeOnly, SceneEntity, SpriteBuilt,
+    SpriteImage, asset_file, first_scene, project_file,
 };
 #[cfg(test)]
 use besfa_components::scene::{
@@ -474,8 +474,8 @@ fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn Partial
 pub(crate) fn unsaved(world: &World, entity: Entity, id: TypeId) -> bool {
     left_out(id)
         || world.get_resource::<RuntimeOnly>().is_some_and(|runtime| runtime.contains(id))
-        // Built from it, and holding handles a file cannot.
-        || world.get::<SpriteImage>(entity).is_some()
+        // Built from a SpriteImage, and holding handles a file cannot.
+        || world.get::<SpriteBuilt>(entity).is_some()
             && [TypeId::of::<Sprite>(), TypeId::of::<Anchor>()].contains(&id)
 }
 
@@ -1101,6 +1101,7 @@ mod tests {
             image.clone(),
             built,
             Anchor(image.anchor),
+            SpriteBuilt,
         ));
         let dir = std::env::temp_dir().join(format!("besfa-sprite-{}", std::process::id()));
         let path = dir.join(SCENE_PATH);
@@ -1115,6 +1116,18 @@ mod tests {
         assert!(ron.contains("\"sprites/crate.png\""), "{ron}");
         assert!(!ron.contains("sprite::Sprite\""), "built from it: {ron}");
         assert!(!ron.contains("Anchor"), "{ron}");
+
+        // A sprite of the game's own stays in the file next to the image.
+        app.world_mut().spawn((
+            Name::new("Sign"),
+            SceneEntity,
+            image.clone(),
+            Sprite::sized(Vec2::splat(7.0)),
+        ));
+        save(app.world_mut(), &path).expect("the scene should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(ron.contains("sprite::Sprite\""), "its own: {ron}");
     }
 
     #[test]
