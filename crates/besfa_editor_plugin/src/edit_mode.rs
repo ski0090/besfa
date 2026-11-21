@@ -230,13 +230,14 @@ fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
     }
     // A step's frames run before anything after it, and it is answered
     // once they did, after the last one's reports.
-    if let Some(stepping) = world.get_resource::<Stepping>() {
-        if !stepping.over {
-            return;
-        }
-        if let Some(seq) = world.remove_resource::<Stepping>().unwrap().seq {
-            send_report(&Report::Done { seq, error: None });
-        }
+    if world
+        .get_resource::<Stepping>()
+        .is_some_and(|stepping| !stepping.over)
+    {
+        return;
+    }
+    if let Some(Stepping { seq: Some(seq), .. }) = world.remove_resource::<Stepping>() {
+        send_report(&Report::Done { seq, error: None });
     }
     let mut pointed = false;
     while let Some(line) = waiting.pop_front() {
