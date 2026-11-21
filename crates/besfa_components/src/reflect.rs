@@ -46,7 +46,7 @@ pub fn set(
     }
     .map_err(|error| error.to_string())?;
     let mut target = entity_mut(world, entity)?;
-    let result = match reflect.reflect_mut(&mut target) {
+    match reflect.reflect_mut(&mut target) {
         Some(mut component) => component
             .try_apply(value.as_ref())
             .map(|()| trim_lists(component.as_partial_reflect_mut(), value.as_ref()))
@@ -55,8 +55,7 @@ pub fn set(
             reflect.insert(&mut target, value.as_ref(), &registry);
             Ok(())
         }
-    };
-    result
+    }
 }
 
 /// Applying a value keeps the items of a list past the value's end; drop
