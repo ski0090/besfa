@@ -442,7 +442,9 @@ fn spawn_editor_camera(
             ..default()
         },
         // The scene, and the grid, handles and markers over it.
-        RenderLayers::default().with(OVERLAY_LAYER).with(MARKER_LAYER),
+        RenderLayers::default()
+            .with(OVERLAY_LAYER)
+            .with(MARKER_LAYER),
     ));
     // Without a window or viewport, a picture of its own gives `pointer`
     // commands a view to point into.
@@ -676,7 +678,9 @@ fn handle_pointer(
                         Some((entity, pixel, camera_global.translation().distance(at)))
                     });
                     let marked = marker_under(pointer, icons)
-                        .filter(|(_, depth)| mesh.as_ref().is_none_or(|(_, hit)| *depth < hit.distance))
+                        .filter(|(_, depth)| {
+                            mesh.as_ref().is_none_or(|(_, hit)| *depth < hit.distance)
+                        })
                         .map(|(entity, _)| entity);
                     let hit = marked.or_else(|| {
                         mesh.map(|(entity, _)| {
@@ -896,7 +900,11 @@ fn draw(
         }
         if marker.radius > 0.0 {
             let flat = Quat::from_rotation_arc(Vec3::Z, Vec3::Y);
-            marked.circle(Isometry3d::new(at + Vec3::Y * 0.05, flat), marker.radius, color.with_alpha(0.6));
+            marked.circle(
+                Isometry3d::new(at + Vec3::Y * 0.05, flat),
+                marker.radius,
+                color.with_alpha(0.6),
+            );
         }
     }
     let (Some((global, aabb)), Ok((view_camera, camera, _)), None, None) = (
@@ -1005,7 +1013,11 @@ mod tests {
 
     #[test]
     fn a_click_picks_the_nearest_marker_icon_under_it() {
-        let (near, far, aside) = (Entity::from_raw_u32(1).unwrap(), Entity::from_raw_u32(2).unwrap(), Entity::from_raw_u32(3).unwrap());
+        let (near, far, aside) = (
+            Entity::from_raw_u32(1).unwrap(),
+            Entity::from_raw_u32(2).unwrap(),
+            Entity::from_raw_u32(3).unwrap(),
+        );
         let icons = [
             (far, Vec2::new(100.0, 100.0), 30.0),
             (near, Vec2::new(110.0, 104.0), 10.0),
@@ -1013,7 +1025,10 @@ mod tests {
         ];
         let picked = marker_under(Vec2::new(105.0, 100.0), icons.into_iter());
         assert_eq!(picked, Some((near, 10.0)));
-        assert_eq!(marker_under(Vec2::new(200.0, 200.0), icons.into_iter()), None);
+        assert_eq!(
+            marker_under(Vec2::new(200.0, 200.0), icons.into_iter()),
+            None
+        );
     }
 
     #[test]

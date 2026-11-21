@@ -313,7 +313,10 @@ impl TerrainData {
                         / 255.0
                 });
                 let tint = tints.iter().fold(tint, |tint, over| {
-                    tint.lerp(Vec3::new(over.color.red, over.color.green, over.color.blue), over.share(at))
+                    tint.lerp(
+                        Vec3::new(over.color.red, over.color.green, over.color.blue),
+                        over.share(at),
+                    )
                 });
                 tints_out.push([tint.x, tint.y, tint.z, 1.0]);
                 uvs.push([x as f32 / (n - 1) as f32, z as f32 / (n - 1) as f32]);
@@ -571,7 +574,8 @@ mod tests {
             strength: 1.0,
         };
         let tinted = TerrainData::flat(3).mesh(&terrain, &[black]);
-        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) = tinted.attribute(Mesh::ATTRIBUTE_COLOR)
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) =
+            tinted.attribute(Mesh::ATTRIBUTE_COLOR)
         else {
             panic!("colors");
         };

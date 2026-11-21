@@ -146,7 +146,12 @@ impl Gait {
         };
         Self::new(
             stride,
-            vec![swing(hips[0], 0.0), swing(hips[1], 0.5), swing(hips[2], 0.5), swing(hips[3], 0.0)],
+            vec![
+                swing(hips[0], 0.0),
+                swing(hips[1], 0.5),
+                swing(hips[2], 0.5),
+                swing(hips[3], 0.0),
+            ],
         )
     }
 }
@@ -157,7 +162,9 @@ const EASE: f32 = 6.0;
 fn swing_gaits(time: Res<Time>, mut gaits: Query<(&mut Gait, &GlobalTransform, &mut PoseOffsets)>) {
     for (mut gait, place, mut offsets) in &mut gaits {
         let at = place.translation();
-        let covered = gait.last.map_or(0.0, |last| (at - last).with_y(0.0).length());
+        let covered = gait
+            .last
+            .map_or(0.0, |last| (at - last).with_y(0.0).length());
         gait.last = Some(at);
         // More than a stride at once is a jump to a new place, not a step.
         let covered = if covered < gait.stride { covered } else { 0.0 };
@@ -215,11 +222,17 @@ fn apply_offsets(
         }
         let mut working: HashMap<Entity, Transform> = HashMap::new();
         for offset in offsets.layers.values().flatten() {
-            let found = posed.bones.get(&offset.bone).copied().filter(|bone| bones.contains(*bone));
+            let found = posed
+                .bones
+                .get(&offset.bone)
+                .copied()
+                .filter(|bone| bones.contains(*bone));
             let Some(bone) = found.or_else(|| {
-                children
-                    .iter_descendants(root)
-                    .find(|bone| names.get(*bone).is_ok_and(|name| name.as_str() == offset.bone))
+                children.iter_descendants(root).find(|bone| {
+                    names
+                        .get(*bone)
+                        .is_ok_and(|name| name.as_str() == offset.bone)
+                })
             }) else {
                 continue;
             };
@@ -238,12 +251,20 @@ fn apply_offsets(
                     .ok()
                     .and_then(|parent| globals.get(parent.parent()).ok())
                     .map_or(Quat::IDENTITY, |parent| parent.rotation());
-                pose.rotation = turn.inverse() * Quat::from_axis_angle(axis, offset.angle) * turn * pose.rotation;
+                pose.rotation = turn.inverse()
+                    * Quat::from_axis_angle(axis, offset.angle)
+                    * turn
+                    * pose.rotation;
             }
             pose.translation += offset.shift;
         }
         // Bones no longer offset get their own pose back.
-        let left: Vec<Entity> = posed.written.keys().filter(|bone| !working.contains_key(*bone)).copied().collect();
+        let left: Vec<Entity> = posed
+            .written
+            .keys()
+            .filter(|bone| !working.contains_key(*bone))
+            .copied()
+            .collect();
         for bone in left {
             posed.written.remove(&bone);
             if let (Some(base), Ok(mut now)) = (bases.get(&bone), bones.get_mut(bone)) {
@@ -266,7 +287,9 @@ mod tests {
     use super::*;
 
     fn model(world: &mut World) -> (Entity, Entity) {
-        let root = world.spawn((Transform::default(), GlobalTransform::default())).id();
+        let root = world
+            .spawn((Transform::default(), GlobalTransform::default()))
+            .id();
         let arm = world
             .spawn((
                 Name::new("Arm"),
@@ -286,7 +309,10 @@ mod tests {
         let mut offsets = PoseOffsets::default();
         offsets.set(
             "raise",
-            vec![PoseOffset::turn("Arm", Vec3::X, FRAC_PI_2), PoseOffset::shift("Arm", Vec3::Y)],
+            vec![
+                PoseOffset::turn("Arm", Vec3::X, FRAC_PI_2),
+                PoseOffset::shift("Arm", Vec3::Y),
+            ],
         );
         app.world_mut().entity_mut(root).insert(offsets);
         // The first frame finds the model.
@@ -294,13 +320,20 @@ mod tests {
         app.update();
         let at = |app: &App| *app.world().get::<Transform>(arm).unwrap();
         let raised = at(&app);
-        assert!(raised.rotation.abs_diff_eq(Quat::from_rotation_x(FRAC_PI_2), 1e-5));
+        assert!(
+            raised
+                .rotation
+                .abs_diff_eq(Quat::from_rotation_x(FRAC_PI_2), 1e-5)
+        );
         assert_eq!(raised.translation, Vec3::new(0.0, 2.0, 0.0));
         // Frame after frame on a bone no clip moves, it does not add up.
         app.update();
         assert_eq!(at(&app), raised);
         // Without the layer, its own pose again.
-        app.world_mut().get_mut::<PoseOffsets>(root).unwrap().set("raise", Vec::new());
+        app.world_mut()
+            .get_mut::<PoseOffsets>(root)
+            .unwrap()
+            .set("raise", Vec::new());
         app.update();
         assert_eq!(at(&app), Transform::from_xyz(0.0, 1.0, 0.0));
     }
@@ -321,11 +354,20 @@ mod tests {
             }],
         ));
         let go = |app: &mut App, x: f32| {
-            app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
-            *app.world_mut().get_mut::<GlobalTransform>(root).unwrap() = GlobalTransform::from_xyz(x, 0.0, 0.0);
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_millis(100));
+            *app.world_mut().get_mut::<GlobalTransform>(root).unwrap() =
+                GlobalTransform::from_xyz(x, 0.0, 0.0);
             app.update();
         };
-        let swung = |app: &App| app.world().get::<Transform>(leg).unwrap().rotation.angle_between(Quat::IDENTITY);
+        let swung = |app: &App| {
+            app.world()
+                .get::<Transform>(leg)
+                .unwrap()
+                .rotation
+                .angle_between(Quat::IDENTITY)
+        };
         for step in 0..6 {
             go(&mut app, step as f32 * 0.3);
         }
@@ -351,8 +393,14 @@ mod tests {
         app.update();
         app.update();
         // A clip moves the bone: the offset goes over where it moved it.
-        app.world_mut().get_mut::<Transform>(arm).unwrap().translation = Vec3::new(0.0, 5.0, 0.0);
+        app.world_mut()
+            .get_mut::<Transform>(arm)
+            .unwrap()
+            .translation = Vec3::new(0.0, 5.0, 0.0);
         app.update();
-        assert_eq!(app.world().get::<Transform>(arm).unwrap().translation, Vec3::new(0.0, 6.0, 0.0));
+        assert_eq!(
+            app.world().get::<Transform>(arm).unwrap().translation,
+            Vec3::new(0.0, 6.0, 0.0)
+        );
     }
 }

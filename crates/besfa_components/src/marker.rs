@@ -73,7 +73,8 @@ impl Marker {
             MarkerIcon::Diamond => {
                 let center = at + Vec3::Y * ICON_HEIGHT / 2.0;
                 let (up, down) = (center + Vec3::Y * 0.4, center - Vec3::Y * 0.4);
-                let sides = [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z].map(|side| center + side * 0.3);
+                let sides =
+                    [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z].map(|side| center + side * 0.3);
                 let mut lines = Vec::new();
                 for (index, side) in sides.iter().enumerate() {
                     lines.push((up, *side));

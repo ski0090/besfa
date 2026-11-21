@@ -121,6 +121,13 @@ besfa/
 cargo test
 ```
 
+포맷과 lint도 통과해야 한다. clippy 기본 경고는 모두 오류다(`Cargo.toml`의 `[workspace.lints]`). `besfa_mcp`는 stdout이 MCP 통로이므로 `println!`도 막는다.
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets
+```
+
 사용 설명서의 에디터 스크린샷은 테스트로 그린다. UI를 바꾼 뒤에는 다시 찍는다(`docs/images`에 쓴다).
 
 ```bash

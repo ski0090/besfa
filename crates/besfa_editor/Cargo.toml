@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 description = "The Besfa editor: project hub and scene editor for Bevy games"
 
+[lints]
+workspace = true
+
 [dependencies]
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "wgpu"] }
 besfa_protocol = { path = "../besfa_protocol" }

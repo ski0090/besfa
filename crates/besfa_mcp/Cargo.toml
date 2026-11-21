@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 description = "MCP server that runs a Besfa game in edit mode and passes it editor commands"
 
+[lints]
+workspace = true
+
 [dependencies]
 besfa_protocol = { path = "../besfa_protocol" }
 base64 = "0.23"

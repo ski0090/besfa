@@ -8,6 +8,8 @@
 //! stopped when the client closes stdin.
 //!
 //! `besfa mcp` serves it, and so does this crate's own binary.
+// Stdout carries the JSON-RPC stream to the client: a stray print breaks it.
+#![deny(clippy::print_stdout)]
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, BufReader, Read, Write};

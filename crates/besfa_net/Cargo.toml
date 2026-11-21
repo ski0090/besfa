@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 description = "Dedicated servers for Besfa games: the game with no window or GPU, and the UDP connection between it and the games joined to it"
 
+[lints]
+workspace = true
+
 [dependencies]
 bevy = "0.20.0"
 # windowless(), which headless() builds on.

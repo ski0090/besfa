@@ -9,3 +9,10 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Every crate inherits these ([lints] workspace = true), so `cargo clippy
+# --workspace --all-targets` fails on any default clippy warning.
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+# Bevy systems and their queries have long types by design.
+type_complexity = "allow"

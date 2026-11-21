@@ -23,7 +23,6 @@ mod scene;
 mod terrain;
 mod viewport;
 
-
 use eframe::{
     egui::{self, ViewportCommand},
     egui_wgpu, wgpu,
@@ -83,6 +82,10 @@ struct App {
     title: String,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the app holds one page, so the gap wastes nothing"
+)]
 enum Page {
     Hub(Hub),
     Editor(Box<Editor>),

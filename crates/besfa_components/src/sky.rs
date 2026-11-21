@@ -183,7 +183,7 @@ impl Sky {
                 let angle = cosine.clamp(-1.0, 1.0).acos();
                 let tint = self.sun.color.to_linear();
                 let glow = (1.0 - angle / (radius * 4.0)).max(0.0).powi(2) * 0.35;
-                color = color + tint * glow;
+                color += tint * glow;
                 color = color.mix(&tint, edge(radius - angle));
             }
         }

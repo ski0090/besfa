@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 description = "Connects a Bevy game to the Besfa editor"
 
+[lints]
+workspace = true
+
 [dependencies]
 # `debug` keeps component and system names, which the editor shows.
 bevy = { version = "0.20.0", features = ["debug"] }
