@@ -424,12 +424,7 @@ fn default_json(registry: &TypeRegistry, type_id: TypeId) -> Option<Value> {
     json(default.default().as_partial_reflect(), registry).ok()
 }
 
-fn walk(
-    registry: &TypeRegistry,
-    type_id: TypeId,
-    path: &mut Vec<String>,
-    found: &mut Shapes,
-) {
+fn walk(registry: &TypeRegistry, type_id: TypeId, path: &mut Vec<String>, found: &mut Shapes) {
     // Deep enough for any component; a type that holds itself stops here.
     if path.len() > 8 {
         return;
@@ -471,8 +466,16 @@ fn walk(
                 walk(registry, field.type_id(), path, found);
             }
         }
-        TypeInfo::Enum(info) if info.iter().all(|variant| matches!(variant, VariantInfo::Unit(_))) => {
-            let names = info.variant_names().iter().map(|name| (*name).to_owned()).collect();
+        TypeInfo::Enum(info)
+            if info
+                .iter()
+                .all(|variant| matches!(variant, VariantInfo::Unit(_))) =>
+        {
+            let names = info
+                .variant_names()
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect();
             found.choices.insert(here, names);
         }
         // An Option shows as what it holds, or null.
@@ -647,7 +650,11 @@ mod tests {
         let found = told.choices;
         let axe_or_bow = vec!["Axe".to_string(), "Bow".to_string()];
         assert_eq!(found.get("tools/*/kind"), Some(&axe_or_bow));
-        assert_eq!(found.get("best"), Some(&axe_or_bow), "an Option as what it holds");
+        assert_eq!(
+            found.get("best"),
+            Some(&axe_or_bow),
+            "an Option as what it holds"
+        );
         assert_eq!(found.get("belts/*/*/kind"), Some(&axe_or_bow));
         assert_eq!(found.len(), 4, "a color's variants hold values: {found:?}");
         let shown = shapes(&registry, TypeId::of::<Visibility>()).choices;

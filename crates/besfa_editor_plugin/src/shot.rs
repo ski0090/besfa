@@ -406,12 +406,26 @@ mod tests {
         };
 
         give_back(&mut world, vec![borrowed]);
-        assert!(world.entity(camera).get_ref::<Projection>().unwrap().is_changed());
+        assert!(
+            world
+                .entity(camera)
+                .get_ref::<Projection>()
+                .unwrap()
+                .is_changed()
+        );
     }
 
     #[test]
     fn looks_down_with_north_up_from_above() {
-        let shot = Shot::new(Vec3::new(10.0, 0.0, -5.0), None, Some(200.0), None, None, false).unwrap();
+        let shot = Shot::new(
+            Vec3::new(10.0, 0.0, -5.0),
+            None,
+            Some(200.0),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(shot.size, UVec2::splat(1024));
         assert!(shot.transform.forward().abs_diff_eq(Vec3::NEG_Y, 1e-5));
         assert!(shot.transform.up().abs_diff_eq(Vec3::NEG_Z, 1e-5));
@@ -450,7 +464,15 @@ mod tests {
                 .abs_diff_eq((-eye).normalize(), 1e-5)
         );
         // Straight down still makes a picture.
-        let down = Shot::new(Vec3::ZERO, Some(Vec3::Y * 50.0), None, Some(64), Some(32), false).unwrap();
+        let down = Shot::new(
+            Vec3::ZERO,
+            Some(Vec3::Y * 50.0),
+            None,
+            Some(64),
+            Some(32),
+            false,
+        )
+        .unwrap();
         assert!(down.transform.up().abs_diff_eq(Vec3::NEG_Z, 1e-5));
         assert_eq!(down.size, UVec2::new(64, 32));
 

@@ -245,9 +245,18 @@ mod tests {
         let world = app.world_mut();
         // The scene's clock, by its file id, and a wall built in play.
         let clock = world
-            .spawn((Persist, FileEntity(Entity::from_raw_u32(42).unwrap()), Day(3)))
+            .spawn((
+                Persist,
+                FileEntity(Entity::from_raw_u32(42).unwrap()),
+                Day(3),
+            ))
             .id();
-        world.spawn((Persist, Wall(150.0), Transform::from_xyz(1.0, 0.0, 2.0), Glow));
+        world.spawn((
+            Persist,
+            Wall(150.0),
+            Transform::from_xyz(1.0, 0.0, 2.0),
+            Glow,
+        ));
         let folder = std::env::temp_dir().join(format!("besfa-save-{}", std::process::id()));
         let path = folder.join("world.scn.ron");
         save_world(world, &path).unwrap();
@@ -257,7 +266,10 @@ mod tests {
 
         // Play goes on: the day changes, the wall falls, another goes up.
         world.entity_mut(clock).insert(Day(5));
-        let walls: Vec<Entity> = world.query_filtered::<Entity, With<Wall>>().iter(world).collect();
+        let walls: Vec<Entity> = world
+            .query_filtered::<Entity, With<Wall>>()
+            .iter(world)
+            .collect();
         world.despawn(walls[0]);
         world.spawn((Persist, Wall(10.0)));
 
@@ -271,7 +283,10 @@ mod tests {
             .iter(world)
             .map(|(wall, at, glow)| (*wall, *at, glow))
             .collect();
-        assert_eq!(walls, [(Wall(150.0), Transform::from_xyz(1.0, 0.0, 2.0), false)]);
+        assert_eq!(
+            walls,
+            [(Wall(150.0), Transform::from_xyz(1.0, 0.0, 2.0), false)]
+        );
         assert_eq!(world.query::<&SceneId>().iter(world).count(), 0);
         fs::remove_dir_all(folder).unwrap();
     }

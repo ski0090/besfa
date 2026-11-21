@@ -2269,7 +2269,10 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(
                 env,
-                [("CLAUDE_CODE_USE_POWERSHELL_TOOL".to_string(), "1".to_string())]
+                [(
+                    "CLAUDE_CODE_USE_POWERSHELL_TOOL".to_string(),
+                    "1".to_string()
+                )]
             );
         } else {
             assert!(env.is_empty());
@@ -2297,12 +2300,18 @@ mod tests {
                 .position(|arg| arg == "--permission-mode")
                 .map(|at| args[at + 1].clone())
         };
-        assert_eq!(mode(Permission::Auto, Provider::Claude).as_deref(), Some("auto"));
+        assert_eq!(
+            mode(Permission::Auto, Provider::Claude).as_deref(),
+            Some("auto")
+        );
         assert_eq!(
             mode(Permission::AcceptEdits, Provider::Claude).as_deref(),
             Some("acceptEdits")
         );
-        assert_eq!(mode(Permission::Manual, Provider::Claude).as_deref(), Some("manual"));
+        assert_eq!(
+            mode(Permission::Manual, Provider::Claude).as_deref(),
+            Some("manual")
+        );
         assert_eq!(mode(Permission::Auto, Provider::OpenAi), None);
         assert_eq!(mode(Permission::Auto, Provider::Gemini), None);
 
@@ -2320,7 +2329,10 @@ mod tests {
             ..Default::default()
         };
         let (_, args, env) = invocation(Provider::Claude, &Route::Cli, "", &[], &access);
-        assert!(!args.iter().any(|arg| arg == "--disallowedTools"), "{args:?}");
+        assert!(
+            !args.iter().any(|arg| arg == "--disallowedTools"),
+            "{args:?}"
+        );
         assert!(env.is_empty(), "{env:?}");
         assert!(args.contains(&"Bash(cargo *)".to_string()), "{args:?}");
 
@@ -2333,9 +2345,15 @@ mod tests {
         assert_eq!(disallow.map(|at| args[at + 1].as_str()), Some("Bash"));
         assert_eq!(
             env,
-            [("CLAUDE_CODE_USE_POWERSHELL_TOOL".to_string(), "1".to_string())]
+            [(
+                "CLAUDE_CODE_USE_POWERSHELL_TOOL".to_string(),
+                "1".to_string()
+            )]
         );
-        assert!(args.contains(&"PowerShell(cargo *)".to_string()), "{args:?}");
+        assert!(
+            args.contains(&"PowerShell(cargo *)".to_string()),
+            "{args:?}"
+        );
     }
 
     #[test]

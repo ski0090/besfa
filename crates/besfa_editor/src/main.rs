@@ -23,7 +23,6 @@ mod scene;
 mod terrain;
 mod viewport;
 
-
 use eframe::{
     egui::{self, ViewportCommand},
     egui_wgpu, wgpu,

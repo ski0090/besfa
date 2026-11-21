@@ -118,11 +118,7 @@ fn follow(
 /// counts from the top left of the whole target, so for a camera that draws
 /// into part of it, as beside the editor's panels, the node would be off by
 /// where that part starts.
-pub(crate) fn viewport_pixel(
-    camera: &Camera,
-    eye: &GlobalTransform,
-    place: Vec3,
-) -> Option<Vec2> {
+pub(crate) fn viewport_pixel(camera: &Camera, eye: &GlobalTransform, place: Vec3) -> Option<Vec2> {
     let origin = camera.logical_viewport_rect()?.min;
     Some(camera.world_to_viewport(eye, place).ok()? - origin)
 }
@@ -137,26 +133,49 @@ mod tests {
         app.add_systems(Update, follow);
         let camera = app
             .world_mut()
-            .spawn((Camera::default(), Transform::default(), GlobalTransform::default()))
+            .spawn((
+                Camera::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
             .id();
-        let thing = app.world_mut().spawn(GlobalTransform::from_xyz(0.0, 0.0, -5.0)).id();
+        let thing = app
+            .world_mut()
+            .spawn(GlobalTransform::from_xyz(0.0, 0.0, -5.0))
+            .id();
         let label = app
             .world_mut()
-            .spawn((Node::default(), WorldLabel::over(thing, 1.0), UiTargetCamera(camera)))
+            .spawn((
+                Node::default(),
+                WorldLabel::over(thing, 1.0),
+                UiTargetCamera(camera),
+            ))
             .id();
         app.update();
         // Without a window the camera has no viewport: the label hides.
-        assert_eq!(app.world().get::<Node>(label).unwrap().display, Display::None);
+        assert_eq!(
+            app.world().get::<Node>(label).unwrap().display,
+            Display::None
+        );
         app.world_mut().despawn(thing);
         app.update();
-        assert_eq!(app.world().get::<Node>(label).unwrap().display, Display::None);
+        assert_eq!(
+            app.world().get::<Node>(label).unwrap().display,
+            Display::None
+        );
     }
 
     #[test]
     fn a_label_kept_below_the_top_does_not_go_above_it() {
         let label = WorldLabel::at(Vec3::ZERO).anchored(Vec2::new(10.0, 5.0));
-        assert_eq!(corner(&label, Vec2::new(100.0, 50.0)), Vec2::new(90.0, 45.0));
-        assert_eq!(corner(&label, Vec2::new(100.0, -30.0)), Vec2::new(90.0, -35.0));
+        assert_eq!(
+            corner(&label, Vec2::new(100.0, 50.0)),
+            Vec2::new(90.0, 45.0)
+        );
+        assert_eq!(
+            corner(&label, Vec2::new(100.0, -30.0)),
+            Vec2::new(90.0, -35.0)
+        );
         let kept = label.kept_below_top(4.0);
         assert_eq!(corner(&kept, Vec2::new(100.0, -30.0)), Vec2::new(90.0, 4.0));
     }

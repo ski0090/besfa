@@ -83,7 +83,11 @@ impl Hosted {
 /// The message of the last ERROR line in a game's `log`, its colors and
 /// where it came from taken off.
 fn last_error(log: &str) -> Option<String> {
-    let line = log.lines().rev().map(plain).find(|line| line.contains(" ERROR "))?;
+    let line = log
+        .lines()
+        .rev()
+        .map(plain)
+        .find(|line| line.contains(" ERROR "))?;
     let message = line.split_once(" ERROR ")?.1;
     // After the module that logged it, as "duskhold::server: ...".
     let message = message.split_once(": ").map_or(message, |(_, after)| after);
