@@ -37,8 +37,8 @@ jobs:
           $notes = "The besfa CLI built from main at $env:GITHUB_SHA. Install or update with:`n`n    cargo binstall --git https://github.com/ski0090/besfa besfa_cli --force"
           gh release view cli-latest *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create cli-latest --title "besfa CLI (main)" --notes $notes --prerelease --target $env:GITHUB_SHA
+            gh release create cli-latest --title "besfa CLI (main)" --notes $notes --latest --target $env:GITHUB_SHA
           } else {
-            gh release edit cli-latest --notes $notes
+            gh release edit cli-latest --notes $notes --prerelease=false --latest
           }
           gh release upload cli-latest besfa-x86_64-pc-windows-msvc.zip --clobber
