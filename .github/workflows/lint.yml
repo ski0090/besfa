@@ -1,0 +1,29 @@
+# Fails a pull request on unformatted code or any clippy lint the workspace
+# denies (levels live in Cargo.toml [workspace.lints] and crate attributes).
+name: Lint
+
+on:
+  pull_request:
+    branches: [main]
+  # Runs on main too so pull requests restore a warm cache built from main.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    # Windows: besfa_editor, besfa_editor_plugin and besfa_mcp have
+    # cfg(windows) code that a Linux runner would never check.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable --no-self-update && rustup default stable && rustup component add rustfmt clippy
+      - run: cargo fmt --all --check
+      - uses: Swatinem/rust-cache@v2.9.3
+      - run: cargo clippy --workspace --all-targets
