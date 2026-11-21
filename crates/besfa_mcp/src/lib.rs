@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command as Process, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod image;
 
@@ -198,24 +198,25 @@ fn tools() -> Value {
                 "{\"command\":\"resources\",\"path\":\"my_game::\"} answers resources: the game's resources registered for reflection (#[reflect(Resource)]) whose type path contains the text, ignoring case, or all of them without it, each {\"path\":...,\"value\":...} in the shape `entities` shows components, in edit mode and while playing\n",
                 "{\"command\":\"step\",\"frames\":10} or {\"command\":\"step\",\"seconds\":0.5} plays exactly that many frames, or the seconds of game time rounded to whole frames, then pauses again: each frame moves time on by one fixed timestep (1/64 s unless the game sets Time<Fixed> otherwise, times the game's Time<Virtual> speed) instead of the wall clock's, so at normal speed FixedUpdate runs once a frame and the game's clock reads the same every run (what loads or switches scenes in the background still finishes on its own frames); before play it starts play first, as play does, without letting real time run, and frames 0 only starts it, or pauses a game that plays; Time<Real> moves by the same steps meanwhile; the commands after it wait until its frames ran; a frame takes about 1/60 s of real time, so give timeout_secs for long steps; Update systems also run in paused frames, so count frames by Time's delta, not by Update runs\n",
                 "{\"command\":\"reset\"} ends play without restarting the game: what it made goes, the scene file loads again as last saved, Startup runs again, and the game is paused in edit mode as after start; unsaved edits are lost\n",
-                "Screenshot, thumbnail and reimport are waited for until their answer comes. An unknown command is refused with the list of valid ones.",
+                "Screenshot, thumbnail and reimport are waited for until their answer comes, and the commands after one in the same list are sent only then, so a screenshot shows none of them: before play or after a step it pictures the game as the commands before it left it, while playing as it was when captured, some frames later. When the call times out, the error names the first command not sent, and those are never sent. An unknown command is refused with the list of valid ones.",
             ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "command": {"type": "object", "description": "One command, tagged by its `command` field."},
-                    "commands": {"type": "array", "items": {"type": "object"}, "description": "Several commands, sent together and run in order, instead of `command`."},
+                    "commands": {"type": "array", "items": {"type": "object"}, "description": "Several commands, run in order, instead of `command`; those after a screenshot, thumbnail or reimport are sent once it is answered."},
                     "timeout_secs": timeout,
                 },
             },
         },
         {
             "name": "entities",
-            "description": "Without `id`, the scene's entities, as JSON: id, name, parent, whether the scene file keeps it, and the asset it shows. The parts a placed model or prefab spawns under it are left out unless `parts` is true. `name` and `asset` keep those whose name or asset path contains the text, ignoring case, and `parent` those right under that entity. With `id`, selects that entity in the game and returns its components with their values. Right after start, the list waits until the scene file has loaded.",
+            "description": "Without `id`, the scene's entities, as JSON: id, name, parent, whether the scene file keeps it, and the asset it shows. The parts a placed model or prefab spawns under it are left out unless `parts` is true. `name` and `asset` keep those whose name or asset path contains the text, ignoring case, and `parent` those right under that entity. With `id`, selects that entity in the game and returns its components with their values, or with `component` too, only that component's value, named by its type path or short name. Right after start, the list waits until the scene file has loaded.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "id": {"type": "integer"},
+                    "component": {"type": "string", "description": "With `id`: return only this component's value, as my_game::Health or Health."},
                     "name": {"type": "string"},
                     "asset": {"type": "string"},
                     "parent": {"type": "integer"},
@@ -301,7 +302,11 @@ fn call(game: &mut Option<Game>, name: &str, args: &Value) -> Result<String, Str
                             .as_ref()
                             .is_some_and(|entity| entity["id"] == id)
                     })?;
-                    Ok(inbox.entity.as_ref().unwrap().to_string())
+                    let entity = inbox.entity.as_ref().unwrap();
+                    match args["component"].as_str() {
+                        Some(component) => component_value(entity, component),
+                        None => Ok(entity.to_string()),
+                    }
                 }
             }
         }
@@ -347,6 +352,42 @@ fn filter<'a>(entities: &'a [EntityInfo], args: &Value) -> Vec<&'a EntityInfo> {
                     .is_none_or(|parent| entity.parent == Some(parent))
         })
         .collect()
+}
+
+/// The value of the `entity` report's component named `wanted`, by its type
+/// path or its short name, as JSON. A short name two components share
+/// names neither.
+fn component_value(entity: &Value, wanted: &str) -> Result<String, String> {
+    let components = entity["components"].as_array().map(Vec::as_slice);
+    let components = components.unwrap_or_default();
+    let paths = |named: &mut dyn Iterator<Item = &Value>| -> String {
+        let paths: Vec<&str> = named
+            .filter_map(|component| component["path"].as_str())
+            .collect();
+        paths.join(", ")
+    };
+    if let Some(component) = components
+        .iter()
+        .find(|component| component["path"] == wanted)
+    {
+        return Ok(component["value"].to_string());
+    }
+    let by_name: Vec<&Value> = components
+        .iter()
+        .filter(|component| component["name"] == wanted)
+        .collect();
+    match by_name.as_slice() {
+        [component] => Ok(component["value"].to_string()),
+        [] => Err(format!(
+            "Entity {} has no {wanted}; it has {}.",
+            entity["id"],
+            paths(&mut components.iter())
+        )),
+        several => Err(format!(
+            "{wanted} names {}; give one of these paths.",
+            paths(&mut several.iter().copied())
+        )),
+    }
 }
 
 /// The report a command is answered with after it ran, and the path it
@@ -448,6 +489,40 @@ fn tidy(reports: Vec<Value>, asked: &[Asked]) -> Vec<Value> {
             Some(json!({"type": "done", "command": index, "error": report["error"]}))
         })
         .collect()
+}
+
+/// `commands` in the parts `send` writes in turn: each but the last ends
+/// with one answered later, whose answer the next part waits for.
+fn parts(commands: Vec<Command>) -> Vec<Vec<Command>> {
+    let mut parts = vec![Vec::new()];
+    for command in commands {
+        let later = answer(&command).is_some();
+        parts.last_mut().unwrap().push(command);
+        if later {
+            parts.push(Vec::new());
+        }
+    }
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
+/// Whether each of `asked` has run, and been answered if it is answered
+/// later, unless it failed, going by the reports from the `first` on.
+fn finished(inbox: &Inbox, first: usize, asked: &[Asked]) -> bool {
+    let reports = &inbox.reports[first.min(inbox.reports.len())..];
+    asked.iter().all(|(seq, answer)| {
+        let done = reports
+            .iter()
+            .find(|report| report["type"] == "done" && report["seq"] == *seq);
+        done.is_some_and(|done| {
+            !done["error"].is_null()
+                || answer.as_ref().is_none_or(|(kind, path)| {
+                    reports
+                        .iter()
+                        .any(|report| report["type"] == *kind && report["path"] == path.as_str())
+                })
+        })
+    })
 }
 
 fn lines(values: &[Value]) -> String {
@@ -596,68 +671,73 @@ impl Game {
 
     /// Writes `commands` once the game is up and returns the reports written
     /// until it ran them, and for those answered later, until the answer
-    /// came; tidied up by [`tidy`].
+    /// came; tidied up by [`tidy`]. What comes after a command answered
+    /// later is written once its answer came, so a screenshot pictures the
+    /// game as the commands before it left it.
     fn send(&mut self, commands: Vec<Command>, timeout: Duration) -> Result<Vec<Value>, String> {
         // Before the hello the game may still be building, or have failed to.
-        let (first, version) = {
-            let inbox = self.wait(timeout, |inbox| inbox.hello.is_some())?;
-            (inbox.reports.len(), inbox.hello.unwrap())
-        };
+        let version = self
+            .wait(timeout, |inbox| inbox.hello.is_some())?
+            .hello
+            .unwrap();
         if let Some(index) = commands.iter().position(|command| since(command) > version) {
             return Err(format!(
                 "Command {index} needs protocol {} and this game's besfa_editor_plugin speaks {version}; update it with `cargo update -p besfa_editor_plugin` in the game.",
                 since(&commands[index])
             ));
         }
-        let mut written = String::new();
+        let deadline = Instant::now().checked_add(timeout);
+        let total = commands.len();
         let mut asked = Vec::new();
-        for command in commands {
-            self.seq += 1;
-            asked.push((
-                self.seq,
-                answer(&command).map(|(kind, path)| (kind, path.to_string())),
-            ));
-            let request = Request {
-                seq: Some(self.seq),
-                command,
-            };
-            written += &serde_json::to_string(&request).unwrap();
-            written.push('\n');
-        }
-        self.stdin
-            .write_all(written.as_bytes())
-            .and_then(|()| self.stdin.flush())
-            .map_err(|error| format!("Could not write to the game: {error}"))?;
-        // Ran, and answered if it is answered later, unless it failed.
-        let finished = |reports: &[Value], (seq, answer): &Asked| {
-            let done = reports
-                .iter()
-                .find(|report| report["type"] == "done" && report["seq"] == *seq);
-            done.is_some_and(|done| {
-                !done["error"].is_null()
-                    || answer.as_ref().is_none_or(|(kind, path)| {
-                        reports.iter().any(|report| {
-                            report["type"] == *kind && report["path"] == path.as_str()
-                        })
-                    })
-            })
-        };
-        let result = self.wait(timeout, |inbox| {
-            let new = &inbox.reports[first.min(inbox.reports.len())..];
-            asked.iter().all(|asked| finished(new, asked))
-        });
-        match result {
-            Ok(mut inbox) => Ok(tidy(std::mem::take(&mut inbox.reports), &asked)),
-            // `wait` let go of the inbox, so it can be locked again.
-            Err(error) => {
+        for part in parts(commands) {
+            // Its answers come after it is written: an earlier picture to the
+            // same file does not answer this part's.
+            let from = self.inbox.0.lock().unwrap().reports.len();
+            let start = asked.len();
+            let mut written = String::new();
+            for command in part {
+                self.seq += 1;
+                asked.push((
+                    self.seq,
+                    answer(&command).map(|(kind, path)| (kind, path.to_string())),
+                ));
+                let request = Request {
+                    seq: Some(self.seq),
+                    command,
+                };
+                written += &serde_json::to_string(&request).unwrap();
+                written.push('\n');
+            }
+            self.stdin
+                .write_all(written.as_bytes())
+                .and_then(|()| self.stdin.flush())
+                .map_err(|error| format!("Could not write to the game: {error}"))?;
+            let left = deadline.map_or(timeout, |deadline| {
+                deadline.saturating_duration_since(Instant::now())
+            });
+            let waited = self.wait(left, |inbox| finished(inbox, from, &asked[start..]));
+            // `wait` let go of the inbox when it failed, so it can be
+            // locked again.
+            if let Err(error) = waited.map(drop) {
+                let unsent = if asked.len() < total {
+                    format!(
+                        "\nCommand {} and those after it were not sent.",
+                        asked.len()
+                    )
+                } else {
+                    String::new()
+                };
                 let (lock, _) = &*self.inbox;
                 let reports = std::mem::take(&mut lock.lock().unwrap().reports);
-                Err(format!(
-                    "{error}\nReports so far:\n{}",
+                return Err(format!(
+                    "{error}{unsent}\nReports so far:\n{}",
                     lines(&tidy(reports, &asked))
-                ))
+                ));
             }
         }
+        let (lock, _) = &*self.inbox;
+        let reports = std::mem::take(&mut lock.lock().unwrap().reports);
+        Ok(tidy(reports, &asked))
     }
 
     /// The inbox once `ready` holds, or why it did not within `timeout`.
@@ -834,6 +914,59 @@ mod tests {
         assert_eq!(ids(json!({"name": "OAK"})), [2]);
         assert_eq!(ids(json!({"asset": "tree"})), [2, 5]);
         assert_eq!(ids(json!({"parent": 1})), [2, 5]);
+    }
+
+    #[test]
+    fn sends_what_follows_a_screenshot_once_it_is_taken() {
+        let command = |json: Value| serde_json::from_value::<Command>(json).unwrap();
+        let shot = || command(json!({"command": "screenshot", "file": "a.png", "game": true}));
+        let key = || command(json!({"command": "key", "code": "KeyD", "pressed": true}));
+        let sizes = |commands| parts(commands).iter().map(Vec::len).collect::<Vec<_>>();
+        assert_eq!(sizes(vec![key(), shot(), key(), key()]), [2, 2]);
+        assert_eq!(sizes(vec![shot(), shot()]), [1, 1]);
+        assert_eq!(sizes(vec![key(), shot()]), [2]);
+        assert!(sizes(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn returns_one_component_by_path_or_name() {
+        let entity = json!({"id": 7, "type": "entity", "components": [
+            {"name": "Transform", "path": "bevy_transform::components::transform::Transform", "value": {"translation": [1.0, 2.0, 0.0]}},
+            {"name": "WorldPos", "path": "my_game::iso::WorldPos", "value": [6.7, 6.7]},
+        ]});
+        assert_eq!(
+            component_value(&entity, "my_game::iso::WorldPos").unwrap(),
+            "[6.7,6.7]"
+        );
+        assert_eq!(component_value(&entity, "WorldPos").unwrap(), "[6.7,6.7]");
+        let missing = component_value(&entity, "Health").unwrap_err();
+        assert!(missing.contains("my_game::iso::WorldPos"), "{missing}");
+
+        let twice = json!({"id": 7, "components": [
+            {"name": "Velocity", "path": "physics::Velocity", "value": 1},
+            {"name": "Velocity", "path": "my_game::Velocity", "value": 2},
+        ]});
+        let both = component_value(&twice, "Velocity").unwrap_err();
+        assert!(
+            both.contains("physics::Velocity, my_game::Velocity"),
+            "{both}"
+        );
+        assert_eq!(component_value(&twice, "my_game::Velocity").unwrap(), "2");
+    }
+
+    #[test]
+    fn waits_for_a_part_s_own_answers() {
+        let shot = |path: &str| json!({"type": "screenshot", "path": path, "error": null});
+        let done = |seq: u64| json!({"type": "done", "seq": seq, "error": null});
+        // A first picture to a.png has been answered; the second part's
+        // commands ran, and its picture to a.png is still to come.
+        let inbox = Inbox {
+            reports: vec![done(1), shot("a.png"), done(2), done(3)],
+            ..Inbox::default()
+        };
+        let second: Vec<Asked> = vec![(2, None), (3, Some(("screenshot", "a.png".into())))];
+        assert!(finished(&inbox, 0, &second), "the old picture would answer");
+        assert!(!finished(&inbox, 2, &second), "from the part, it waits");
     }
 
     #[test]
