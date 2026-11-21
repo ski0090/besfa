@@ -1636,8 +1636,3 @@ mod tests {
         assert_eq!(crate_of("<bevy_a::B as C>::run"), "bevy_a");
     }
 }
-
-// Planted to prove CI fails on a clippy lint; reverted in the next commit.
-pub fn planted_lint() -> u8 {
-    return 1;
-}
