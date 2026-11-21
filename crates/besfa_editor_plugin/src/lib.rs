@@ -9,7 +9,7 @@
 //! to the editor, and saves the scene back when asked. Launched by
 //! `besfa_mcp`, it runs the same way with no window at all.
 
-use bevy::app::PluginGroupBuilder;
+use bevy::{app::PluginGroupBuilder, prelude::*, window::ExitCondition};
 
 mod edit;
 mod edit_mode;
@@ -32,10 +32,10 @@ mod viewport;
 pub(crate) use besfa_components::sky;
 pub use besfa_components::{
     AnimationClips, AnimationCondition, AnimationParams, AnimationState, AnimationStateMachine,
-    AnimationStateMachinePlugin, AnimationTransition, ConditionTest, EditorOnly, MeshColor,
-    MeshShape, Moon, PartChange, PartChanges, Reimported, SCENE_PATH, ScatterGroup, Scattered,
-    SceneEntity, Sky, SkyMode, Sun, Terrain, TerrainData, TerrainFile, TerrainHandle,
-    TerrainHeight,
+    AnimationStateMachinePlugin, AnimationTransition, AtlasCell, ConditionTest, EditorOnly,
+    MeshColor, MeshShape, Moon, PartChange, PartChanges, Reimported, SCENE_PATH, ScatterGroup,
+    Scattered, SceneEntity, Sky, SkyMode, SpriteImage, Sun, Terrain, TerrainData, TerrainFile,
+    TerrainHandle, TerrainHeight,
 };
 
 /// [`default_plugins`] for a 2D game: the scene view looks down -Z at the
@@ -68,7 +68,17 @@ pub fn default_plugins() -> PluginGroupBuilder {
         return plugins;
     }
 
-    plugins = besfa_components::windowless(plugins, 60.0);
+    plugins = besfa_components::windowless(plugins, 60.0).set(WindowPlugin {
+        // A window with no OS window behind it, as winit is off: the game
+        // reads the `pointer` command's position from it as from a real one
+        // (`Window::cursor_position`), and its cameras get their size from
+        // it, so `Camera::viewport_to_world_2d` works. 1280x720 is what
+        // `besfa_mcp` pictures the game at; the viewport resizes it to its
+        // texture. Bevy renders nothing to it, since it has no surface.
+        primary_window: Some(Window::default()),
+        exit_condition: ExitCondition::DontExit,
+        ..default()
+    });
     if viewport {
         plugins = plugins.add(viewport::ViewportPlugin);
     }

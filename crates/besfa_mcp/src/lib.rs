@@ -172,7 +172,8 @@ fn tools() -> Value {
                 "`spawned` reports come in the order of the commands that make entities; a failed command shows as {\"type\":\"done\",\"command\":INDEX,\"error\":...}. ",
                 "Entities are the ids `entities` lists; components are named by type path, as `entities` with an id shows them. Commands:\n",
                 "{\"command\":\"instantiate\",\"path\":\"models/oak-tree.glb\",\"translation\":[-55,0,10],\"yaw\":45,\"scale\":1.2,\"name\":\"Oak\",\"parent\":ID} places a model or prefab, relative to assets/; all but path optional; translation and yaw are in the world, yaw in degrees counterclockwise from above\n",
-                "{\"command\":\"spawn\",\"kind\":\"empty|cube|sphere|plane|light|camera\"} takes the same placement; a named empty makes a group; a 2D game has empty|rectangle|circle|camera instead, in pixels on XY, where yaw turns about Z\n",
+                "{\"command\":\"spawn\",\"kind\":\"empty|cube|sphere|plane|light|camera\"} takes the same placement; a named empty makes a group; a 2D game has empty|rectangle|circle|sprite|camera instead, in pixels on XY, where yaw turns about Z\n",
+                "Sprites (2D games): {\"command\":\"spawn\",\"kind\":\"sprite\",\"path\":\"sprites/crate.png\",\"translation\":[64,32,0]} or {\"command\":\"instantiate\",\"path\":\"sprites/crate.png\",...} places a PNG image relative to assets/, named after its file (without a path, a white 100x100 square); it is a besfa_editor_plugin::scene::SpriteImage, which the scene file saves and the game draws as a Bevy Sprite: set it to {\"path\":\"sprites/crate.png\",\"anchor\":[0,-0.5],\"size\":[64,64],\"atlas\":{\"cell\":[32,32],\"columns\":8,\"rows\":4,\"index\":3}} for the point at the entity's origin ([0,0] the middle, [-0.5,-0.5] the bottom left), the size in pixels (null for the image's or cell's own) and a cell of an image cut into equal cells numbered along rows from the top left (null for the whole image); z orders sprites, higher in front\n",
                 "{\"command\":\"parent\",\"id\":ID,\"parent\":ID} moves it under another scene entity, or to the top without parent, staying where it is in the world\n",
                 "{\"command\":\"set\",\"id\":ID,\"component\":PATH,\"value\":{...}} replaces the whole value; left-out fields take defaults\n",
                 "{\"command\":\"insert\",\"id\":ID,\"component\":PATH} / {\"command\":\"remove\",...}\n",
@@ -192,7 +193,11 @@ fn tools() -> Value {
                 "the first state plays first; states play the model's named clips, looping unless once, at speed; a transition is taken, first in the list first, when every condition holds and exit_time of the from state's clip has played (1 once through, 0 any time), crossfading for blend seconds; from \"*\" is any state; tests are Greater and Less (float params, against value), True and False (bool params) and Trigger (let go once taken). ",
                 "The game writes besfa_editor_plugin::animation::AnimationParams, {\"floats\":{\"speed\":2},\"bools\":{\"running\":true},\"triggers\":[\"jump\"],\"state\":\"walk\"}, where state is the state playing; set params to try transitions, or state to go there at once, sending the other params with it, since set replaces the whole value. `entities` with the root's id shows both, and AnimationClips, the model's clip names. Clips move only after play.\n",
                 "{\"command\":\"key\",\"code\":\"KeyW\",\"pressed\":true} holds a key down in the playing game until the same with pressed false; codes are Bevy KeyCode names like KeyW, ShiftLeft, Space\n",
+                "{\"command\":\"pointer\",\"event\":\"move\",\"x\":640,\"y\":360} moves the mouse, in pixels of the game's 1280x720 view from its top left; {\"command\":\"pointer\",\"event\":\"down\",\"x\":640,\"y\":360,\"button\":\"left\"} presses a button (left, middle or right) there and \"event\":\"up\" lets it go, and {\"command\":\"pointer\",\"event\":\"scroll\",\"delta\":120} scrolls, positive down; before play it drives the editor's scene view instead (orbit, pan, select), after play it is the game's mouse: ButtonInput<MouseButton>, CursorMoved, MouseMotion and MouseWheel, and the primary Window's cursor_position, which Camera::viewport_to_world_2d and viewport_to_world take as in a window (a plugin before protocol 20 has no window, so the cursor stays empty); a command after a pointer runs in the next frame, once the game's Update has seen it\n",
                 "{\"command\":\"play\"} unpauses the game\n",
+                "{\"command\":\"resources\",\"path\":\"my_game::\"} answers resources: the game's resources registered for reflection (#[reflect(Resource)]) whose type path contains the text, ignoring case, or all of them without it, each {\"path\":...,\"value\":...} in the shape `entities` shows components, in edit mode and while playing\n",
+                "{\"command\":\"step\",\"frames\":10} or {\"command\":\"step\",\"seconds\":0.5} plays exactly that many frames, or the seconds of game time rounded to whole frames, then pauses again: each frame moves time on by one fixed timestep (1/64 s unless the game sets Time<Fixed> otherwise, times the game's Time<Virtual> speed) instead of the wall clock's, so at normal speed FixedUpdate runs once a frame and the game's clock reads the same every run (what loads or switches scenes in the background still finishes on its own frames); before play it starts play first, as play does, without letting real time run, and frames 0 only starts it, or pauses a game that plays; Time<Real> moves by the same steps meanwhile; the commands after it wait until its frames ran; a frame takes about 1/60 s of real time, so give timeout_secs for long steps; Update systems also run in paused frames, so count frames by Time's delta, not by Update runs\n",
+                "{\"command\":\"reset\"} ends play without restarting the game: what it made goes, the scene file loads again as last saved, Startup runs again, and the game is paused in edit mode as after start; unsaved edits are lost\n",
                 "Screenshot, thumbnail and reimport are waited for until their answer comes. An unknown command is refused with the list of valid ones.",
             ),
             "inputSchema": {
@@ -359,6 +364,13 @@ fn answer(command: &Command) -> Option<(&'static str, &str)> {
 fn since(command: &Command) -> u32 {
     match command {
         Command::Spawn {
+            kind: SpawnKind::Sprite,
+            ..
+        } => 21,
+        Command::Instantiate { path, .. } if path.ends_with(".png") => 21,
+        Command::Resources { .. } => 22,
+        Command::Step { .. } => 20,
+        Command::Spawn {
             kind: SpawnKind::Rectangle | SpawnKind::Circle,
             ..
         } => 19,
@@ -470,7 +482,7 @@ struct Inbox {
 impl Inbox {
     fn receive(&mut self, report: Report) {
         match report {
-            Report::Hello { version } => self.hello = Some(version),
+            Report::Hello { version, .. } => self.hello = Some(version),
             Report::Entities { entities } => self.entities = Some(entities),
             // Long lists the editor shows in its panels, written once.
             Report::Systems { .. } | Report::Components { .. } => {}
@@ -920,6 +932,12 @@ mod tests {
         );
         assert_eq!(since(shot(false)), 4);
         assert_eq!(since(json!({"command": "spawn", "kind": "circle"})), 19);
+        assert_eq!(since(json!({"command": "step", "frames": 2})), 20);
+        let sprite = json!({"command": "spawn", "kind": "sprite", "path": "a.png"});
+        assert_eq!(since(sprite), 21);
+        let png = json!({"command": "instantiate", "path": "a.png"});
+        assert_eq!(since(png), 21);
+        assert_eq!(since(json!({"command": "resources"})), 22);
 
         let good = call(&mut game, json!({"command": "spawn", "kind": "cube"}));
         assert_eq!(good["isError"], true);

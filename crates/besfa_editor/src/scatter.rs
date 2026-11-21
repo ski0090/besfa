@@ -8,7 +8,7 @@ use eframe::egui::{self, DragValue, RichText, Slider, Ui};
 
 use crate::{
     i18n::t,
-    panels::{MUTED, can_place, section},
+    panels::{MUTED, can_scatter, section},
 };
 
 pub struct ScatterTools {
@@ -90,7 +90,7 @@ impl ScatterTools {
             }
         });
         if let Some(path) = dropped
-            && can_place(&path)
+            && can_scatter(&path)
             && !self.models.iter().any(|model| model.path == *path)
         {
             self.models.push(ScatterModel {
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(brush.models[0].weight, 2.0);
         assert!(!brush.erase);
         assert!(tools.brush(true).unwrap().erase);
-        assert!(can_place("prefabs/rock.scn.ron") && !can_place("textures/grass.png"));
+        assert!(can_scatter("prefabs/rock.scn.ron") && !can_scatter("textures/grass.png"));
     }
 
     #[test]

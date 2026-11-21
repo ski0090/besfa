@@ -60,7 +60,13 @@ use serde_json::Value;
 ///     `assets`, which [`Command::Save`] then writes; the editor opens
 ///     scenes other than `scenes/main.scn.ron` this way.
 /// 19. 2D games: [`SpawnKind::Rectangle`] and [`SpawnKind::Circle`].
-pub const VERSION: u32 = 19;
+/// 20. Playing a set number of frames, [`Command::Step`].
+/// 21. 2D games' sprites: [`SpawnKind::Sprite`] with [`Command::Spawn`]'s
+///     `path`, PNG images in [`Command::Instantiate`], and
+///     [`Report::Hello`]'s `two_d`.
+/// 22. Reading the game's resources, [`Command::Resources`] answered by
+///     [`Report::Resources`].
+pub const VERSION: u32 = 22;
 
 /// The first protocol whose plugins draw the Hierarchy panel themselves.
 pub const HIERARCHY_PROTOCOL: u32 = 15;
@@ -139,6 +145,27 @@ pub enum Command {
     /// [`Report::Hello`] and the reports that follow it as a new game does.
     /// Since protocol 13.
     Reset,
+    /// Plays `frames` frames, or the `seconds` of game time nearest a whole
+    /// number of frames, then pauses virtual time again, and answers once
+    /// they have run; what comes after waits for them. Each frame moves
+    /// real time on by one fixed timestep and virtual time by that at the
+    /// game's speed, never by the wall clock, so at normal speed
+    /// `FixedUpdate` runs once a frame. Before play it starts play first,
+    /// as `play` does, without a frame of real time; 0 frames only starts
+    /// it, or pauses a game that plays. Since protocol 20.
+    Step {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frames: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seconds: Option<f32>,
+    },
+    /// Reports `resources`: the game's reflected resources whose type path
+    /// contains `path`, ignoring case, or all of them, with their values.
+    /// Since protocol 22.
+    Resources {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     /// Picks the entity whose components the game reports; none clears it.
     Select {
         id: Option<u64>,
@@ -164,6 +191,10 @@ pub enum Command {
     /// Spawns a scene entity where `place` says, reports it and selects it.
     Spawn {
         kind: SpawnKind,
+        /// A sprite's image, relative to the asset directory; since
+        /// protocol 21.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
         #[serde(flatten)]
         place: Placement,
     },
@@ -183,7 +214,9 @@ pub enum Command {
         id: u64,
     },
     /// Spawns an entity showing the asset at `path`, relative to the asset
-    /// directory, where `place` says, then reports and selects it.
+    /// directory, where `place` says, then reports and selects it: a glTF
+    /// model, a scene or prefab file, or in a 2D game a PNG image as a
+    /// sprite (since protocol 21).
     Instantiate {
         path: String,
         #[serde(flatten)]
@@ -517,6 +550,9 @@ pub enum SpawnKind {
     /// A 2D game's flat shapes.
     Rectangle,
     Circle,
+    /// A 2D game's image, from [`Command::Spawn`]'s `path`; a white square
+    /// without one.
+    Sprite,
     Light,
     Camera,
     /// Flat ground 256 meters a side covered by its first surface layer,
@@ -745,7 +781,12 @@ pub enum PanelInput {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Report {
     /// The first line, with the protocol [`VERSION`] the plugin speaks.
-    Hello { version: u32 },
+    Hello {
+        version: u32,
+        /// A 2D game, which shows PNG images as sprites; since protocol 21.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        two_d: bool,
+    },
     /// The scene's entities, whenever they change.
     Entities { entities: Vec<EntityInfo> },
     /// The selected entity's components, whenever they change.
@@ -830,6 +871,8 @@ pub enum Report {
     Scattered { added: Vec<u64>, removed: Vec<u64> },
     /// The answer to `heights`, a height or none for each point.
     Heights { heights: Vec<Option<f32>> },
+    /// The answer to `resources`, in the order of their type paths.
+    Resources { resources: Vec<ResourceData> },
     /// The outcome of `reimport`.
     Reimported { path: String, error: Option<String> },
     /// A report from a newer plugin than this protocol knows.
@@ -999,6 +1042,15 @@ pub struct ClipInfo {
     pub duration: f32,
 }
 
+/// A reflected resource and its value, in the shape `entity` reports a
+/// component's: as the game wrote it, or the way Debug prints it when it
+/// does not serialize.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ResourceData {
+    pub path: String,
+    pub value: Value,
+}
+
 /// A component type the editor can add to an entity.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ComponentType {
@@ -1072,6 +1124,24 @@ mod tests {
 
     fn request(line: &str) -> Request {
         serde_json::from_str(line).unwrap()
+    }
+
+    #[test]
+    fn says_hello_as_a_2d_game_only_when_it_is_one() {
+        let hello = |two_d| Report::Hello { version: 21, two_d };
+        assert_eq!(
+            hello(false).line(),
+            r#"@besfa {"type":"hello","version":21}"#
+        );
+        assert_eq!(Report::parse(&hello(true).line()), Some(hello(true)));
+        let old = Report::parse(r#"@besfa {"type":"hello","version":19}"#);
+        assert_eq!(
+            old,
+            Some(Report::Hello {
+                version: 19,
+                two_d: false
+            })
+        );
     }
 
     #[test]
@@ -1158,6 +1228,7 @@ mod tests {
             request(r#"{"command":"spawn","kind":"cube","pointer":[640,360]}"#).command,
             Command::Spawn {
                 kind: SpawnKind::Cube,
+                path: None,
                 place: Placement {
                     pointer: Some([640.0, 360.0]),
                     ..Placement::default()
@@ -1189,6 +1260,7 @@ mod tests {
             seq: None,
             command: Command::Spawn {
                 kind: SpawnKind::Empty,
+                path: None,
                 place: Placement::default(),
             },
         })
@@ -1239,7 +1311,33 @@ mod tests {
             request(r#"{"command":"spawn","kind":"terrain"}"#).command,
             Command::Spawn {
                 kind: SpawnKind::Terrain,
+                path: None,
                 place: Placement::default(),
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"spawn","kind":"sprite","path":"sprites/crate.png","translation":[64,32,0]}"#)
+                .command,
+            Command::Spawn {
+                kind: SpawnKind::Sprite,
+                path: Some("sprites/crate.png".into()),
+                place: Placement {
+                    translation: Some([64.0, 32.0, 0.0]),
+                    ..Placement::default()
+                },
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"resources","path":"score"}"#).command,
+            Command::Resources {
+                path: Some("score".into())
+            }
+        );
+        assert_eq!(
+            request(r#"{"command":"step","seconds":0.5}"#).command,
+            Command::Step {
+                frames: None,
+                seconds: Some(0.5)
             }
         );
         assert_eq!(

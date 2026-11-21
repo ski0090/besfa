@@ -45,8 +45,8 @@ pub use save::{
     Persist, SaveFilter, SceneId, backup_path, load_world, read_entity, save_world, write_entity,
 };
 pub use scene::{
-    CurrentScene, KeepOnSceneSwitch, MeshColor, MeshShape, RuntimeOnly, SCENE_PATH, SceneEntity,
-    SceneSpawned, SwitchScene, first_scene,
+    AtlasCell, CurrentScene, KeepOnSceneSwitch, MeshColor, MeshShape, RuntimeOnly, SCENE_PATH,
+    SceneEntity, SceneSpawned, SpriteBuilt, SpriteImage, SwitchScene, first_scene,
 };
 pub use sky::{Moon, Sky, SkyMode, Sun};
 pub use terrain::{Terrain, TerrainData, TerrainFile, TerrainHandle, TerrainHeight, TerrainTint};
@@ -98,6 +98,8 @@ mod tests {
             (TerrainFile::type_path(), "terrain::TerrainFile"),
             (MeshShape::type_path(), "scene::MeshShape"),
             (MeshColor::type_path(), "scene::MeshColor"),
+            (SpriteImage::type_path(), "scene::SpriteImage"),
+            (AtlasCell::type_path(), "scene::AtlasCell"),
             (PartChanges::type_path(), "part_changes::PartChanges"),
             (Scattered::type_path(), "ground::Scattered"),
             (ScatterGroup::type_path(), "ground::ScatterGroup"),

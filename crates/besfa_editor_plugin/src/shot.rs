@@ -321,12 +321,31 @@ fn give_back(world: &mut World, borrowed: Vec<Borrowed>) {
         if borrowed.ui {
             camera.remove::<IsDefaultUiCamera>();
         }
+        // Bevy works a camera's size out again only when its projection or
+        // its target's size changes, so it would keep the picture's, and
+        // turning the pointer into the world would go by it.
+        if let Some(mut projection) = camera.get_mut::<Projection>() {
+            projection.set_changed();
+        }
     }
 }
 
-/// Placed models and prefabs still loading or spawning, which a picture
-/// would miss. One that failed to load is not waited for.
+/// Placed models and prefabs still loading or spawning, or sprites' images
+/// still loading, which a picture would miss. One that failed to load is
+/// not waited for.
 fn loading(world: &mut World) -> bool {
+    let mut sprites = world.query::<&Sprite>();
+    let server = world.resource::<AssetServer>();
+    let image_loading = |sprite: &Sprite| {
+        let id = sprite.image.id().untyped();
+        // A handle with no path, as a white square's, is not loaded from disk.
+        sprite.image.path().is_some()
+            && !matches!(server.load_state(id), LoadState::Failed(_))
+            && !server.is_loaded_with_dependencies(id)
+    };
+    if sprites.iter(world).any(image_loading) {
+        return true;
+    }
     let mut roots = world.query_filtered::<(
         Option<&WorldAssetRoot>,
         Option<&DynamicWorldRoot>,
@@ -373,6 +392,22 @@ fn captured(capture: On<ScreenshotCaptured>, mut commands: Commands) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_camera_given_back_works_its_size_out_again() {
+        let mut world = World::new();
+        let camera = world.spawn((Camera::default(), Projection::default())).id();
+        world.clear_trackers();
+        let borrowed = Borrowed {
+            camera,
+            target: RenderTarget::default(),
+            active: true,
+            ui: false,
+        };
+
+        give_back(&mut world, vec![borrowed]);
+        assert!(world.entity(camera).get_ref::<Projection>().unwrap().is_changed());
+    }
 
     #[test]
     fn looks_down_with_north_up_from_above() {

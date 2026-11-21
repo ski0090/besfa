@@ -15,11 +15,12 @@ use std::{
 };
 
 use besfa_components::{SwitchScene, TerrainData, scene::start_switch};
-use besfa_protocol::{Command, Placement, Report, Request, VERSION};
+use besfa_protocol::{Command, Placement, Report, Request, SpawnKind, VERSION};
 use bevy::{
     ecs::{message::Messages, resource::IsResource},
     input::InputSystems,
     prelude::*,
+    time::{TimeSystems, TimeUpdateStrategy},
     world_serialization::DynamicWorld,
 };
 
@@ -49,8 +50,6 @@ pub(crate) struct EditorCommands(pub(crate) Mutex<mpsc::Receiver<String>>);
 
 impl Plugin for EditModePlugin {
     fn build(&self, app: &mut App) {
-        // The first line, so the editor knows what this plugin understands.
-        send_report(&Report::Hello { version: VERSION });
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             for line in std::io::stdin().lines().map_while(Result::ok) {
@@ -66,9 +65,18 @@ impl Plugin for EditModePlugin {
             .add_message::<SwitchScene>()
             .insert_resource(HeldSwitches(Some(Vec::new())))
             .add_systems(PreStartup, pause)
+            // Before time moves on: whether this frame is one of a step's.
+            .add_systems(First, count_step.before(TimeSystems))
             // Before Bevy reads this frame's input, which the commands write.
             .add_systems(PreUpdate, run_commands.before(InputSystems))
             .add_systems(PreUpdate, hold_switches.before(start_switch));
+    }
+
+    /// The first line, so the editor knows what this plugin understands,
+    /// once every plugin has said whether the game is 2D; before the
+    /// reports other plugins send as they clean up.
+    fn finish(&self, app: &mut App) {
+        send_report(&hello(app.world()));
     }
 
     /// Before any schedule runs, so what PreStartup spawns, like a physics
@@ -80,8 +88,60 @@ impl Plugin for EditModePlugin {
     }
 }
 
+fn hello(world: &World) -> Report {
+    Report::Hello {
+        version: VERSION,
+        two_d: world.contains_resource::<scene_view::TwoD>(),
+    }
+}
+
 fn pause(mut time: ResMut<Time<Virtual>>) {
     time.pause();
+}
+
+/// A `step` playing its frames: those left to start, whether they have all
+/// played, the request to answer then, and how time moved on before it,
+/// which comes back then.
+#[derive(Resource)]
+struct Stepping {
+    left: u32,
+    over: bool,
+    seq: Option<u64>,
+    clock: TimeUpdateStrategy,
+}
+
+/// Plays `frames` frames from the next one on, each one fixed timestep
+/// long, never the wall clock's, so a step plays the same every run.
+fn step(world: &mut World, frames: u32) {
+    let clock = world.remove_resource::<TimeUpdateStrategy>();
+    world.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    world.resource_mut::<Time<Virtual>>().unpause();
+    world.insert_resource(Stepping {
+        left: frames,
+        over: false,
+        seq: None,
+        clock: clock.unwrap_or_default(),
+    });
+}
+
+/// Lets the frame starting be one of the step's, or once they have all
+/// played, pauses before it gets any time, so the step is answered after
+/// the last one's `Update`.
+fn count_step(
+    stepping: Option<ResMut<Stepping>>,
+    mut time: ResMut<Time<Virtual>>,
+    mut clock: ResMut<TimeUpdateStrategy>,
+) {
+    let Some(mut stepping) = stepping.filter(|stepping| !stepping.over) else {
+        return;
+    };
+    if stepping.left > 0 {
+        stepping.left -= 1;
+        return;
+    }
+    time.pause();
+    *clock = std::mem::take(&mut stepping.clock);
+    stepping.over = true;
 }
 
 /// The scenes the game asked to switch to before Play, which Play switches
@@ -132,11 +192,12 @@ fn reset(world: &mut World) {
     world.insert_resource(shot::Shots::default());
     world.insert_resource(thumbnail::Thumbnails::default());
     world.remove_resource::<input::LastPointer>();
+    input::set_cursor(world, None);
     panels::reset(world);
     world.insert_resource(Time::<Virtual>::default());
 
     reload_files(world);
-    send_report(&Report::Hello { version: VERSION });
+    send_report(&hello(world));
     send_report(&inspect::systems(world));
     send_report(&inspect::addable_components(world));
     world.run_schedule(PreStartup);
@@ -179,6 +240,17 @@ fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
         let receiver = commands.0.lock().unwrap_or_else(PoisonError::into_inner);
         waiting.extend(receiver.try_iter());
     }
+    // A step's frames run before anything after it, and it is answered
+    // once they did, after the last one's reports.
+    if world
+        .get_resource::<Stepping>()
+        .is_some_and(|stepping| !stepping.over)
+    {
+        return;
+    }
+    if let Some(Stepping { seq: Some(seq), .. }) = world.remove_resource::<Stepping>() {
+        send_report(&Report::Done { seq, error: None });
+    }
     let mut pointed = false;
     while let Some(line) = waiting.pop_front() {
         match serde_json::from_str::<Request>(&line) {
@@ -201,6 +273,10 @@ fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
                 }
                 pointed |= matches!(command, Command::Pointer(_));
                 let result = run(world, command);
+                if let Some(mut stepping) = world.get_resource_mut::<Stepping>() {
+                    stepping.seq = seq;
+                    return;
+                }
                 if let Some(seq) = seq {
                     send_report(&Report::Done {
                         seq,
@@ -231,16 +307,31 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
     }
     let result = match command {
         Command::Play => {
-            panels::play(world);
+            play(world);
             world.resource_mut::<Time<Virtual>>().unpause();
-            if let Some(held) = world.resource_mut::<HeldSwitches>().0.take() {
-                world.write_message_batch(held);
-            }
-            // First, so a camera inside the model is not handed back.
-            preview::close(world);
-            scene_view::stop(world);
-            info!("Playing.");
             Ok(())
+        }
+        Command::Step { frames, seconds } => {
+            // Game time a frame takes: a timestep at the game's speed.
+            let frame = world.resource::<Time<Fixed>>().timestep().as_secs_f64()
+                * world.resource::<Time<Virtual>>().relative_speed_f64();
+            match (frames, seconds) {
+                (Some(frames), None) => Ok(frames),
+                (None, Some(seconds)) if seconds >= 0.0 && seconds.is_finite() && frame > 0.0 => {
+                    Ok((f64::from(seconds) / frame).round() as u32)
+                }
+                _ => Err("step takes frames or seconds of 0 or more".to_string()),
+            }
+            .map(|frames| {
+                if world.resource::<HeldSwitches>().0.is_some() {
+                    play(world);
+                }
+                if frames > 0 {
+                    step(world, frames);
+                } else {
+                    world.resource_mut::<Time<Virtual>>().pause();
+                }
+            })
         }
         Command::Reset => {
             reset(world);
@@ -248,6 +339,10 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
         }
         Command::Select { id } => {
             world.resource_mut::<Selected>().0 = id.and_then(Entity::try_from_bits);
+            Ok(())
+        }
+        Command::Resources { path } => {
+            send_report(&inspect::resources(world, path.as_deref()));
             Ok(())
         }
         Command::Save => {
@@ -281,13 +376,18 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             part_changes::edited(world, entity, &component);
             Ok(())
         }),
-        Command::Spawn { kind, place } => {
+        Command::Spawn { kind, path, place } => {
             let two_d = world.contains_resource::<crate::scene_view::TwoD>();
-            if edit::shows(kind, two_d) {
-                spawn_placed(world, &place, |world| Ok(edit::spawn(world, kind)))
-            } else {
-                let game = if two_d { "2D" } else { "3D" };
-                Err(format!("a {game} game does not show {kind:?}"))
+            match path {
+                _ if !edit::shows(kind, two_d) => {
+                    let game = if two_d { "2D" } else { "3D" };
+                    Err(format!("a {game} game does not show {kind:?}"))
+                }
+                None => spawn_placed(world, &place, |world| Ok(edit::spawn(world, kind))),
+                Some(path) if kind == SpawnKind::Sprite && path.ends_with(".png") => {
+                    spawn_placed(world, &place, |world| edit::instantiate(world, &path))
+                }
+                Some(path) => Err(format!("a {kind:?} does not show {path}")),
             }
         }
         Command::Duplicate { id } => entity(id)
@@ -468,9 +568,13 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
             }
             Ok(())
         }
-        // Over a panel there is no scene to show the ghost on.
+        // Over a panel there is no scene to show the ghost on, and a 3D
+        // game shows no sprite: refusing it would log every move.
         Command::Ghost { path, pointer } => {
-            let path = path.filter(|_| !panels::covers(world, pointer.into()));
+            let two_d = world.contains_resource::<crate::scene_view::TwoD>();
+            let path = path.filter(|path| {
+                !panels::covers(world, pointer.into()) && (two_d || !path.ends_with(".png"))
+            });
             ground::ghost(world, path.as_deref(), pointer.into())
         }
         // Frames the previewed model, or the selection in the scene view.
@@ -619,6 +723,19 @@ fn run(world: &mut World, command: Command) -> Result<(), String> {
     result
 }
 
+/// Leaves edit mode for play, with time still paused: the game's cameras
+/// take the view and the scenes it asked for come.
+fn play(world: &mut World) {
+    panels::play(world);
+    if let Some(held) = world.resource_mut::<HeldSwitches>().0.take() {
+        world.write_message_batch(held);
+    }
+    // First, so a camera inside the model is not handed back.
+    preview::close(world);
+    scene_view::stop(world);
+    info!("Playing.");
+}
+
 /// Tells the editor about an entity it asked for, then selects it.
 fn spawned(world: &mut World, entity: Entity) {
     send_report(&Report::Spawned {
@@ -707,6 +824,96 @@ mod tests {
 
         // The request is used up: the game's own pause sticks.
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        app.update();
+        assert!(paused(&app));
+    }
+
+    /// Frames in which virtual time moved, FixedUpdate runs, and the frames
+    /// moved when the selection last changed.
+    #[derive(Resource, Default)]
+    struct Moved(u32, u32, u32);
+
+    #[test]
+    fn steps_exactly_the_frames_asked_from_edit_mode() {
+        let (mut app, editor) = editor_app();
+        app.init_resource::<Moved>()
+            .add_systems(Update, |time: Res<Time>, mut moved: ResMut<Moved>| {
+                if time.delta_secs() > 0.0 {
+                    moved.0 += 1;
+                }
+            })
+            .add_systems(FixedUpdate, |mut moved: ResMut<Moved>| moved.1 += 1)
+            .add_systems(
+                PreUpdate,
+                (|mut moved: ResMut<Moved>| moved.2 = moved.0)
+                    .after(run_commands)
+                    .run_if(resource_changed::<Selected>),
+            );
+        app.update();
+        let entity = app.world_mut().spawn_empty().id();
+        editor
+            .send(r#"{"seq":1,"command":"step","frames":3}"#.into())
+            .unwrap();
+        let select = format!(r#"{{"command":"select","id":{}}}"#, entity.to_bits());
+        editor.send(select).unwrap();
+        for _ in 0..3 {
+            app.update();
+            assert_eq!(app.world().resource::<Selected>().0, None, "waits");
+        }
+        // Real time passing in between changes nothing.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        for _ in 0..5 {
+            app.update();
+        }
+
+        let moved = app.world().resource::<Moved>();
+        assert_eq!((moved.0, moved.1), (3, 3), "three frames, one tick each");
+        assert!(paused(&app));
+        let elapsed = app.world().resource::<Time<Virtual>>().elapsed();
+        assert_eq!(elapsed, Time::<Fixed>::default().timestep() * 3);
+        assert!(
+            app.world().resource::<HeldSwitches>().0.is_none(),
+            "playing"
+        );
+        assert!(matches!(
+            app.world().resource::<TimeUpdateStrategy>(),
+            TimeUpdateStrategy::Automatic
+        ));
+        assert!(
+            app.world().resource::<Selected>().0.is_some(),
+            "then the rest"
+        );
+        let moved = app.world().resource::<Moved>();
+        assert_eq!(moved.2, 3, "the rest sees the last frame's Update");
+
+        // Seconds go by whole timesteps: 1/64 s each.
+        editor
+            .send(r#"{"command":"step","seconds":0.25}"#.into())
+            .unwrap();
+        for _ in 0..20 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<Moved>().0, 3 + 16);
+
+        // Seconds are the game's: at twice the speed, half the frames.
+        let mut time = app.world_mut().resource_mut::<Time<Virtual>>();
+        time.set_relative_speed(2.0);
+        let before = time.elapsed();
+        editor
+            .send(r#"{"command":"step","seconds":0.25}"#.into())
+            .unwrap();
+        for _ in 0..20 {
+            app.update();
+        }
+        let elapsed = app.world().resource::<Time<Virtual>>().elapsed() - before;
+        assert_eq!(elapsed, std::time::Duration::from_millis(250));
+        assert_eq!(app.world().resource::<Moved>().0, 3 + 16 + 8);
+
+        // No frames pauses a game that plays.
+        app.world_mut().resource_mut::<Time<Virtual>>().unpause();
+        editor
+            .send(r#"{"command":"step","frames":0}"#.into())
+            .unwrap();
         app.update();
         assert!(paused(&app));
     }

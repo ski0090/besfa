@@ -30,6 +30,7 @@ use bevy::{
         sync_world::{RenderEntity, SyncToRenderWorld},
         view::ColorGrading,
     },
+    sprite::Anchor,
     transform::components::TransformTreeChanged,
     world_serialization::{
         DynamicEntity, DynamicWorld, DynamicWorldRoot, WorldAssetRoot,
@@ -43,8 +44,8 @@ use bevy::{
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 pub use besfa_components::scene::{
-    CurrentScene, FileEntity, Loading, MeshColor, MeshShape, RuntimeOnly, SceneEntity, asset_file,
-    first_scene, project_file,
+    CurrentScene, FileEntity, Loading, MeshColor, MeshShape, RuntimeOnly, SceneEntity, SpriteBuilt,
+    SpriteImage, asset_file, first_scene, project_file,
 };
 #[cfg(test)]
 use besfa_components::scene::{
@@ -386,7 +387,7 @@ fn saved_components(
         .into_iter()
         .flatten()
         .filter_map(|(id, info)| {
-            let type_id = info.type_id().filter(|id| !unsaved(world, *id))?;
+            let type_id = info.type_id().filter(|id| !unsaved(world, entity, *id))?;
             let value = registry
                 .get_type_data::<ReflectComponent>(type_id)?
                 .reflect(entity_ref)?;
@@ -468,10 +469,14 @@ fn is_default(registry: &TypeRegistry, info: &ComponentInfo, value: &dyn Partial
 /// serializable, the render target, which the editor points at its viewport
 /// after the camera spawns, and the plugin's note of a camera it switched off.
 // ponytail: what the template's entities carry; grow it as files show more.
-/// Whether a scene save leaves out components of type `id`: computed ones,
-/// and those the game puts on by itself.
-pub(crate) fn unsaved(world: &World, id: TypeId) -> bool {
-    left_out(id) || world.get_resource::<RuntimeOnly>().is_some_and(|runtime| runtime.contains(id))
+/// Whether a scene save leaves out `entity`'s component of type `id`:
+/// computed ones, and those the game puts on by itself.
+pub(crate) fn unsaved(world: &World, entity: Entity, id: TypeId) -> bool {
+    left_out(id)
+        || world.get_resource::<RuntimeOnly>().is_some_and(|runtime| runtime.contains(id))
+        // Built from a SpriteImage, and holding handles a file cannot.
+        || world.get::<SpriteBuilt>(entity).is_some()
+            && [TypeId::of::<Sprite>(), TypeId::of::<Anchor>()].contains(&id)
 }
 
 pub(crate) fn left_out(type_id: TypeId) -> bool {
@@ -1071,6 +1076,58 @@ mod tests {
         let loaded = loaded.world().get::<Camera>(entities[0]).unwrap();
         assert_eq!(loaded.order, 3);
         assert!(loaded.is_active);
+    }
+
+    #[test]
+    fn saves_a_sprite_as_its_image_not_the_sprite_built_from_it() {
+        let mut app = test_app();
+        app.register_type::<SpriteImage>()
+            .register_type::<Sprite>()
+            .register_type::<Anchor>();
+        let image = SpriteImage {
+            path: "sprites/crate.png".into(),
+            anchor: Vec2::new(0.0, -0.5),
+            ..default()
+        };
+        // As the plugin builds it: its atlas layout, made in code, has no
+        // path a file could hold.
+        let built = Sprite {
+            texture_atlas: Some(TextureAtlas::default()),
+            ..default()
+        };
+        app.world_mut().spawn((
+            Name::new("Crate"),
+            SceneEntity,
+            image.clone(),
+            built,
+            Anchor(image.anchor),
+            SpriteBuilt,
+        ));
+        let dir = std::env::temp_dir().join(format!("besfa-sprite-{}", std::process::id()));
+        let path = dir.join(SCENE_PATH);
+
+        save(app.world_mut(), &path).expect("the scene should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            ron.contains("besfa_editor_plugin::scene::SpriteImage"),
+            "{ron}"
+        );
+        assert!(ron.contains("\"sprites/crate.png\""), "{ron}");
+        assert!(!ron.contains("sprite::Sprite\""), "built from it: {ron}");
+        assert!(!ron.contains("Anchor"), "{ron}");
+
+        // A sprite of the game's own stays in the file next to the image.
+        app.world_mut().spawn((
+            Name::new("Sign"),
+            SceneEntity,
+            image.clone(),
+            Sprite::sized(Vec2::splat(7.0)),
+        ));
+        save(app.world_mut(), &path).expect("the scene should save");
+        let ron = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(ron.contains("sprite::Sprite\""), "its own: {ron}");
     }
 
     #[test]

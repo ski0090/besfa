@@ -38,8 +38,14 @@ pub fn prebuild_status(ui: &mut Ui, prebuild: &Prebuild) {
     };
 }
 
-/// Files the scene can show: glTF models, and scene and prefab files.
-pub fn can_place(path: &str) -> bool {
+/// Files the scene can show: what the scatter brush places, and with
+/// `sprites`, in a 2D game, the PNG images it shows as sprites.
+pub fn can_place(path: &str, sprites: bool) -> bool {
+    can_scatter(path) || sprites && path.ends_with(".png")
+}
+
+/// Files the scatter brush places: glTF models, and scene and prefab files.
+pub fn can_scatter(path: &str) -> bool {
     can_preview(path) || path.ends_with(".scn.ron")
 }
 
@@ -255,8 +261,8 @@ impl AssetBrowser {
     }
 
     /// Returns what to do with an asset; nothing is added or previewed
-    /// unless `can_add`.
-    pub fn ui(&mut self, ui: &mut Ui, can_add: bool) -> Option<AssetAction> {
+    /// unless `can_add`, and PNG images are added only with `sprites`.
+    pub fn ui(&mut self, ui: &mut Ui, can_add: bool, sprites: bool) -> Option<AssetAction> {
         if self.listed.is_none() {
             self.list();
         }
@@ -283,7 +289,7 @@ impl AssetBrowser {
                 |row| row.depth,
                 fold,
                 |ui, row| {
-                    let placeable = can_add && !row.folder && can_place(&row.path);
+                    let placeable = can_add && !row.folder && can_place(&row.path, sprites);
                     let icon = if row.folder {
                         "🗀"
                     } else if placeable {
@@ -454,7 +460,9 @@ mod tests {
                 ("b.txt", 0)
             ]
         );
-        assert!(can_place("models/ship.glb") && can_place("A.scn.ron") && !can_place("b.txt"));
+        assert!(can_place("models/ship.glb", false) && can_place("A.scn.ron", false));
+        assert!(!can_place("b.txt", true));
+        assert!(can_place("sprites/crate.png", true) && !can_place("sprites/crate.png", false));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -532,7 +540,7 @@ mod tests {
         // Clicks take a few steps; at 60 a second two still make a double-click.
         let mut harness = Harness::builder().with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, (assets, action): &mut (AssetBrowser, Option<AssetAction>)| {
-                if let Some(asked) = assets.ui(ui, true) {
+                if let Some(asked) = assets.ui(ui, true, false) {
                     *action = Some(asked);
                 }
             },
@@ -587,7 +595,7 @@ mod tests {
         }
         let mut harness = Harness::new_ui_state(
             |ui, assets: &mut AssetBrowser| {
-                assets.ui(ui, true);
+                assets.ui(ui, true, false);
             },
             AssetBrowser::new(dir.clone()),
         );

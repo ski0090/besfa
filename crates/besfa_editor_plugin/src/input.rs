@@ -3,13 +3,16 @@
 //! the editor sends them as commands and they become Bevy's input messages:
 //! `ButtonInput<KeyCode>`, `ButtonInput<Key>`, `ButtonInput<MouseButton>`,
 //! `AccumulatedMouseMotion` and `AccumulatedMouseScroll` work as they do
-//! with a window. The pointer also drives Bevy's picking on the viewport,
-//! so UI nodes get `PointerClick`, `PointerOver` and the rest.
-// ponytail: no window entity, so `Window::cursor_position` stays empty;
-// `CursorMoved` carries the viewport position. Give the game a headless
-// window if games need the cursor from it.
+//! with a window, and so does the primary `Window`'s `cursor_position`,
+//! which the plugin gives a game it runs without one. The pointer also
+//! drives Bevy's picking on the viewport, so UI nodes get `PointerClick`,
+//! `PointerOver` and the rest.
+// The messages name no window all the same: bevy_egui would hand that
+// window's mouse to the egui of the cameras drawing to it.
 // ponytail: bevy_ui's `Interaction` follows window cameras only, so it stays
-// `None` here; mirror the picking hover into it if games need it.
+// `None` in the editor's viewport, where cameras draw to its texture (it can
+// move without one, where they draw to the plugin's window); mirror the
+// picking hover into it if games need it.
 
 use bevy::{
     camera::NormalizedRenderTarget,
@@ -22,14 +25,14 @@ use bevy::{
     picking::pointer::{Location, PointerAction, PointerButton, PointerId, PointerInput},
     prelude::*,
     reflect::enums::{DynamicEnum, DynamicVariant},
-    window::CursorMoved,
+    window::{CursorMoved, PrimaryWindow},
 };
 
 use besfa_protocol::{Button, PointerEvent};
 
 use crate::viewport::VIEWPORT_HANDLE;
 
-/// The messages name a window; there is none.
+/// The window the messages name, which none is.
 const NO_WINDOW: Entity = Entity::PLACEHOLDER;
 
 /// Where the pointer was last, for the motion to the next position.
@@ -86,8 +89,18 @@ fn moved(world: &mut World, position: Vec2) {
         position,
         delta,
     });
+    set_cursor(world, Some(position));
     let delta = delta.unwrap_or_default();
     picked(world, position, PointerAction::Move { delta });
+}
+
+/// Puts the primary window's cursor at `position`, in its pixels, or takes
+/// it away.
+pub(crate) fn set_cursor(world: &mut World, position: Option<Vec2>) {
+    let mut windows = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
+    if let Ok(mut window) = windows.single_mut(world) {
+        window.set_physical_cursor_position(position.map(Vec2::as_dvec2));
+    }
 }
 
 /// The mouse pointer's `action` at `position` on the viewport, which game
@@ -181,6 +194,10 @@ mod tests {
     fn turns_viewport_events_into_input() {
         let mut app = App::new();
         app.add_plugins(InputPlugin).add_message::<CursorMoved>();
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
         let world = app.world_mut();
 
         key(world, "KeyW", true, Some("w".into())).unwrap();
@@ -213,6 +230,8 @@ mod tests {
             Vec2::new(3.0, 4.0)
         );
         assert_eq!(world.resource::<AccumulatedMouseScroll>().delta.y, -120.0);
+        let cursor = world.get::<Window>(window).unwrap().cursor_position();
+        assert_eq!(cursor, Some(Vec2::new(13.0, 14.0)), "the window has it");
 
         focus_lost(app.world_mut());
         app.update();
