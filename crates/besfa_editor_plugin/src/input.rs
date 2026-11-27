@@ -5,8 +5,9 @@
 //! `AccumulatedMouseMotion` and `AccumulatedMouseScroll` work as they do
 //! with a window, and so does the primary `Window`'s `cursor_position`,
 //! which the plugin gives a game it runs without one. The pointer also
-//! drives Bevy's picking on the viewport, so UI nodes get `PointerClick`,
-//! `PointerOver` and the rest.
+//! drives Bevy's picking on what the game's cameras draw to, the viewport or
+//! else that window, so UI nodes get `PointerClick`, `PointerOver` and the
+//! rest.
 // The messages name no window all the same: bevy_egui would hand that
 // window's mouse to the egui of the cameras drawing to it.
 // ponytail: bevy_ui's `Interaction` follows window cameras only, so it stays
@@ -15,7 +16,7 @@
 // picking hover into it if games need it.
 
 use bevy::{
-    camera::NormalizedRenderTarget,
+    camera::{NormalizedRenderTarget, RenderTarget},
     input::{
         ButtonState,
         keyboard::{Key, KeyboardFocusLost, KeyboardInput, NativeKey},
@@ -25,12 +26,12 @@ use bevy::{
     picking::pointer::{Location, PointerAction, PointerButton, PointerId, PointerInput},
     prelude::*,
     reflect::enums::{DynamicEnum, DynamicVariant},
-    window::{CursorMoved, PrimaryWindow},
+    window::{CursorMoved, PrimaryWindow, WindowRef},
 };
 
 use besfa_protocol::{Button, PointerEvent};
 
-use crate::viewport::VIEWPORT_HANDLE;
+use crate::viewport::{VIEWPORT_HANDLE, ViewportTexture};
 
 /// The window the messages name, which none is.
 const NO_WINDOW: Entity = Entity::PLACEHOLDER;
@@ -103,14 +104,27 @@ pub(crate) fn set_cursor(world: &mut World, position: Option<Vec2>) {
     }
 }
 
-/// The mouse pointer's `action` at `position` on the viewport, which game
-/// cameras render into, for picking.
+/// The mouse pointer's `action` at `position` on what the game's cameras
+/// render into, for picking.
 fn picked(world: &mut World, position: Vec2, action: PointerAction) {
-    let location = Location {
-        target: NormalizedRenderTarget::TextureView(VIEWPORT_HANDLE),
-        position,
+    let viewport = world.contains_resource::<ViewportTexture>();
+    let mut windows = world.query_filtered::<Entity, With<PrimaryWindow>>();
+    let window = windows.single(world).ok();
+    let Some(target) = pointer_target(viewport, window) else {
+        return;
     };
+    let location = Location { target, position };
     world.write_message(PointerInput::new(PointerId::Mouse, location, action));
+}
+
+/// Where the game's window cameras render, which picking matches a pointer
+/// to: the editor's viewport, which they are moved to, or else the primary
+/// `window`, which a game run without a viewport keeps. None without either.
+fn pointer_target(viewport: bool, window: Option<Entity>) -> Option<NormalizedRenderTarget> {
+    if viewport {
+        return Some(NormalizedRenderTarget::TextureView(VIEWPORT_HANDLE));
+    }
+    RenderTarget::Window(WindowRef::Primary).normalize(window)
 }
 
 fn picking(button: Button) -> PointerButton {
@@ -240,11 +254,30 @@ mod tests {
     }
 
     #[test]
-    fn points_picking_at_the_viewport() {
+    fn points_picking_at_the_viewport_or_else_the_primary_window() {
+        let window = Entity::from_raw_u32(7).unwrap();
+        assert_eq!(
+            pointer_target(true, Some(window)),
+            Some(NormalizedRenderTarget::TextureView(VIEWPORT_HANDLE)),
+        );
+        assert_eq!(
+            pointer_target(false, Some(window)),
+            RenderTarget::Window(WindowRef::Entity(window)).normalize(None),
+        );
+        assert_eq!(pointer_target(false, None), None);
+    }
+
+    #[test]
+    fn points_picking_at_the_window_of_a_game_without_a_viewport() {
         let mut app = App::new();
         app.add_plugins((InputPlugin, PointerInputPlugin, PickingPlugin))
             .add_message::<CursorMoved>()
             .add_message::<WindowEvent>();
+        // Where the game's window cameras draw, as under besfa_mcp.
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
         // Spawns the mouse pointer.
         app.update();
         let down = PointerEvent::Down {
@@ -262,7 +295,9 @@ mod tests {
         assert_eq!(
             location.location(),
             Some(&Location {
-                target: NormalizedRenderTarget::TextureView(VIEWPORT_HANDLE),
+                target: RenderTarget::Window(WindowRef::Entity(window))
+                    .normalize(None)
+                    .unwrap(),
                 position: Vec2::new(10.0, 20.0),
             })
         );

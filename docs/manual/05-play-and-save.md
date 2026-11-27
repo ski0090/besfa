@@ -56,7 +56,7 @@
 - 키는 `ButtonInput<KeyCode>`(물리 키, 자판 배열과 무관)와 `ButtonInput<Key>`(이름 있는 키와 입력한 글자)로 들어옵니다.
 - 마우스는 `ButtonInput<MouseButton>`, `MouseMotion`, `AccumulatedMouseMotion`, `MouseWheel`, `AccumulatedMouseScroll`, 뷰포트 좌표의 `CursorMoved`로 들어옵니다.
 - 게임에는 OS 창이 없는 대신, 플러그인이 화면 없는 기본 창(`PrimaryWindow`)을 둡니다. 크기는 뷰포트와 같고(`besfa mcp`와 `besfa screenshot`에서는 1280×720), `Window::cursor_position`은 마우스가 마지막으로 있던 뷰포트 좌표입니다. 그래서 창이 있을 때처럼 `Camera::viewport_to_world_2d`·`viewport_to_world`로 커서 아래의 월드 위치를 얻습니다. 이 창에는 아무것도 그려지지 않습니다.
-- 게임 UI 버튼은 `PointerClick`·`PointerOver` 같은 picking 이벤트로 눌립니다(UI 루트에 그 카메라의 `UiTargetCamera`가 있어야 합니다). bevy_ui의 `Interaction`은 창에 그리는 카메라만 봅니다. 그래서 에디터 뷰포트에서는 `None`으로 남고, `besfa mcp`처럼 창 없이 실행할 때는 게임 카메라가 플러그인이 둔 창을 보므로 다르게 움직일 수 있습니다. 버튼은 picking 이벤트로 만드세요.
+- 게임 UI 버튼은 `PointerClick`·`PointerOver` 같은 picking 이벤트로 눌립니다. 마우스 포인터는 게임 카메라가 그리는 곳을 가리킵니다. 에디터 뷰포트에서는 뷰포트이고, `besfa mcp`처럼 창 없이 실행할 때는 플러그인이 둔 창이라 UI가 창이 있을 때처럼 눌립니다(`bevy::ui_widgets`의 버튼, `bevy::picking::hover::Hovered`도). 에디터 뷰포트에서는 게임 카메라가 창이 아닌 뷰포트에 그리므로, UI 루트에 그 카메라의 `UiTargetCamera`가 있거나 그 카메라에 `IsDefaultUiCamera`가 있어야 UI가 그려지고 눌립니다. 한 번에 보낸 `down`과 `up`은 `up`이 다음 프레임에 들어가므로 클릭이 됩니다(스크롤은 picking에 가지 않습니다). 다만 `"game": true` 스크린샷은 찍는 동안 게임 카메라를 그림으로 돌리므로, 그림에는 마우스가 올라간 UI가 올라가지 않은 모습으로 나오고, 누른 채 사진을 찍은 뒤 바로 뗀 버튼은 클릭되지 않을 수 있습니다. bevy_ui의 `Interaction`은 창에 그리는 카메라만 봅니다. 그래서 에디터 뷰포트에서는 `None`으로 남고, 창 없이 실행할 때는 다르게 움직일 수 있습니다. 버튼은 picking 이벤트로 만드세요.
 
 ## 씬 저장
 

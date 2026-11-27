@@ -262,6 +262,10 @@ struct Borrowed {
 /// or the editor's viewport, at `target`, switched on as the game set
 /// them. The UI goes with the last of them to draw, the one Bevy gives it
 /// in a window, unless the game picked its UI camera itself.
+// shortcut: the mouse pointer still points at the window or viewport, so
+// while borrowed no camera picks: a picture shows no UI node hovered, and a
+// button held through a picture gets no click when let go right after the
+// picture is answered; point it at `target` too if either matters.
 fn borrow_game_cameras(world: &mut World, target: &RenderTarget) -> Vec<Borrowed> {
     let has_ui_camera = world
         .query_filtered::<(), (With<Camera>, With<IsDefaultUiCamera>)>()
