@@ -15,7 +15,7 @@ use std::{
 };
 
 use besfa_components::{SwitchScene, TerrainData, scene::start_switch};
-use besfa_protocol::{Command, Placement, Report, Request, SpawnKind, VERSION};
+use besfa_protocol::{Command, Placement, PointerEvent, Report, Request, SpawnKind, VERSION};
 use bevy::{
     ecs::{message::Messages, resource::IsResource},
     input::InputSystems,
@@ -233,7 +233,9 @@ fn reload_files(world: &mut World) {
 /// A command after pointer input waits for the next frame, once the scene
 /// view has taken the input in this frame's `Update`: a stroke the pointer
 /// paints is then on the ground before anything that asks about it, and
-/// done before its report.
+/// done before its report. A pointer's release waits for the frame after its
+/// press, as with a real mouse: picking clicks what the pointer was over the
+/// frame before the release, so both in one frame would click nothing.
 fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
     {
         let commands = world.resource::<EditorCommands>();
@@ -252,10 +254,12 @@ fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
         send_report(&Report::Done { seq, error: None });
     }
     let mut pointed = false;
+    let mut pressed = false;
     while let Some(line) = waiting.pop_front() {
         match serde_json::from_str::<Request>(&line) {
             Ok(Request { seq, command }) => {
-                if pointed && !command.is_input() {
+                let release = matches!(command, Command::Pointer(PointerEvent::Up { .. }));
+                if (pointed && !command.is_input()) || (pressed && release) {
                     waiting.push_front(line);
                     return;
                 }
@@ -272,6 +276,7 @@ fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
                     return;
                 }
                 pointed |= matches!(command, Command::Pointer(_));
+                pressed |= matches!(command, Command::Pointer(PointerEvent::Down { .. }));
                 let result = run(world, command);
                 if let Some(mut stepping) = world.get_resource_mut::<Stepping>() {
                     stepping.seq = seq;
@@ -950,6 +955,26 @@ mod tests {
         editor.send(r#"{"command":"select"}"#.into()).unwrap();
         app.update();
         assert_eq!(app.world().resource::<Selected>().0, None);
+    }
+
+    #[test]
+    fn lets_a_pointer_go_the_frame_after_it_pressed() {
+        let (mut app, editor) = editor_app();
+        app.add_plugins(bevy::input::InputPlugin)
+            .add_message::<bevy::window::CursorMoved>();
+        let pointer = |event: &str| {
+            format!(r#"{{"command":"pointer","event":"{event}","x":5,"y":5,"button":"left"}}"#)
+        };
+        // A click in one list, as an agent sends it.
+        editor.send(pointer("down")).unwrap();
+        editor.send(pointer("up")).unwrap();
+
+        app.update();
+        let buttons = app.world().resource::<ButtonInput<MouseButton>>();
+        assert!(buttons.pressed(MouseButton::Left), "held for a frame");
+        app.update();
+        let buttons = app.world().resource::<ButtonInput<MouseButton>>();
+        assert!(buttons.just_released(MouseButton::Left));
     }
 
     #[test]
