@@ -19,6 +19,7 @@ use besfa_protocol::{Command, Placement, PointerEvent, Report, Request, SpawnKin
 use bevy::{
     ecs::{message::Messages, resource::IsResource},
     input::InputSystems,
+    picking::PickingSystems,
     prelude::*,
     time::{TimeSystems, TimeUpdateStrategy},
     world_serialization::DynamicWorld,
@@ -67,8 +68,14 @@ impl Plugin for EditModePlugin {
             .add_systems(PreStartup, pause)
             // Before time moves on: whether this frame is one of a step's.
             .add_systems(First, count_step.before(TimeSystems))
-            // Before Bevy reads this frame's input, which the commands write.
-            .add_systems(PreUpdate, run_commands.before(InputSystems))
+            // Before Bevy reads this frame's input, which the commands write,
+            // picking's included: a press is then hovered in its own frame.
+            .add_systems(
+                PreUpdate,
+                run_commands
+                    .before(InputSystems)
+                    .before(PickingSystems::ProcessInput),
+            )
             .add_systems(PreUpdate, hold_switches.before(start_switch));
     }
 
@@ -234,8 +241,8 @@ fn reload_files(world: &mut World) {
 /// view has taken the input in this frame's `Update`: a stroke the pointer
 /// paints is then on the ground before anything that asks about it, and
 /// done before its report. A pointer's release waits for the frame after its
-/// press, as with a real mouse: picking clicks what the pointer was over the
-/// frame before the release, so both in one frame would click nothing.
+/// press: picking clicks what the pointer was over the frame before the
+/// release, which for a press in the same frame is where it was before.
 fn run_commands(world: &mut World, mut waiting: Local<VecDeque<String>>) {
     {
         let commands = world.resource::<EditorCommands>();
